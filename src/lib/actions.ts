@@ -19,6 +19,11 @@ import { formatJalaliDateTime, jalaliStamp } from "./jalali";
 import { lintPython, validateJobName } from "./lint";
 import { insertEvent, insertPrompt, saveJobsSnapshot, setJobChanged, updatePromptResult } from "./store";
 import type { Issue, PromptMode, RepoConfig } from "./types";
+import {
+  ARENA_JOB_NAME,
+  buildArenaJobFile,
+  type TelegramReportMode,
+} from "./arena-job";
 
 async function refreshSnapshot(config: RepoConfig): Promise<void> {
   invalidateArchiveCache(config);
@@ -218,6 +223,8 @@ export interface PromptInput {
   slug?: string;
   prompt: string;
   code?: string | null;
+  /** نحوه‌ی گزارش نتیجه‌ی اجرای job_arena.py به مقصد پیش‌فرض ربات ویندوز. */
+  telegramMode?: TelegramReportMode;
   /** فقط ساخت فایل و پیام کامیت را برمی‌گرداند؛ چیزی نوشته نمی‌شود. */
   dryRun?: boolean;
 }
@@ -253,7 +260,7 @@ export async function submitPrompt(input: PromptInput): Promise<PromptResult> {
 
   const token = await requireGithubToken(await envVar("GITHUB_TOKEN"));
   const config = await getRepoConfig("collab", false);
-  const mode: PromptMode = input.mode === "append" ? "append" : "new";
+  const mode: PromptMode = input.mode === "arena" ? "arena" : input.mode === "append" ? "append" : "new";
 
   let jobName: string;
   let content: string;
@@ -261,7 +268,41 @@ export async function submitPrompt(input: PromptInput): Promise<PromptResult> {
   let code: string | null = null;
   let issues: Issue[] = [];
 
-  if (mode === "new") {
+  if (mode === "arena") {
+    jobName = ARENA_JOB_NAME;
+    if (input.code?.trim()) {
+      throw new AppError("در مسیر اختصاصی Arena فقط متن پرامپت پذیرفته می‌شود.", {
+        status: 422,
+        code: "code_not_allowed",
+        hint: "کد اجرایی در job_arena.py ثابت است و این فرم فقط متن و تنظیم گزارش تلگرام را عوض می‌کند.",
+      });
+    }
+    const telegramMode: TelegramReportMode =
+      input.telegramMode === "off" || input.telegramMode === "start_final"
+        ? input.telegramMode
+        : "final";
+    const file = await readRepoFile(config, jobName, token);
+    if (!file) {
+      throw new AppError("فایل اختصاصی job_arena.py روی گیت‌هاب پیدا نشد.", {
+        status: 404,
+        code: "arena_job_missing",
+        hint: "فایل پایه باید در ریشه‌ی مخزن ایجنت همکار باشد.",
+      });
+    }
+    sha = file.sha;
+    const requestId = `${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${randomMarker()}`;
+    content = buildArenaJobFile({ source: file.content, prompt, telegramMode, requestId });
+    const lint = lintPython(content, { name: jobName, strict: false });
+    issues = [...lint.errors, ...lint.warnings];
+    if (!lint.ok) {
+      throw new AppError("فایل اختصاصی Arena پس از درج پرامپت معتبر نیست.", {
+        status: 422,
+        code: "arena_job_invalid",
+        hint: "فایل job_arena.py یا متن پرامپت را بررسی کنید؛ هیچ کامیتی ثبت نشد.",
+        details: lint.errors,
+      });
+    }
+  } else if (mode === "new") {
     jobName = slugToJobName(input.slug || input.jobName || prompt.slice(0, 24));
     const nameIssues = validateJobName(jobName).filter((i) => i.severity === "error");
     if (nameIssues.length) {
@@ -330,9 +371,11 @@ export async function submitPrompt(input: PromptInput): Promise<PromptResult> {
   }
 
   const message =
-    mode === "new"
-      ? `پرامپت ایجنت مدیریت: ${jobName} — ${jalaliStamp()}`
-      : `پرامپت ایجنت مدیریت برای ${jobName} — ${jalaliStamp()}`;
+    mode === "arena"
+      ? `ارسال پرامپت به Arena — ${jalaliStamp()}`
+      : mode === "new"
+        ? `پرامپت ایجنت مدیریت: ${jobName} — ${jalaliStamp()}`
+        : `پرامپت ایجنت مدیریت برای ${jobName} — ${jalaliStamp()}`;
 
   if (input.dryRun) {
     return {
@@ -368,11 +411,18 @@ export async function submitPrompt(input: PromptInput): Promise<PromptResult> {
     });
     await insertEvent({
       kind: "prompt",
-      title: mode === "new" ? `پرامپت جدید برای ${jobName}` : `پرامپت افزودنی برای ${jobName}`,
+      title:
+        mode === "arena"
+          ? "پرامپت اختصاصی برای Arena"
+          : mode === "new"
+            ? `پرامپت جدید برای ${jobName}`
+            : `پرامپت افزودنی برای ${jobName}`,
       detail:
-        mode === "new"
-          ? "فایل تازه در مخزن همکار ساخته شد و در انتظار اجرا توسط پنل ویندوز است."
-          : "متن پرامپت به فایل اضافه شد؛ نسخه‌ی تازه در انتظار اجراست.",
+        mode === "arena"
+          ? "متن داخل job_arena.py قرار گرفت؛ پنل ویندوز نسخه‌ی تازه را می‌گیرد، Arena را باز می‌کند و متن را تایپ و ارسال می‌کند."
+          : mode === "new"
+            ? "فایل تازه در مخزن همکار ساخته شد و در انتظار اجرا توسط پنل ویندوز است."
+            : "متن پرامپت به فایل اضافه شد؛ نسخه‌ی تازه در انتظار اجراست.",
       jobName,
       url: commitLink,
     });

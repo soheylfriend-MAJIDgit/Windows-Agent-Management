@@ -3590,3 +3590,41 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
     gap: 0;
   }
 }
+
+/* مقصد اختصاصی ارسال پرامپت به Arena */
+.arena-target-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+
+.arena-target-card p {
+  margin: 2px 0 0;
+}
+
+.arena-target-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+@media (max-width: 560px) {
+  .arena-target-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .arena-target-card > .status-chip {
+    grid-column: 1 / -1;
+    width: fit-content;
+  }
+}
