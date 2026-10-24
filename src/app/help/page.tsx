@@ -90,8 +90,8 @@ export default function HelpPage() {
           </div>
           <div className="flow-step">
             <span className="flow-icon"><Icon name="report" size={17} /></span>
-            <b>۴. گزارش</b>
-            <span>نتیجه در logs نوشته می‌شود و در حالت انتخابی فرم، موفقیت یا خطا به مقصد پیش‌فرض تلگرام هم می‌رود.</span>
+            <b>۴. گزارش یا اصلاح</b>
+            <span>موفقیت گزارش می‌شود؛ در خطای job_arena.py، لاگ و اسکرین‌شات ذخیره و پیام بازنویسی کد تا سه بار به ایجنت همکار برمی‌گردد.</span>
           </div>
         </div>
       </section>
