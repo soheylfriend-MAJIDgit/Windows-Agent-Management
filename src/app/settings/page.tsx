@@ -150,10 +150,16 @@ export default function SettingsPage() {
         title="تنظیمات"
         subtitle="مخزن‌ها، همگام‌سازی درایو، وضعیت اتصال‌ها و متغیرهای محیطی. مقدارهای حساس فقط سمت سرور نگه‌داری می‌شوند."
         actions={
-          <Link href="/help" className="btn btn-small">
-            <Icon name="help" size={14} />
-            راهنمای راه‌اندازی
-          </Link>
+          <>
+            <Link href="/database" className="btn btn-small">
+              <Icon name="database" size={14} />
+              وضعیت دیتابیس
+            </Link>
+            <Link href="/help" className="btn btn-small">
+              <Icon name="help" size={14} />
+              راهنمای راه‌اندازی
+            </Link>
+          </>
         }
       />
 
@@ -310,7 +316,7 @@ export default function SettingsPage() {
               {health ? <p className="field-helper" style={{ marginTop: 6 }}>آخرین بررسی: {formatJalaliDateTime(health.checkedAt, true)}</p> : null}
             </section>
 
-            <section className="card full">
+            <section className="card full" id="secrets">
               <div className="card-head">
                 <h2 className="row" style={{ gap: 7 }}>
                   <Icon name="terminal" size={16} />
@@ -322,8 +328,8 @@ export default function SettingsPage() {
                 </span>
               </div>
               <p className="field-helper">
-                هیچ‌کدام از این مقدارها در فرانت‌اند یا در مخزن ذخیره نمی‌شوند. دستورها را یک‌بار در ترمینال پروژه اجرا
-                کنید؛ Cloudflare مقدار را از شما می‌پرسد و فقط سمت سرور نگه می‌دارد.
+                هیچ‌کدام از این مقدارها در فرانت‌اند یا در مخزن ذخیره نمی‌شوند. در استقرار فعلی از مسیر Cloudflare:
+                Worker → Settings → Variables and Secrets → Add → Secret ثبت کنید؛ یا دستورهای زیر را در ترمینال اجرا کنید.
               </p>
               <div className="secrets-stack" style={{ marginTop: 10 }}>
                 <SecretRow

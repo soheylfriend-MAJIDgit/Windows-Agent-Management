@@ -44,7 +44,7 @@ export async function getSettingsBundle(): Promise<SettingsBundle> {
       driveFolder: drive.hasFolder,
       passcode: Boolean(passcode),
       authSecret: Boolean(authSecret),
-      workerName: "windows-agent-management",
+      workerName: "windows-agent-management-cloudflare",
       driveFolderId: logsFolderId ?? rootFolderId ?? null,
     },
     sync: {

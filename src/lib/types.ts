@@ -1,6 +1,6 @@
 export type RunStatus = "success" | "error" | "timeout" | "running" | "pending";
 export type JobStatus = "success" | "error" | "pending";
-export type PromptMode = "new" | "append";
+export type PromptMode = "arena" | "new" | "append";
 
 export interface Issue {
   code: string;

@@ -3448,3 +3448,183 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
   padding: 6px 10px;
   font-size: 12.5px;
 }
+
+/* صفحه‌ی وضعیت Cloudflare D1 */
+.db-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.db-metric {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+.db-metric > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.db-metric strong {
+  font-size: 18px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.db-metric-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--muted);
+  background: var(--surface-2);
+}
+
+.db-metric-icon.is-ok {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+}
+
+.db-metric-icon.is-danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--border));
+}
+
+.db-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.db-check-list {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.db-check-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: var(--muted);
+}
+
+.db-check-list svg {
+  flex: 0 0 auto;
+  margin-top: 5px;
+  color: var(--accent);
+}
+
+.db-tables-card {
+  margin-bottom: 14px;
+}
+
+.db-table-list {
+  display: grid;
+}
+
+.db-table-row {
+  display: grid;
+  grid-template-columns: 10px minmax(180px, 1fr) minmax(90px, auto) minmax(55px, auto);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.db-table-row:last-child {
+  border-bottom: 0;
+}
+
+.db-table-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.db-table-name code {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.db-row-count {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .db-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .db-summary-grid,
+  .db-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .db-table-row {
+    grid-template-columns: 10px minmax(0, 1fr) auto;
+  }
+
+  .db-table-row > .field-helper {
+    display: none;
+  }
+
+  .db-table-name {
+    display: grid;
+    gap: 0;
+  }
+}
+
+/* مقصد اختصاصی ارسال پرامپت به Arena */
+.arena-target-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+
+.arena-target-card p {
+  margin: 2px 0 0;
+}
+
+.arena-target-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+@media (max-width: 560px) {
+  .arena-target-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .arena-target-card > .status-chip {
+    grid-column: 1 / -1;
+    width: fit-content;
+  }
+}

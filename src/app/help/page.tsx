@@ -75,8 +75,8 @@ export default function HelpPage() {
         <div className="flow">
           <div className="flow-step">
             <span className="flow-icon"><Icon name="send" size={17} /></span>
-            <b>۱. پرامپت یا ویرایش</b>
-            <span>فایل job_*.py در مخزن همکار ساخته یا به‌روز می‌شود.</span>
+            <b>۱. پرامپت اختصاصی Arena</b>
+            <span>متن و تنظیم گزارش تلگرام با شناسه‌ی یکتا داخل job_arena.py کامیت می‌شود.</span>
           </div>
           <div className="flow-step">
             <span className="flow-icon"><Icon name="download" size={17} /></span>
@@ -85,13 +85,13 @@ export default function HelpPage() {
           </div>
           <div className="flow-step">
             <span className="flow-icon"><Icon name="play" size={17} /></span>
-            <b>۳. اجرا</b>
-            <span>پایتون ویندوز، بدون کنسول، با حداکثر ۶۰۰ ثانیه.</span>
+            <b>۳. تحویل به Arena</b>
+            <span>پایتون ویندوز صفحه‌ی Arena را باز می‌کند و متن PROMPT_TEXT را در کادر گفتگو تایپ و ارسال می‌کند.</span>
           </div>
           <div className="flow-step">
             <span className="flow-icon"><Icon name="report" size={17} /></span>
             <b>۴. گزارش</b>
-            <span>نتیجه و خطا در logs نوشته می‌شود و در این پنل خوانده می‌شود.</span>
+            <span>نتیجه در logs نوشته می‌شود و در حالت انتخابی فرم، موفقیت یا خطا به مقصد پیش‌فرض تلگرام هم می‌رود.</span>
           </div>
         </div>
       </section>
@@ -266,9 +266,9 @@ npm run self-test  # آزمون پارسرها و قواعد`}</pre>
             </ol>
             <ol className="steps" start={4}>
               <li>
-                <strong>ارسال پرامپت</strong>
-                یک نام مثل <span className="mono">my_task</span> و پرامپت بنویسید؛ پس از ارسال، فایل job_my_task.py در
-                گیت‌هاب ساخته می‌شود و در فهرست کدها با چیپ «در انتظار» می‌آید.
+                <strong>ارسال پرامپت به Arena</strong>
+                متن را بنویسید و نوع گزارش تلگرام را انتخاب کنید؛ پس از ارسال، مقدار PROMPT_TEXT و شناسه‌ی یکتای
+                درخواست در job_arena.py کامیت می‌شود و فایل با چیپ «در انتظار» می‌آید.
               </li>
               <li>
                 <strong>گزارش</strong>

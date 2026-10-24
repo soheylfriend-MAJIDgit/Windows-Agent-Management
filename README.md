@@ -44,9 +44,10 @@
 | --- | --- | --- |
 | `/` | داشبورد | تعداد کل کدها، اجراشده، در انتظار، خطا؛ آخرین کدها با تاریخ کامیت؛ آخرین اجراها؛ سلامت اتصال‌ها؛ رویدادها |
 | `/codes` | فهرست کدها | جستجو، فیلتر وضعیت، مرتب‌سازی، نمای ردیفی/کارتی، مشاهده‌ی کد با هایلایت، مشاهده‌ی تخلف‌های قاعده، **اجرای دوباره**، دانلود |
-| `/prompt` | ارسال پرامپت | ساخت `job_*.py` تازه از پرامپت (داک‌استرینگ = پرامپت) یا افزودن پرامپت به کد موجود به‌صورت کامنت؛ بررسی قواعد پیش از ارسال |
+| `/prompt` | ارسال پرامپت | مسیر اختصاصی `job_arena.py`: درج عینی متن در `PROMPT_TEXT`، شناسه‌ی یکتای درخواست، تایپ و ارسال توسط ویندوز، گزارش تلگرام قابل تنظیم؛ به‌علاوه حالت‌های پیشرفته‌ی ساخت/افزودن |
 | `/reports` | گزارش اجرا | نتیجه‌ها و خطاها با تاریخ شمسی؛ فیلتر بازه‌ی آماده یا **یک روز مشخص جلالی** (سه کشوی سال/ماه/روز)؛ همگام‌سازی درایو؛ **ورود دستی** فایل نتیجه/خطا |
 | `/settings` | تنظیمات | مخزن‌ها، همگام‌سازی خودکار، بررسی عمیق اتصال‌ها، دستورهای secret، شمارش داده‌ها |
+| `/database` | دیتابیس | آزمون واقعی اتصال D1، آماده‌بودن schema، جدول‌ها، ایندکس‌ها و تعداد رکوردها |
 | `/help` | راهنما | قواعد فایل، فرمت لاگ‌ها، راه‌اندازی گوگل درایو و D1، آزمون دستی |
 
 طراحی: تم تاریک پیش‌فرض با کلید روشن/تاریک ماندگار، دو ردیف تب قرصی (ردیف اصلی با تب فعالِ
@@ -83,10 +84,10 @@ npm run deploy
    `wrangler d1 migrations apply` یا SQL دستی لازم نیست.
 
 > اگر حساب شما/نسخه‌ی Wrangler تأمین خودکار را انجام نداد:
-> `npx wrangler d1 create windows-agent-management-db` را اجرا کنید و `database_id` را در
+> `npx wrangler d1 create windows-agent-management-cloudflare-db` را اجرا کنید و `database_id` را در
 > `wrangler.jsonc` بگذارید؛ سپس دوباره deploy کنید.
 
-پس از استقرار، آدرس `https://windows-agent-management.<subdomain>.workers.dev` را باز کنید.
+پس از استقرار، آدرس `https://windows-agent-management-cloudflare.<subdomain>.workers.dev` را باز کنید.
 برای secretها می‌توانید از پنل Cloudflare (Workers → Settings → Variables) هم استفاده کنید.
 secretها فقط روی سرور در دسترس‌اند و هرگز در باندل کلاینت قرار نمی‌گیرند.
 
@@ -100,7 +101,7 @@ secretها فقط روی سرور در دسترس‌اند و هرگز در با
 | Project name | `windows-agent-management-cloudflare` (همان `name` در `wrangler.jsonc`) |
 | Build command | `npm run build:worker` (یعنی `opennextjs-cloudflare build`؛ خالی نگذارید) |
 | Deploy command | `npx wrangler deploy` |
-| Preview command | `npx wrangler versions upload` — یا «Enable Preview builds» را خاموش کنید |
+| Preview command | `npx wrangler preview` — با روشن‌بودن «Builds for Preview branches»، هر push غیر از `main` یک Worker Preview مستقل می‌سازد |
 | Path (Advanced) | `/` |
 
 نکته‌های مهم:
@@ -118,6 +119,9 @@ secretها فقط روی سرور در دسترس‌اند و هرگز در با
   دیتابیس اختصاصی با نام `windows-agent-management-cloudflare-db` می‌سازد و آن را وصل
   می‌کند. Build token باید مجوز D1 داشته باشد؛ توکن خودکاری که این فرم می‌سازد معمولاً
   این مجوز را دارد.
+- برای Previewها، در **Settings → Builds → Previews Base** گزینه‌ی
+  **Builds for Preview branches** را روشن کنید. تنظیمات Preview از Production ارث نمی‌رسد؛
+  متغیرها را import و binding `DB` را ترجیحاً به یک D1 آزمایشی جدا وصل کنید.
 - متغیرهای این فرم **build variables** هستند. `GITHUB_TOKEN` و بقیه‌ی secretها باید
   **runtime secret** باشند: بعد از اولین deploy از
   **Worker → Settings → Variables and Secrets** یا با `wrangler secret put`.
@@ -185,8 +189,12 @@ https://codeload.github.com/{owner}/{repo}/zip/refs/heads/{branch}
 - **اجرای دوباره:** یک کامیت کوچک که خط `# rerun: <تاریخ شمسی> <ساعت تهران> — <کد>` را
   به **بالای محتوای فایل** اضافه می‌کند. هر بار کد تصادفی تازه‌ای تولید می‌شود تا حتی دو
   اجرای پشت‌سرهم هم محتوای متفاوت داشته باشند.
-- **ارسال پرامپت:** یا فایل جدید `job_<slug>.py` ساخته می‌شود (داک‌استرینگ = پرامپت)، یا متن
-  پرامپت به انتهای فایل موجود به‌صورت کامنت اضافه می‌شود.
+- **ارسال اختصاصی به Arena:** حالت پیش‌فرض، متن را عیناً در `PROMPT_TEXT` فایل ثابت
+  `job_arena.py` می‌گذارد و برای هر ارسال یک `PROMPT_REQUEST_ID` یکتا ثبت می‌کند. پنل ویندوز
+  فایل را دریافت و اجرا می‌کند؛ اسکریپت Arena متن را در کادر گفتگو Paste و ارسال می‌کند و طبق
+  انتخاب فرم، نتیجه‌ی موفق/ناموفق را از راه `bot_api.json` به مقصد پیش‌فرض تلگرام می‌فرستد.
+- **حالت‌های پیشرفته:** همچنان می‌توان فایل جدید `job_<slug>.py` ساخت (داک‌استرینگ = پرامپت)
+  یا متن پرامپت را به انتهای فایل موجود به‌صورت کامنت اضافه کرد.
 
 توکن فقط در Route Handlerها خوانده می‌شود؛ در پاسخ API، HTML، URL یا `NEXT_PUBLIC_*` قرار
 نمی‌گیرد. صفحه‌ی تنظیمات تنها «تنظیم شده / تنظیم نشده» را نشان می‌دهد.
@@ -318,12 +326,13 @@ npx wrangler secret put GOOGLE_DRIVE_ROOT_FOLDER_ID
 | `GET /api/jobs/[name]/download` | دانلود فایل `.py` |
 | `POST /api/jobs/[name]/rerun` | کامیت اجرای دوباره؛ `{"dryRun":true}` فقط پیش‌نمایش |
 | `POST /api/lint` | بررسی قواعد یک قطعه کد |
-| `GET/POST /api/prompts` | تاریخچه/ارسال پرامپت (`dryRun` برای پیش‌نمایش فایل) |
+| `GET/POST /api/prompts` | تاریخچه/ارسال پرامپت؛ حالت `arena` با `telegramMode=off\|final\|start_final` و `dryRun` برای پیش‌نمایش فایل |
 | `GET /api/reports?type=results\|errors` | گزارش‌ها با فیلتر `q`، `range`، `status`، یا `date=YYYY-MM-DD` (روز جلالی به وقت تهران) |
 | `POST /api/sync` | همگام‌سازی گوگل درایو (`force`, `limit`) |
 | `POST /api/ingest` | ورود دستی متن نتیجه/خطا (`fileName`, `content`, `kind?`, `modifiedAt?`) |
 | `GET/PUT /api/settings` | خواندن/ذخیره‌ی مخزن‌ها و تنظیم همگام‌سازی |
 | `GET /api/health?deep=1` | بررسی اتصال D1، توکن، گیت‌هاب، درایو، ورود |
+| `GET /api/database` | وضعیت تفصیلی D1: binding، schema، جدول‌ها، ایندکس‌ها و تعداد رکوردها |
 | `GET /api/session` | وضعیت قفل ورود |
 | `POST /api/auth/login` / `logout` | ورود/خروج مدیر (کوکی HttpOnly، SameSite=Lax) |
 
@@ -344,7 +353,7 @@ src/
     settings/page.tsx     مخزن‌ها، secrets، سلامت، داده‌ها
     help/page.tsx         راهنمای کامل فارسی
     globals.css           سیستم طراحی (متغیرها، کارت، تب، فرم، جدول، …)
-    api/…                 ۱۶ Route Handler
+    api/…                 ۱۷ Route Handler
   components/             AppShell، OverviewProvider، CodeViewer، ui، …
   lib/
     config.ts             پیش‌فرض‌ها، آدرس‌ها، ساخت نام فایل

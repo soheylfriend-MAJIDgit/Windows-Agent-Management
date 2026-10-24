@@ -10,6 +10,8 @@ import { useToast } from "@/components/ToastProvider";
 import { faNumber, formatJalaliDateTime, relativeFa, toPersianDigits } from "@/lib/jalali";
 import type { JobsResponse, LintResult, PromptRecord, Issue, PromptMode } from "@/lib/types";
 
+type TelegramReportMode = "off" | "final" | "start_final";
+
 interface PromptResponse {
   promptId: number;
   jobName: string;
@@ -30,6 +32,12 @@ const RULES = [
   "خروجی متنی با print() برای گزارش اجرا",
 ];
 
+function promptModeMeta(mode: PromptMode): { label: string; cls: string; icon: "send" | "plus" | "file" } {
+  if (mode === "arena") return { label: "ارسال به Arena", cls: "chip-ok", icon: "send" };
+  if (mode === "new") return { label: "کد جدید", cls: "chip-ok", icon: "plus" };
+  return { label: "افزودنی", cls: "chip-warn", icon: "file" };
+}
+
 function toJobName(slug: string): string {
   const cleaned = slug
     .trim()
@@ -48,11 +56,12 @@ export default function PromptPage() {
   const overview = useOverview();
   const notify = useToast();
 
-  const [mode, setMode] = useState<PromptMode>("new");
+  const [mode, setMode] = useState<PromptMode>("arena");
   const [slug, setSlug] = useState("");
   const [target, setTarget] = useState("");
   const [prompt, setPrompt] = useState("");
   const [code, setCode] = useState("");
+  const [telegramMode, setTelegramMode] = useState<TelegramReportMode>("final");
   const [lint, setLint] = useState<LintResult | null>(null);
   const [lintBusy, setLintBusy] = useState(false);
   const [lintNote, setLintNote] = useState<string | null>(null);
@@ -71,7 +80,10 @@ export default function PromptPage() {
   const cleanedSlug = previewName.replace(/^job_/, "").replace(/\.py$/, "");
   const targetJob = jobs.find((job) => job.name === target) ?? null;
   const tokenReady = overview.data?.connections.token.configured ?? true;
-  const canSubmit = prompt.trim().length >= 8 && (mode === "new" ? slug.trim().length > 0 : Boolean(target)) && !submitting;
+  const canSubmit =
+    prompt.trim().length >= 8 &&
+    (mode === "arena" || (mode === "new" ? slug.trim().length > 0 : Boolean(target))) &&
+    !submitting;
 
   function switchMode(next: PromptMode) {
     setMode(next);
@@ -127,9 +139,10 @@ export default function PromptPage() {
       const res = await postJson<PromptResponse>("/api/prompts", {
         mode,
         slug: mode === "new" ? cleanedSlug : undefined,
-        jobName: mode === "append" ? target : undefined,
+        jobName: mode === "append" ? target : mode === "arena" ? "job_arena.py" : undefined,
         prompt,
         code: mode === "new" && code.trim() ? code : undefined,
+        telegramMode: mode === "arena" ? telegramMode : undefined,
       });
       setResult(res);
       notify.ok("پرامپت در مخزن همکار ثبت شد.");
@@ -160,7 +173,7 @@ export default function PromptPage() {
       <PageHeader
         eyebrow="ایجنت همکار"
         title="ارسال پرامپت"
-        subtitle="پرامپت به‌صورت یک فایل job_*.py در ریشه‌ی مخزن همکار کامیت می‌شود؛ سپس همان مسیر عادی اجرا طی می‌شود."
+        subtitle="مسیر اختصاصی Arena متن شما را داخل job_arena.py قرار می‌دهد؛ پنل ویندوز فایل را می‌گیرد، Arena را باز می‌کند و متن را تایپ و ارسال می‌کند."
         actions={
           <Link href="/codes" className="btn btn-small">
             <Icon name="code" size={14} />
@@ -190,18 +203,34 @@ export default function PromptPage() {
             <div className="field">
               <span className="field-label">مقصد پرامپت</span>
               <div className="mode-switch">
+                <button type="button" className="chip" aria-pressed={mode === "arena"} onClick={() => switchMode("arena")}>
+                  <Icon name="send" size={13} />
+                  ارسال اختصاصی به Arena
+                </button>
                 <button type="button" className="chip" aria-pressed={mode === "new"} onClick={() => switchMode("new")}>
                   <Icon name="plus" size={13} />
-                  کد جدید
+                  ساخت کد جدید
                 </button>
                 <button type="button" className="chip" aria-pressed={mode === "append"} onClick={() => switchMode("append")}>
                   <Icon name="file" size={13} />
-                  افزودن به کد موجود
+                  افزودن یادداشت به کد
                 </button>
               </div>
             </div>
 
-            {mode === "new" ? (
+            {mode === "arena" ? (
+              <div className="arena-target-card">
+                <span className="arena-target-icon"><Icon name="send" size={18} /></span>
+                <div>
+                  <strong>مسیر اختصاصی Arena آماده است</strong>
+                  <p className="field-helper">
+                    مقصد ثابت: <bdi className="mono" dir="ltr">job_arena.py</bdi> در ریشه‌ی مخزن همکار. هر ارسال یک
+                    شناسه‌ی یکتا دارد و با تغییر واقعی فایل، اجرای پنل ویندوز را فعال می‌کند.
+                  </p>
+                </div>
+                <StatusChip status="success" label="اختصاصی" />
+              </div>
+            ) : mode === "new" ? (
               <div className="field" style={{ marginTop: 12 }}>
                 <label htmlFor="slug">نام فایل</label>
                 <div className="input-group" dir="ltr">
@@ -261,13 +290,35 @@ export default function PromptPage() {
               />
               <div className="row-between">
                 <span className="field-helper">
-                  {mode === "new"
-                    ? "این متن در داک‌استرینگ فایل ذخیره می‌شود تا ایجنت همکار و انسان بتوانند آن را ببینند."
-                    : "این متن به‌صورت کامنت به انتهای فایل اضافه می‌شود و باعث اجرای دوباره هم می‌شود."}
+                  {mode === "arena"
+                    ? "همین متن عیناً در متغیر PROMPT_TEXT قرار می‌گیرد و job_arena.py آن را در کادر Arena تایپ و ارسال می‌کند."
+                    : mode === "new"
+                      ? "این متن در داک‌استرینگ فایل ذخیره می‌شود تا ایجنت همکار و انسان بتوانند آن را ببینند."
+                      : "این متن به‌صورت کامنت به انتهای فایل اضافه می‌شود و باعث اجرای دوباره هم می‌شود."}
                 </span>
                 <span className="field-helper">{faNumber(prompt.length)} از ۸۰۰۰</span>
               </div>
             </div>
+
+            {mode === "arena" ? (
+              <div className="field" style={{ marginTop: 12 }}>
+                <label htmlFor="telegram-mode">گزارش تلگرام</label>
+                <select
+                  id="telegram-mode"
+                  className="input"
+                  value={telegramMode}
+                  onChange={(event) => setTelegramMode(event.target.value as TelegramReportMode)}
+                >
+                  <option value="final">فقط نتیجه نهایی — موفق یا ناموفق</option>
+                  <option value="start_final">پیام شروع + نتیجه نهایی</option>
+                  <option value="off">بدون پیام تلگرام</option>
+                </select>
+                <span className="field-helper">
+                  پیام از طریق bot_api.json خود Windows Agent به مقصد پیش‌فرض ربات می‌رود؛ هیچ توکن تلگرامی وارد
+                  این سایت یا گیت‌هاب نمی‌شود.
+                </span>
+              </div>
+            ) : null}
 
             {mode === "new" ? (
               <div className="field" style={{ marginTop: 12 }}>
@@ -337,13 +388,23 @@ export default function PromptPage() {
             ) : null}
 
             <div className="form-actions">
-              <button type="button" className="btn btn-small" onClick={() => switchMode(mode === "new" ? "append" : "new")}>
-                <Icon name="refresh" size={13} />
-                تغییر حالت
+              <button
+                type="button"
+                className="btn btn-small btn-ghost"
+                onClick={() => {
+                  setPrompt("");
+                  setCode("");
+                  setResult(null);
+                  setFormError(null);
+                  setSubmitError(null);
+                }}
+              >
+                <Icon name="x" size={13} />
+                پاک کردن فرم
               </button>
               <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
                 {submitting ? <span className="spinner" /> : <Icon name="send" size={15} />}
-                {submitting ? "در حال کامیت…" : "ارسال به ایجنت همکار"}
+                {submitting ? "در حال کامیت…" : mode === "arena" ? "ارسال به Arena از طریق ویندوز" : "ارسال به ایجنت همکار"}
               </button>
             </div>
           </form>
@@ -358,15 +419,16 @@ export default function PromptPage() {
                 <bdi className="mono" dir="ltr">
                   {result.jobName}
                 </bdi>
-                <span className={`chip chip-tiny ${result.mode === "new" ? "chip-ok" : "chip-warn"}`}>
-                  {result.mode === "new" ? "کد جدید" : "افزودنی"}
+                <span className={`chip chip-tiny ${promptModeMeta(result.mode).cls}`}>
+                  {promptModeMeta(result.mode).label}
                 </span>
                 <StatusChip status="pending" label="در انتظار اجرا" />
                 <span>کامیت: {result.commitSha.slice(0, 7)}</span>
               </div>
               <p className="field-helper">
-                فایل در مخزن همکار کامیت شد. پنل ویندوز در بررسی بعدی، آن را در CODES می‌نویسد و اجرا می‌کند؛ نتیجه در
-                گزارش اجرا دیده می‌شود.
+                {result.mode === "arena"
+                  ? "job_arena.py با متن و شناسه‌ی یکتای این درخواست کامیت شد. پنل ویندوز آن را می‌گیرد، Arena را باز می‌کند و نتیجه را طبق انتخاب شما به تلگرام گزارش می‌دهد."
+                  : "فایل در مخزن همکار کامیت شد. پنل ویندوز در بررسی بعدی، آن را در CODES می‌نویسد و اجرا می‌کند؛ نتیجه در گزارش اجرا دیده می‌شود."}
               </p>
               <div className="actions-inline">
                 <a href={result.commitLink} target="_blank" rel="noreferrer" className="btn btn-small">
@@ -395,20 +457,20 @@ export default function PromptPage() {
             </div>
             <ol className="steps">
               <li>
-                <strong>ارسال پرامپت</strong>
-                فایل job_*.py در ریشه‌ی مخزن همکار ساخته یا به‌روز می‌شود.
+                <strong>ثبت در فایل اختصاصی</strong>
+                متن و تنظیم گزارش در job_arena.py با شناسه‌ی یکتای درخواست کامیت می‌شود.
               </li>
               <li>
                 <strong>دریافت توسط پنل ویندوز</strong>
                 حالت خودکار هر ۱۰ ثانیه، یا دستی، محتوای تازه را در Desktop\CODES می‌نویسد.
               </li>
               <li>
-                <strong>اجرا</strong>
-                کد با پایتون ویندوز و حداکثر ۶۰۰ ثانیه اجرا می‌شود.
+                <strong>تحویل به Arena</strong>
+                کد با پایتون ویندوز اجرا می‌شود، صفحه‌ی Arena را باز می‌کند و متن را در کادر گفتگو تایپ و ارسال می‌کند.
               </li>
               <li>
-                <strong>گزارش</strong>
-                نتیجه در My Drive\Windows-Agent-DB\logs ذخیره می‌شود و در تب گزارش اجرا دیده می‌شود.
+                <strong>گزارش پایان</strong>
+                موفقیت یا خطای جدی در logs ثبت می‌شود و مطابق انتخاب فرم، به مقصد پیش‌فرض ربات تلگرام هم می‌رود.
               </li>
             </ol>
           </section>
@@ -482,15 +544,15 @@ export default function PromptPage() {
               return (
                 <div key={item.id} className="history-row">
                   <span className="history-mark">
-                    <Icon name={item.mode === "new" ? "plus" : "file"} size={14} />
+                    <Icon name={promptModeMeta(item.mode).icon} size={14} />
                   </span>
                   <div className="history-body">
                     <div className="history-title">
                       <bdi className="mono" dir="ltr">
                         {item.jobName}
                       </bdi>
-                      <span className={`chip chip-tiny ${item.mode === "new" ? "chip-ok" : "chip-warn"}`}>
-                        {item.mode === "new" ? "کد جدید" : "افزودنی"}
+                      <span className={`chip chip-tiny ${promptModeMeta(item.mode).cls}`}>
+                        {promptModeMeta(item.mode).label}
                       </span>
                       <StatusChip status={status.status} label={status.label} />
                       <span className="field-helper" title={formatJalaliDateTime(item.createdAt, true)}>
