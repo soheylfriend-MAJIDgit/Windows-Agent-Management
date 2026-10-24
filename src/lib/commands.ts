@@ -257,8 +257,8 @@ function parseScopes(value: string): string[] {
 
 export async function findOnlineCommandAgent(): Promise<{ keyId: string; agentId: string; agentName: string }> {
   const cutoff = new Date(Date.now() - 90_000).toISOString();
-  const rows = await dbAll<{ agent_key_id: string; agent_id: string; agent_name: string; scopes: string }>(
-    `SELECT a.agent_key_id, a.id AS agent_id, a.name AS agent_name, k.scopes
+  const rows = await dbAll<{ agent_key_id: string; agent_id: string; agent_name: string; scopes: string; capabilities: string }>(
+    `SELECT a.agent_key_id, a.id AS agent_id, a.name AS agent_name, a.capabilities, k.scopes
      FROM managed_agents a
      JOIN agent_keys k ON k.id = a.agent_key_id
      WHERE a.last_seen_at >= ? AND k.status = 'active'
@@ -268,13 +268,18 @@ export async function findOnlineCommandAgent(): Promise<{ keyId: string; agentId
   );
   const match = rows.find((row) => {
     const scopes = parseScopes(row.scopes);
-    return scopes.includes("commands:read") && scopes.includes("events:write") && scopes.includes("results:write");
+    const capabilities = parseObject(row.capabilities);
+    return capabilities.command_plane === true
+      && scopes.includes("commands:read")
+      && scopes.includes("events:write")
+      && scopes.includes("results:write")
+      && scopes.includes("artifacts:write");
   });
   if (!match) {
     throw new AppError("Windows Agent آنلاین و آماده‌ی دریافت فرمان پیدا نشد.", {
       status: 409,
       code: "command_agent_offline",
-      hint: "Windows Agent را باز نگه دارید و کلیدی با commands:read، events:write و results:write وصل کنید.",
+      hint: "نسخه‌ی سازگار manager_client را اجرا کنید تا capability فرمان را گزارش دهد؛ کلید نیز به commands:read، events:write، results:write و artifacts:write نیاز دارد.",
     });
   }
   return { keyId: match.agent_key_id, agentId: match.agent_id, agentName: match.agent_name };
