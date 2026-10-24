@@ -46,6 +46,7 @@
 | `/codes` | فهرست کدها | جستجو، فیلتر وضعیت، مرتب‌سازی، نمای ردیفی/کارتی، مشاهده‌ی کد با هایلایت، مشاهده‌ی تخلف‌های قاعده، **اجرای دوباره**، دانلود |
 | `/prompt` | ارسال پرامپت | مسیر اختصاصی `job_arena.py`: درج عینی متن در `PROMPT_TEXT`، شناسه‌ی یکتای درخواست، تایپ و ارسال توسط ویندوز، گزارش تلگرام قابل تنظیم؛ به‌علاوه حالت‌های پیشرفته‌ی ساخت/افزودن |
 | `/reports` | گزارش اجرا | نتیجه‌ها و خطاها با تاریخ شمسی؛ فیلتر بازه‌ی آماده یا **یک روز مشخص جلالی** (سه کشوی سال/ماه/روز)؛ همگام‌سازی درایو؛ **ورود دستی** فایل نتیجه/خطا |
+| `/agent-keys` | کلید ایجنت | ساخت، نمایش یک‌باره، تعویض و غیرفعال‌کردن کلیدهای اتصال Windows Agent؛ انتخاب scope و مدت اعتبار |
 | `/settings` | تنظیمات | مخزن‌ها، همگام‌سازی خودکار، بررسی عمیق اتصال‌ها، دستورهای secret، شمارش داده‌ها |
 | `/database` | دیتابیس | آزمون واقعی اتصال D1، آماده‌بودن schema، جدول‌ها، ایندکس‌ها و تعداد رکوردها |
 | `/help` | راهنما | قواعد فایل، فرمت لاگ‌ها، راه‌اندازی گوگل درایو و D1، آزمون دستی |
@@ -318,6 +319,7 @@ npx wrangler secret put GOOGLE_DRIVE_ROOT_FOLDER_ID
 | `settings` | بازنویسی مالک/مخزن/شاخه و تنظیمات همگام‌سازی |
 | `sync_state` | زمان/خطای آخرین همگام‌سازی درایو |
 | `drive_files` | کش فایل‌های خوانده‌شده‌ی درایو برای جلوگیری از پردازش تکراری |
+| `agent_keys` | نام، پیشوند، هش SHA-256، scope، انقضا، آخرین استفاده و وضعیت کلیدهای Windows Agent؛ مقدار کامل ذخیره نمی‌شود |
 
 کل ساختار در `src/lib/db.ts` و `migrations/0001_init.sql` است و با `CREATE TABLE IF NOT EXISTS`
 در اولین درخواست اجرا می‌شود. اسکیمای فعلی بدون حذف داده قابل توسعه است (ستون جدید = افزودن
@@ -341,6 +343,8 @@ npx wrangler secret put GOOGLE_DRIVE_ROOT_FOLDER_ID
 | `POST /api/ingest` | ورود دستی متن نتیجه/خطا (`fileName`, `content`, `kind?`, `modifiedAt?`) |
 | `GET/PUT /api/settings` | خواندن/ذخیره‌ی مخزن‌ها و تنظیم همگام‌سازی |
 | `GET /api/health?deep=1` | بررسی اتصال D1، توکن، گیت‌هاب، درایو، ورود |
+| `GET/POST/DELETE /api/agent-keys` | فهرست، ساخت/تعویض و غیرفعال‌کردن کلیدها؛ فقط با نشست مدیر |
+| `GET /api/agent/ping` | آزمون Bearer API Key واقعی و ثبت `last_used_at`؛ نیازمند scope `heartbeat:write` |
 | `GET /api/database` | وضعیت تفصیلی D1: binding، schema، جدول‌ها، ایندکس‌ها و تعداد رکوردها |
 | `GET /api/session` | وضعیت قفل ورود |
 | `POST /api/auth/login` / `logout` | ورود/خروج مدیر (کوکی HttpOnly، SameSite=Lax) |
@@ -359,14 +363,16 @@ src/
     codes/page.tsx        فهرست کدها + نمایشگر کد
     prompt/page.tsx       فرم پرامپت + پیش‌نمایش اعتبارسنجی
     reports/page.tsx      نتیجه‌ها/خطاها + همگام‌سازی + ورود دستی
+    agent-keys/page.tsx   ساخت، تعویض و لغو کلیدهای Windows Agent
     settings/page.tsx     مخزن‌ها، secrets، سلامت، داده‌ها
     help/page.tsx         راهنمای کامل فارسی
     globals.css           سیستم طراحی (متغیرها، کارت، تب، فرم، جدول، …)
-    api/…                 ۱۷ Route Handler
+    api/…                 Route Handlerهای مدیریت، کلید ایجنت و Control Plane
   components/             AppShell، OverviewProvider، CodeViewer، ui، …
   lib/
     config.ts             پیش‌فرض‌ها، آدرس‌ها، ساخت نام فایل
     db.ts                 D1 + اسکیمای خودکار
+    agent-keys.ts         ساخت، هش، scope، لغو و اعتبارسنجی Bearer Key
     store.ts              کوئری‌های داده
     github.ts             ZIP/codeload، متادیتا، Contents API
     lint.ts               قواعد فایل (تحلیل سبک)
@@ -377,7 +383,8 @@ src/
     service.ts            لایه‌ی ترکیب داده برای صفحه‌ها
     auth.ts / api.ts / errors.ts / types.ts / highlight.ts / …
 scripts/lint_job.py       بررسی AST پایتون (اختیاری)
-migrations/0001_init.sql  ساختار D1 (مستندسازی؛ اجرای خودکار هم دارد)
+migrations/0001_init.sql  ساختار کامل D1 برای نصب تازه
+migrations/0002_agent_keys.sql  جدول کلیدها برای نصب‌های موجود (اجرای خودکار هم دارد)
 ```
 
 ---

@@ -13,6 +13,7 @@ const EXPECTED_TABLES = [
   ["events", "رویدادها"],
   ["sync_state", "وضعیت همگام‌سازی"],
   ["drive_files", "فایل‌های درایو"],
+  ["agent_keys", "کلیدهای ایجنت"],
 ] as const;
 
 type CountRow = Record<(typeof EXPECTED_TABLES)[number][0], number>;
@@ -42,7 +43,8 @@ export async function GET() {
         (SELECT COUNT(*) FROM prompts) AS prompts,
         (SELECT COUNT(*) FROM events) AS events,
         (SELECT COUNT(*) FROM sync_state) AS sync_state,
-        (SELECT COUNT(*) FROM drive_files) AS drive_files
+        (SELECT COUNT(*) FROM drive_files) AS drive_files,
+        (SELECT COUNT(*) FROM agent_keys) AS agent_keys
     `);
     // D1 تعداد termهای compound SELECT را محدود می‌کند؛ timestampها جداگانه خوانده
     // و چون ISO/UTC هستند به‌صورت واژه‌نامه‌ای مقایسه می‌شوند.
@@ -55,6 +57,7 @@ export async function GET() {
       "SELECT MAX(updated_at) AS value FROM settings",
       "SELECT MAX(updated_at) AS value FROM sync_state",
       "SELECT MAX(synced_at) AS value FROM drive_files",
+      "SELECT MAX(COALESCE(last_used_at, created_at)) AS value FROM agent_keys",
     ];
     const activityRows = await Promise.all(
       activityQueries.map((query) => dbFirst<{ value: string | null }>(query)),
@@ -78,7 +81,7 @@ export async function GET() {
       connected: true,
       binding: "DB",
       engine: "Cloudflare D1 / SQLite",
-      schemaVersion: 1,
+      schemaVersion: 2,
       schemaReady: tables.every((table) => table.ready),
       tables,
       tableCount: tables.filter((table) => table.ready).length,

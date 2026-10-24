@@ -26,6 +26,7 @@ const PRIMARY = [
 ] satisfies NavItem[];
 
 const TOOLS = [
+  { href: "/agent-keys", label: "کلید ایجنت", icon: "lock" },
   { href: "/settings", label: "تنظیمات", icon: "settings" },
   { href: "/database", label: "دیتابیس", icon: "database" },
   { href: "/help", label: "راهنما", icon: "help" },
