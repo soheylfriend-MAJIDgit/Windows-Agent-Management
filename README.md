@@ -97,7 +97,7 @@ secretها فقط روی سرور در دسترس‌اند و هرگز در با
 
 | فیلد | مقدار |
 | --- | --- |
-| Project name | `windows-agent-management` (همان `name` در `wrangler.jsonc`) |
+| Project name | `windows-agent-management-cloudflare` (همان `name` در `wrangler.jsonc`) |
 | Build command | `npm run build:worker` (یعنی `opennextjs-cloudflare build`؛ خالی نگذارید) |
 | Deploy command | `npx wrangler deploy` |
 | Preview command | `npx wrangler versions upload` — یا «Enable Preview builds» را خاموش کنید |
@@ -114,11 +114,10 @@ secretها فقط روی سرور در دسترس‌اند و هرگز در با
 - Workers Builds خودش `npm ci` را اجرا می‌کند؛ لازم نیست در Build command بنویسید.
   نسخه‌ی Node از `.nvmrc` (این مخزن: `22`) خوانده می‌شود و با `NODE_VERSION` هم قابل
   بازنویسی است.
-- توکنی که «Create new token» می‌سازد برای deploy کافی است، اما برای **ساخت خودکار D1**
-  ممکن است دسترسی نداشته باشد. مطمئن‌ترین راه: یک بار محلی
-  `npx wrangler d1 create windows-agent-management-db` را اجرا کنید، `database_id` را
-  در `wrangler.jsonc` بگذارید و push کنید. (اگر توکن دسترسی D1 داشت، همان deploy اول
-  دیتابیس را می‌سازد.)
+- D1 به‌صورت draft binding با نام `DB` تعریف شده است. Wrangler در اولین deploy یک
+  دیتابیس اختصاصی با نام `windows-agent-management-cloudflare-db` می‌سازد و آن را وصل
+  می‌کند. Build token باید مجوز D1 داشته باشد؛ توکن خودکاری که این فرم می‌سازد معمولاً
+  این مجوز را دارد.
 - متغیرهای این فرم **build variables** هستند. `GITHUB_TOKEN` و بقیه‌ی secretها باید
   **runtime secret** باشند: بعد از اولین deploy از
   **Worker → Settings → Variables and Secrets** یا با `wrangler secret put`.
