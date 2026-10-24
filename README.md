@@ -47,6 +47,7 @@
 | `/prompt` | ارسال پرامپت | ساخت `job_*.py` تازه از پرامپت (داک‌استرینگ = پرامپت) یا افزودن پرامپت به کد موجود به‌صورت کامنت؛ بررسی قواعد پیش از ارسال |
 | `/reports` | گزارش اجرا | نتیجه‌ها و خطاها با تاریخ شمسی؛ فیلتر بازه‌ی آماده یا **یک روز مشخص جلالی** (سه کشوی سال/ماه/روز)؛ همگام‌سازی درایو؛ **ورود دستی** فایل نتیجه/خطا |
 | `/settings` | تنظیمات | مخزن‌ها، همگام‌سازی خودکار، بررسی عمیق اتصال‌ها، دستورهای secret، شمارش داده‌ها |
+| `/database` | دیتابیس | آزمون واقعی اتصال D1، آماده‌بودن schema، جدول‌ها، ایندکس‌ها و تعداد رکوردها |
 | `/help` | راهنما | قواعد فایل، فرمت لاگ‌ها، راه‌اندازی گوگل درایو و D1، آزمون دستی |
 
 طراحی: تم تاریک پیش‌فرض با کلید روشن/تاریک ماندگار، دو ردیف تب قرصی (ردیف اصلی با تب فعالِ
@@ -83,10 +84,10 @@ npm run deploy
    `wrangler d1 migrations apply` یا SQL دستی لازم نیست.
 
 > اگر حساب شما/نسخه‌ی Wrangler تأمین خودکار را انجام نداد:
-> `npx wrangler d1 create windows-agent-management-db` را اجرا کنید و `database_id` را در
+> `npx wrangler d1 create windows-agent-management-cloudflare-db` را اجرا کنید و `database_id` را در
 > `wrangler.jsonc` بگذارید؛ سپس دوباره deploy کنید.
 
-پس از استقرار، آدرس `https://windows-agent-management.<subdomain>.workers.dev` را باز کنید.
+پس از استقرار، آدرس `https://windows-agent-management-cloudflare.<subdomain>.workers.dev` را باز کنید.
 برای secretها می‌توانید از پنل Cloudflare (Workers → Settings → Variables) هم استفاده کنید.
 secretها فقط روی سرور در دسترس‌اند و هرگز در باندل کلاینت قرار نمی‌گیرند.
 
@@ -324,6 +325,7 @@ npx wrangler secret put GOOGLE_DRIVE_ROOT_FOLDER_ID
 | `POST /api/ingest` | ورود دستی متن نتیجه/خطا (`fileName`, `content`, `kind?`, `modifiedAt?`) |
 | `GET/PUT /api/settings` | خواندن/ذخیره‌ی مخزن‌ها و تنظیم همگام‌سازی |
 | `GET /api/health?deep=1` | بررسی اتصال D1، توکن، گیت‌هاب، درایو، ورود |
+| `GET /api/database` | وضعیت تفصیلی D1: binding، schema، جدول‌ها، ایندکس‌ها و تعداد رکوردها |
 | `GET /api/session` | وضعیت قفل ورود |
 | `POST /api/auth/login` / `logout` | ورود/خروج مدیر (کوکی HttpOnly، SameSite=Lax) |
 

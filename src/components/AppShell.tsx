@@ -27,6 +27,7 @@ const PRIMARY = [
 
 const TOOLS = [
   { href: "/settings", label: "تنظیمات", icon: "settings" },
+  { href: "/database", label: "دیتابیس", icon: "database" },
   { href: "/help", label: "راهنما", icon: "help" },
 ] satisfies NavItem[];
 
