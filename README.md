@@ -326,7 +326,7 @@ npx wrangler secret put GOOGLE_DRIVE_ROOT_FOLDER_ID
 | `GET /api/jobs/[name]/download` | دانلود فایل `.py` |
 | `POST /api/jobs/[name]/rerun` | کامیت اجرای دوباره؛ `{"dryRun":true}` فقط پیش‌نمایش |
 | `POST /api/lint` | بررسی قواعد یک قطعه کد |
-| `GET/POST /api/prompts` | تاریخچه/ارسال پرامپت؛ حالت `arena` با `telegramMode=off|final|start_final` و `dryRun` برای پیش‌نمایش فایل |
+| `GET/POST /api/prompts` | تاریخچه/ارسال پرامپت؛ حالت `arena` با `telegramMode=off\|final\|start_final` و `dryRun` برای پیش‌نمایش فایل |
 | `GET /api/reports?type=results\|errors` | گزارش‌ها با فیلتر `q`، `range`، `status`، یا `date=YYYY-MM-DD` (روز جلالی به وقت تهران) |
 | `POST /api/sync` | همگام‌سازی گوگل درایو (`force`, `limit`) |
 | `POST /api/ingest` | ورود دستی متن نتیجه/خطا (`fileName`, `content`, `kind?`, `modifiedAt?`) |
@@ -353,7 +353,7 @@ src/
     settings/page.tsx     مخزن‌ها، secrets، سلامت، داده‌ها
     help/page.tsx         راهنمای کامل فارسی
     globals.css           سیستم طراحی (متغیرها، کارت، تب، فرم، جدول، …)
-    api/…                 ۱۶ Route Handler
+    api/…                 ۱۷ Route Handler
   components/             AppShell، OverviewProvider، CodeViewer، ui، …
   lib/
     config.ts             پیش‌فرض‌ها، آدرس‌ها، ساخت نام فایل
