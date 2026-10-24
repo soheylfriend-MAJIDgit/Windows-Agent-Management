@@ -120,8 +120,9 @@ secretها فقط روی سرور در دسترس‌اند و هرگز در با
   می‌کند. Build token باید مجوز D1 داشته باشد؛ توکن خودکاری که این فرم می‌سازد معمولاً
   این مجوز را دارد.
 - برای Previewها، در **Settings → Builds → Previews Base** گزینه‌ی
-  **Builds for Preview branches** را روشن کنید. تنظیمات Preview از Production ارث نمی‌رسد؛
-  متغیرها را import و binding `DB` را ترجیحاً به یک D1 آزمایشی جدا وصل کنید.
+  **Builds for Preview branches** را روشن کنید. اگر در همان بخش «Deploy command» دیده می‌شود، هنوز تب
+  **Production** فعال است؛ در تب درست باید «Preview command» دیده شود. تنظیمات Preview از Production
+  ارث نمی‌رسد؛ متغیرها را import و binding `DB` را ترجیحاً به یک D1 آزمایشی جدا وصل کنید.
 - متغیرهای این فرم **build variables** هستند. `GITHUB_TOKEN` و بقیه‌ی secretها باید
   **runtime secret** باشند: بعد از اولین deploy از
   **Worker → Settings → Variables and Secrets** یا با `wrangler secret put`.
