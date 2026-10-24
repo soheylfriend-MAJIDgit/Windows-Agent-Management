@@ -4,6 +4,7 @@ export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
 const BRIDGE_MARKER = "# management-arena-bridge: 2";
+const LEGACY_BRIDGE_MARKER = "# management-arena-bridge: 1";
 const ANY_BRIDGE_MARKER = "# management-arena-bridge:";
 
 function pythonString(value: string): string {
@@ -173,6 +174,34 @@ if __name__ == "__main__":
     main()
 `;
 
+/** ارتقای درجا از Bridge 1؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+function upgradeLegacyBridge(source: string): string {
+  const bridgeStart = source.indexOf(LEGACY_BRIDGE_MARKER);
+  const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
+  if (bridgeStart < 0 || openSiteStart < 0) {
+    throw new AppError("ساختار Arena Bridge 1 برای ارتقای خودکار کامل نیست.", {
+      status: 409,
+      code: "arena_bridge_upgrade_failed",
+      hint: "بلوک Bridge قدیمی یا تابع open_site پیدا نشد؛ job_arena.py را بررسی کنید.",
+    });
+  }
+
+  // کل بلوک Bridge 1 (تنظیم تلگرام و notifier قدیمی) با Bridge 2 جایگزین می‌شود.
+  let upgraded = source.slice(0, bridgeStart) + TELEGRAM_BRIDGE.trimEnd() + source.slice(openSiteStart);
+  const wrapperStart = upgraded.lastIndexOf("\ndef main():\n");
+  if (wrapperStart < 0 || !upgraded.includes("\ndef _run_arena_task():\n")) {
+    throw new AppError("تابع‌های Arena Bridge 1 برای ارتقای خودکار پیدا نشدند.", {
+      status: 409,
+      code: "arena_bridge_upgrade_failed",
+      hint: "job_arena.py باید شامل _run_arena_task و wrapper اصلی Bridge 1 باشد.",
+    });
+  }
+
+  // wrapper قدیمی تا انتهای فایل قرار داشت؛ نسخه‌ی جدید جای آن می‌نشیند.
+  upgraded = `${upgraded.slice(0, wrapperStart)}\n\n${WRAPPED_MAIN.trimEnd()}\n`;
+  return upgraded;
+}
+
 export function buildArenaJobFile(options: {
   source: string;
   prompt: string;
@@ -187,11 +216,17 @@ export function buildArenaJobFile(options: {
     source = replaceAssignment(source, "PROMPT_REQUEST_ID", options.requestId);
     return source.endsWith("\n") ? source : `${source}\n`;
   }
+  if (source.includes(LEGACY_BRIDGE_MARKER)) {
+    source = upgradeLegacyBridge(source);
+    source = replaceAssignment(source, "TELEGRAM_REPORT_MODE", options.telegramMode);
+    source = replaceAssignment(source, "PROMPT_REQUEST_ID", options.requestId);
+    return source.endsWith("\n") ? source : `${source}\n`;
+  }
   if (source.includes(ANY_BRIDGE_MARKER)) {
-    throw new AppError("نسخه‌ی قدیمی Arena Bridge باید یک‌بار بازنشانی شود.", {
+    throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "job_arena.py را به نسخه‌ی پایه‌ی بدون management-arena-bridge برگردانید تا Bridge 2 نصب شود.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridge 1 و Bridge 2 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 
