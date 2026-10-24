@@ -193,7 +193,7 @@ export default function PromptPage() {
         }
       />
 
-      <Banner tone="info" title="مسیر مستقیم D1">
+      <Banner tone="info" title="مسیر مستقیم D1 · Arena Bridge 4 آماده">
         پرامپت و نسخه تازه کد اتوماسیون در D1 ثبت می‌شود؛ ایجنت همکار برای این مسیر به GitHub یا Push نیاز ندارد.
       </Banner>
 
