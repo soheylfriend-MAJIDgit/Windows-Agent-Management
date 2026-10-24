@@ -490,10 +490,10 @@ html[data-theme="light"] .logo {
 }
 
 .primary-tabs .tab {
-  flex: 1;
+  flex: 1 0 auto;
   justify-content: center;
-  padding: 10px 14px;
-  font-size: 14px;
+  padding: 9px 11px;
+  font-size: 13px;
 }
 
 .primary-tabs .tab.active {
@@ -3426,7 +3426,7 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
   color: #fff;
 }
 
-/* دومین ردیف تب‌ها در موبایل کمی جمع‌تر می‌شود تا صفحه اسکرول افقی نگیرد. */
+/* تب‌های یکپارچه در موبایل جمع‌تر و داخل نوار خودشان قابل پیمایش‌اند. */
 @media (max-width: 460px) {
   .primary-tabs .tab {
     padding: 8px 10px;
@@ -3904,3 +3904,153 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
 }
 
 .agent-key-confirm .row { gap: 5px; }
+
+/* ------------------------------------------ تست اتصال ایجنت در دیتابیس --- */
+
+.agent-connection-card {
+  margin: 14px 0;
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.agent-connection-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.78fr) minmax(0, 1.22fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.agent-test-control,
+.agent-test-result {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface-2);
+}
+
+.agent-test-control {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-test-message {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 11px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.agent-test-message span { font-size: 12px; }
+.agent-test-message strong { font-size: 14px; }
+
+.agent-test-result {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+}
+
+.agent-test-empty {
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 5px;
+  color: var(--text-dim);
+}
+
+.agent-test-empty strong { color: var(--text); }
+.agent-test-empty span { font-size: 12px; }
+
+.agent-test-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px;
+  border-radius: 11px;
+  background: var(--due-soft);
+  color: var(--due);
+}
+
+.agent-test-status.is-succeeded { background: var(--ok-soft); color: var(--ok); }
+.agent-test-status.is-failed,
+.agent-test-status.is-expired { background: var(--danger-soft); color: var(--danger); }
+.agent-test-status > svg { flex: none; margin-top: 1px; }
+.agent-test-status > div { display: flex; flex-direction: column; min-width: 0; }
+.agent-test-status span { color: var(--text-dim); font-size: 12px; }
+
+.agent-test-flow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.agent-test-step {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-dim);
+}
+
+.agent-test-step > span {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+}
+
+.agent-test-step.is-done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); }
+.agent-test-step.is-done > span { color: #fff; background: var(--ok); border-color: var(--ok); }
+.agent-test-step.is-failed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+.agent-test-step.is-failed > span { color: #fff; background: var(--danger); border-color: var(--danger); }
+.agent-test-step > div { display: flex; flex-direction: column; min-width: 0; }
+.agent-test-step strong { color: var(--text); font-size: 12px; }
+.agent-test-step small { color: var(--text-dim); font-size: 12px; overflow-wrap: anywhere; }
+
+.agent-test-kv {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.managed-agent-strip {
+  display: flex;
+  gap: 7px;
+  margin-top: 12px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding-bottom: 2px;
+}
+
+.managed-agent-pill {
+  min-width: 225px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.managed-agent-pill > div { display: flex; flex-direction: column; min-width: 0; }
+.managed-agent-pill strong { font-size: 12.5px; }
+.managed-agent-pill span { color: var(--text-dim); font-size: 12px; white-space: nowrap; }
+
+@media (max-width: 760px) {
+  .agent-connection-grid { grid-template-columns: 1fr; }
+  .agent-test-flow { grid-template-columns: 1fr; }
+}

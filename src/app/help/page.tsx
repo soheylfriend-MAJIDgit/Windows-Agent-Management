@@ -8,7 +8,7 @@ export default function HelpPage() {
       <PageHeader
         eyebrow="راهنما"
         title="چطور این پنل کار می‌کند"
-        subtitle="این سایت فقط از راه گیت‌هاب و فایل‌های گزارش با پنل ویندوز حرف می‌زند؛ به سورس برنامه دسترسی ندارد و نباید داشته باشد."
+        subtitle="چهار ایجنت با مرز مسئولیت روشن: سایت مدیریت از راه D1، کلید ایجنت، گیت‌هاب و گزارش‌ها ویندوز را پایش و فرماندهی می‌کند، بدون تغییر خودکار کد پایه."
         actions={
           <>
             <Link href="/settings" className="btn btn-small">
@@ -26,6 +26,7 @@ export default function HelpPage() {
       <div className="anchor-nav" style={{ marginBottom: 14 }}>
         <a className="chip" href="#actors">بازیگران</a>
         <a className="chip" href="#flow">گردش کار</a>
+        <a className="chip" href="#manager-link">اتصال مدیریت</a>
         <a className="chip" href="#rules">قواعد فایل</a>
         <a className="chip" href="#rerun">اجرای دوباره</a>
         <a className="chip" href="#formats">قالب گزارش‌ها</a>
@@ -42,25 +43,47 @@ export default function HelpPage() {
         </div>
         <div className="actor-grid">
           <div className="actor-card">
-            <b>ایجنت مادر</b>
-            <span>سورس برنامه ویندوز (app.py و run.bat) را می‌نویسد و نسخه می‌دهد. این پنل فقط می‌خواند و هرگز در آن کامیت نمی‌کند.</span>
+            <b>۱. ایجنت ویندوز</b>
+            <span>برنامه‌ی در حال اجرا روی ویندوز؛ کدها را دریافت و اجرا می‌کند، وضعیت و Heartbeat می‌فرستد و نتیجه، لاگ و مشخصات اسکرین‌شات‌ها را گزارش می‌دهد.</span>
           </div>
           <div className="actor-card">
-            <b>ایجنت همکار</b>
-            <span>کدهای پایتون را در ریشه‌ی مخزن خودش، با نام job_*.py می‌نویسد و پوش می‌کند.</span>
+            <b>۲. ایجنت مادر</b>
+            <span>سازنده‌ی اصلی ایجنت ویندوز و تنها مسئول کدهای پایه مانند app.py و run.bat؛ اتصال manager_client.py را با تأیید کاربر به برنامه وصل می‌کند.</span>
           </div>
           <div className="actor-card">
-            <b>پنل ویندوز</b>
-            <span>کدها را از گیت‌هاب می‌گیرد، در Desktop\CODES می‌نویسد، اجرا می‌کند و نتیجه را در My Drive\Windows-Agent-DB\logs ذخیره می‌کند.</span>
+            <b>۳. ایجنت همکار</b>
+            <span>کدهای اتوماسیون job_*.py را می‌نویسد، اما به کدهای پایه‌ی برنامه‌ی ویندوز دسترسی ندارد.</span>
           </div>
           <div className="actor-card">
-            <b>ایجنت مدیریت (این سایت)</b>
-            <span>نظارت می‌کند، اجرای دوباره را با یک کامیت کوچک راه می‌اندازد و پرامپت را در مخزن همکار ثبت می‌کند.</span>
+            <b>۴. ایجنت مدیریت (این سایت)</b>
+            <span>ویندوز را می‌بیند و پایش می‌کند، از راه D1 فرمان می‌دهد، گزارش و اتصال را بررسی می‌کند، کدنویسی می‌کند و مخزن ایجنت همکار کاملاً در اختیار اوست؛ ولی کد پایه‌ی ایجنت ویندوز را تغییر نمی‌دهد.</span>
           </div>
         </div>
         <div className="callout" style={{ marginTop: 12 }}>
           <strong>قانون ثابت:</strong> برنامه‌ی ویندوز خودش را از گیت‌هاب به‌روز نمی‌کند. به‌روزرسانی فقط با دست انسان و
           GitHub Desktop انجام می‌شود. این پنل هم هیچ تلاشی برای عوض کردن app.py نمی‌کند.
+        </div>
+      </section>
+
+      <section id="manager-link" className="card help-anchor" style={{ marginBottom: 14 }}>
+        <div className="card-head">
+          <h2>
+            <Icon name="database" size={17} />
+            اتصال مستقیم ایجنت ویندوز به مدیریت
+          </h2>
+          <Link href="/database" className="btn btn-small btn-primary">
+            <Icon name="play" size={13} />
+            تست اتصال
+          </Link>
+        </div>
+        <p className="prose">
+          ایجنت مادر ماژول مستقل <span className="mono">manager_client.py</span> را به پنل ویندوز وصل می‌کند. این ماژول
+          با کلید ساخته‌شده در تب «کلید ایجنت» هر ۳۰ ثانیه Heartbeat می‌فرستد و درخواست تست D1 را پاسخ می‌دهد. تست موفق
+          باید پیام دقیق <strong>«سلام ایجنت مدیریت.»</strong> را از ویندوز به سایت برگرداند.
+        </p>
+        <div className="callout" style={{ marginTop: 10 }}>
+          مشخصات کامل endpointها، DPAPI، thread و payloadها در <span className="mono">docs/manager-client-contract.md</span>
+          ثبت شده است. نصب قلاب داخل app.py فقط توسط ایجنت مادر و با تأیید مستقیم کاربر انجام می‌شود.
         </div>
       </section>
 
