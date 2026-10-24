@@ -477,36 +477,11 @@ export async function updatePromptResult(
 }
 
 export async function listPrompts(limit = 20): Promise<PromptRecord[]> {
+  // وضعیت پرامپت‌های جدید هنگام تکمیل فرمان از مسیر مستقیم commands.prompt_id
+  // به‌روزرسانی می‌شود؛ خواندن تاریخچه نباید هیچ query اصلاحی یا write جانبی اجرا کند.
   const rows = await dbAll<Row>("SELECT * FROM prompts ORDER BY created_at DESC, id DESC LIMIT ?", [
     Math.min(Math.max(limit, 1), 100),
   ]);
-
-  // به‌جای UPDATE هم‌بسته و وابسته به جزئیات SQLite، هر رکورد با فرمان خودش
-  // reconcile می‌شود. مسیر اصلی prompt_id است و SHA-256 فقط تست‌های قدیمی را پوشش می‌دهد.
-  for (const row of rows) {
-    const promptId = n(row.id);
-    let command = await dbFirst<Row>(
-      "SELECT status, error FROM commands WHERE prompt_id = ? ORDER BY created_at DESC LIMIT 1",
-      [promptId],
-    );
-    const sourceSha = nullableS(row.commit_sha);
-    if (!command && !nullableS(row.commit_url) && sourceSha) {
-      command = await dbFirst<Row>(
-        "SELECT status, error FROM commands WHERE job_name = ? AND payload LIKE ? ORDER BY created_at DESC LIMIT 1",
-        [s(row.job_name), `%${sourceSha}%`],
-      );
-    }
-    if (!command) continue;
-
-    const status = s(command.status);
-    const error = nullableS(command.error);
-    if (status !== s(row.status) || error !== nullableS(row.error)) {
-      await dbRun("UPDATE prompts SET status = ?, error = ? WHERE id = ?", [status, error, promptId]);
-      row.status = status;
-      row.error = error;
-    }
-  }
-
   return rows.map(mapPrompt);
 }
 
