@@ -3,7 +3,8 @@ import { AppError } from "./errors";
 export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
-const BRIDGE_MARKER = "# management-arena-bridge: 4";
+const BRIDGE_MARKER = "# management-arena-bridge: 5";
+const BRIDGE_4_MARKER = "# management-arena-bridge: 4";
 const BRIDGE_3_MARKER = "# management-arena-bridge: 3";
 const BRIDGE_2_MARKER = "# management-arena-bridge: 2";
 const LEGACY_BRIDGE_MARKER = "# management-arena-bridge: 1";
@@ -84,7 +85,7 @@ def save_failure_artifacts(detail):
             fh.write(
                 "زمان: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " تهران\\n"
                 "موضوع: شکست job_arena.py و نیاز به بررسی ایجنت همکار\\n"
-                "نسخه برنامه: Arena Bridge 4\\n"
+                "نسخه برنامه: Arena Bridge 5\\n"
                 "شناسه درخواست: " + PROMPT_REQUEST_ID + "\\n"
                 "پرامپت: " + PROMPT_TEXT + "\\n\\n"
                 "جزئیات خطا:\\n" + str(detail)
@@ -304,8 +305,13 @@ function Try-SetPromptValue($startEl) {
 
 const VERIFIED_SUBMIT_BLOCK = `$sent = $false
 
-if ($textConfirmed) {
-    # ارسال فقط با SendInput انجام می‌شود؛ در حالت تأییدنشده هیچ Enter خطرناکی زده نمی‌شود.
+# Bridge 5: Enter تنها زمانی مجاز است که فوکوس هنوز داخل صفحه و خارج از نوار آدرس باشد.
+$focusedBeforeSubmit = [System.Windows.Automation.AutomationElement]::FocusedElement
+$submitFocusSafe = ($null -ne $focusedBeforeSubmit) -and -not (Test-Omnibox $focusedBeforeSubmit $winRect.Top)
+Write-Output ("ARENA_SUBMIT_FOCUS_SAFE=" + [bool]$submitFocusSafe)
+
+if ($textConfirmed -and $submitFocusSafe) {
+    # ارسال فقط با SendInput انجام می‌شود؛ در حالت تأییدنشده/فوکوس ناامن Enter زده نمی‌شود.
     $enterOk = [WinApi]::PressKey(0x0D)
     Write-Output ("ARENA_SUBMIT_SENDINPUT=" + $enterOk)
     Start-Sleep -Milliseconds 1800
@@ -356,12 +362,13 @@ if ($textConfirmed) {
     Write-Output ("ARENA_SUBMIT_PROMPT_STILL_IN_COMPOSER=" + [bool]$promptStillInComposer)
     $sent = $enterOk -and ($messageVisible -or ($placeholderReturned -and -not $promptStillInComposer))
 } else {
+    if (-not $submitFocusSafe) { Write-Output 'ARENA_SUBMIT_BLOCKED_UNSAFE_FOCUS' }
     Write-Output 'ARENA_SUBMIT_BLOCKED_UNVERIFIED'
 }
 
 `;
 
-const VERIFIED_PASTE_LOOP = `    # Bridge 4: ورود متن بدون وابستگی به یک روش خاص یا خواندن ناقص contenteditable کروم.
+const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پیش و پس از تایپ، خروج فوکوس به omnibox را رد می‌کند.
     Save-StepShot '02-composer-ready'
     for ($try = 1; $try -le 3 -and -not $textConfirmed; $try++) {
         if ($composer) { try { $composer.SetFocus() } catch {} }
@@ -369,6 +376,16 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 4: ورود متن بدون وابست
         Left-Click $clickPoint.X $clickPoint.Y
         Start-Sleep -Milliseconds 400
         Save-StepShot ("03-try" + $try + "-focused")
+
+        # هیچ کلیدی، خصوصاً Ctrl+A/Backspace/Enter، نباید در نوار آدرس اجرا شود.
+        $focusedBeforeInput = [System.Windows.Automation.AutomationElement]::FocusedElement
+        $focusSafeBeforeInput = ($null -ne $focusedBeforeInput) -and -not (Test-Omnibox $focusedBeforeInput $winRect.Top)
+        Write-Output ("ARENA_FOCUS_SAFE_BEFORE_INPUT_TRY" + $try + "=" + [bool]$focusSafeBeforeInput)
+        if (-not $focusSafeBeforeInput) {
+            Write-Output ("ARENA_FOCUS_ABORT_TRY" + $try)
+            Save-StepShot ("03-try" + $try + "-unsafe-focus")
+            continue
+        }
 
         # پاک‌سازی مطمئن متن باقی‌مانده از تلاش قبلی با SendInput.
         [void][WinApi]::SendChord(0x11, 0x41)  # Ctrl+A
@@ -396,34 +413,38 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 4: ورود متن بدون وابست
         Start-Sleep -Milliseconds 1200
         Save-StepShot ("03-try" + $try + "-after-input")
 
-        # تأیید اول: UI Automation (برای Edit/Documentهایی که متن را برمی‌گردانند).
+        # تأیید فقط وقتی معتبر است که عنصر فوکوس‌شده omnibox نباشد.
         $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+        $focusSafeAfterInput = ($null -ne $focused) -and -not (Test-Omnibox $focused $winRect.Top)
         $focusedText = Get-ElText $focused
         $composerText = Get-ElText $composer
         $promptNormalized = ([string]$env:ARENA_PROMPT).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
         $focusedNormalized = ([string]$focusedText).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
         $composerNormalized = ([string]$composerText).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
-        $okFocused = ($focusedText -and $focusedNormalized.Contains($promptNormalized))
-        $okComposer = ($composerText -and $composerNormalized.Contains($promptNormalized))
+        $okFocused = $focusSafeAfterInput -and $focusedText -and $focusedNormalized.Contains($promptNormalized)
+        $okComposer = $focusSafeAfterInput -and $composerText -and $composerNormalized.Contains($promptNormalized)
 
-        # تأیید دوم: Select All + Copy با SendInput و sentinel مستقل.
+        # تأیید دوم: Select All + Copy فقط با فوکوس امن و sentinel مستقل.
         $okCopied = $false
-        try {
-            $sentinel = "__ARENA_VERIFY_$([Guid]::NewGuid().ToString('N'))__"
-            Set-Clipboard -Value $sentinel
-            [void][WinApi]::SendChord(0x11, 0x41)
-            Start-Sleep -Milliseconds 150
-            [void][WinApi]::SendChord(0x11, 0x43)
-            Start-Sleep -Milliseconds 400
-            $copiedText = [string](Get-Clipboard -Raw)
-            $copiedNormalized = $copiedText.Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
-            $okCopied = ($copiedNormalized -eq $promptNormalized)
-            [void][WinApi]::PressKey(0x23) # End؛ برداشتن selection بدون تغییر متن
-        } catch {
-            Write-Output ("ARENA_COPY_VERIFY_ERROR=" + $_.Exception.Message)
+        if ($focusSafeAfterInput) {
+            try {
+                $sentinel = "__ARENA_VERIFY_$([Guid]::NewGuid().ToString('N'))__"
+                Set-Clipboard -Value $sentinel
+                [void][WinApi]::SendChord(0x11, 0x41)
+                Start-Sleep -Milliseconds 150
+                [void][WinApi]::SendChord(0x11, 0x43)
+                Start-Sleep -Milliseconds 400
+                $copiedText = [string](Get-Clipboard -Raw)
+                $copiedNormalized = $copiedText.Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
+                $okCopied = ($copiedNormalized -eq $promptNormalized)
+                [void][WinApi]::PressKey(0x23) # End؛ برداشتن selection بدون تغییر متن
+            } catch {
+                Write-Output ("ARENA_COPY_VERIFY_ERROR=" + $_.Exception.Message)
+            }
         }
 
-        if ($okFocused -or $okComposer -or $okCopied) {
+        Write-Output ("ARENA_FOCUS_SAFE_AFTER_INPUT_TRY" + $try + "=" + [bool]$focusSafeAfterInput)
+        if ($focusSafeAfterInput -and ($okFocused -or $okComposer -or $okCopied)) {
             $textConfirmed = $true
             Write-Output ("ARENA_VERIFY_UIA_FOCUSED=" + [bool]$okFocused)
             Write-Output ("ARENA_VERIFY_UIA_COMPOSER=" + [bool]$okComposer)
@@ -437,7 +458,7 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 4: ورود متن بدون وابست
     }
     Save-StepShot '04-before-submit'`;
 
-/** Bridge 1/2/3 و فایل پایه را به موتور ورود متن و تصویربرداری Bridge 4 ارتقا می‌دهد. */
+/** Bridgeهای قبلی و فایل پایه را به موتور امن ورود متن و تصویربرداری Bridge 5 ارتقا می‌دهد. */
 function hardenArenaTyping(source: string): string {
   if (!source.includes("public static bool SendUnicodeText(string text)")) {
     if (!source.includes(SEND_INPUT_CSHARP_ANCHOR)) {
@@ -460,12 +481,17 @@ function hardenArenaTyping(source: string): string {
     source = source.replace(diagnosticsAnchor, `${POWERSHELL_DIAGNOSTICS}\nfunction Get-ElText($el) {`);
   }
 
-  if (!source.includes("Bridge 4: ورود متن")) {
-    const starts = [LEGACY_PASTE_LOOP_START, V3_PASTE_LOOP_START, CURRENT_V3_PASTE_LOOP_START];
+  if (!source.includes("Bridge 5: هر مسیر ورود متن")) {
+    const starts = [
+      "    # Bridge 4: ورود متن بدون وابستگی به یک روش خاص یا خواندن ناقص contenteditable کروم.",
+      LEGACY_PASTE_LOOP_START,
+      V3_PASTE_LOOP_START,
+      CURRENT_V3_PASTE_LOOP_START,
+    ];
     const start = starts.map((anchor) => source.indexOf(anchor)).find((index) => index >= 0) ?? -1;
     const end = source.indexOf(PASTE_LOOP_END, start);
     if (start < 0 || end < 0) {
-      throw new AppError("بخش ورود متن job_arena.py برای ارتقای Bridge 4 پیدا نشد.", {
+      throw new AppError("بخش ورود متن job_arena.py برای ارتقای Bridge 5 پیدا نشد.", {
         status: 409,
         code: "arena_typing_upgrade_failed",
         hint: "حلقه‌ی ورود متن job_arena.py را با نسخه‌ی شناخته‌شده مقایسه کنید.",
@@ -480,7 +506,7 @@ function hardenArenaTyping(source: string): string {
       "    Write-Output 'ARENA_BROWSER_FG'\n    Save-StepShot '01-browser-foreground'\n",
     );
   }
-  if (!source.includes("ARENA_SUBMIT_BLOCKED_UNVERIFIED")) {
+  if (!source.includes("Bridge 5: Enter تنها زمانی مجاز است")) {
     const submitStartAnchors = [
       "$sent = $false\n\nif ($textConfirmed) {",
       "$sent = $false\nif ($textConfirmed) {",
@@ -491,7 +517,7 @@ function hardenArenaTyping(source: string): string {
       .find((index) => index >= 0) ?? -1;
     const submitEnd = source.indexOf(submitEndAnchor, submitStart);
     if (submitStart < 0 || submitEnd < 0) {
-      throw new AppError("بخش ارسال و تأیید نهایی Arena برای ارتقای Bridge 4 پیدا نشد.", {
+      throw new AppError("بخش ارسال و تأیید نهایی Arena برای ارتقای Bridge 5 پیدا نشد.", {
         status: 409,
         code: "arena_submit_upgrade_failed",
       });
@@ -561,7 +587,7 @@ function hardenArenaTyping(source: string): string {
 }
 
 
-/** ارتقای درجا از Bridge 1، 2 یا 3؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+/** ارتقای درجا از Bridge 1 تا 4؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
 function upgradeLegacyBridge(source: string, oldMarker: string): string {
   const bridgeStart = source.indexOf(oldMarker);
   const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
@@ -573,7 +599,7 @@ function upgradeLegacyBridge(source: string, oldMarker: string): string {
     });
   }
 
-  // کل بلوک Bridge قدیمی با Bridge 4 جایگزین می‌شود؛ بدنه‌ی اصلی کار حفظ می‌شود.
+  // کل بلوک Bridge قدیمی با Bridge 5 جایگزین می‌شود؛ بدنه‌ی اصلی کار حفظ می‌شود.
   let upgraded = source.slice(0, bridgeStart) + TELEGRAM_BRIDGE.trimEnd() + source.slice(openSiteStart);
   const wrapperStart = upgraded.lastIndexOf("\ndef main():\n");
   if (wrapperStart < 0 || !upgraded.includes("\ndef _run_arena_task():\n")) {
@@ -604,15 +630,18 @@ export function buildArenaJobFile(options: {
     return source.endsWith("\n") ? source : `${source}\n`;
   }
   if (
+    source.includes(BRIDGE_4_MARKER) ||
     source.includes(BRIDGE_3_MARKER) ||
     source.includes(BRIDGE_2_MARKER) ||
     source.includes(LEGACY_BRIDGE_MARKER)
   ) {
-    const oldMarker = source.includes(BRIDGE_3_MARKER)
-      ? BRIDGE_3_MARKER
-      : source.includes(BRIDGE_2_MARKER)
-        ? BRIDGE_2_MARKER
-        : LEGACY_BRIDGE_MARKER;
+    const oldMarker = source.includes(BRIDGE_4_MARKER)
+      ? BRIDGE_4_MARKER
+      : source.includes(BRIDGE_3_MARKER)
+        ? BRIDGE_3_MARKER
+        : source.includes(BRIDGE_2_MARKER)
+          ? BRIDGE_2_MARKER
+          : LEGACY_BRIDGE_MARKER;
     source = upgradeLegacyBridge(source, oldMarker);
     source = hardenArenaTyping(source);
     source = replaceAssignment(source, "TELEGRAM_REPORT_MODE", options.telegramMode);
@@ -623,7 +652,7 @@ export function buildArenaJobFile(options: {
     throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 4 به‌صورت خودکار پشتیبانی می‌شوند.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 5 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 
