@@ -101,7 +101,7 @@ secretها فقط روی سرور در دسترس‌اند و هرگز در با
 | Project name | `windows-agent-management-cloudflare` (همان `name` در `wrangler.jsonc`) |
 | Build command | `npm run build:worker` (یعنی `opennextjs-cloudflare build`؛ خالی نگذارید) |
 | Deploy command | `npx wrangler deploy` |
-| Preview command | `npx wrangler versions upload` — یا «Enable Preview builds» را خاموش کنید |
+| Preview command | `npx wrangler preview` — با روشن‌بودن «Builds for Preview branches»، هر push غیر از `main` یک Worker Preview مستقل می‌سازد |
 | Path (Advanced) | `/` |
 
 نکته‌های مهم:
@@ -119,6 +119,9 @@ secretها فقط روی سرور در دسترس‌اند و هرگز در با
   دیتابیس اختصاصی با نام `windows-agent-management-cloudflare-db` می‌سازد و آن را وصل
   می‌کند. Build token باید مجوز D1 داشته باشد؛ توکن خودکاری که این فرم می‌سازد معمولاً
   این مجوز را دارد.
+- برای Previewها، در **Settings → Builds → Previews Base** گزینه‌ی
+  **Builds for Preview branches** را روشن کنید. تنظیمات Preview از Production ارث نمی‌رسد؛
+  متغیرها را import و binding `DB` را ترجیحاً به یک D1 آزمایشی جدا وصل کنید.
 - متغیرهای این فرم **build variables** هستند. `GITHUB_TOKEN` و بقیه‌ی secretها باید
   **runtime secret** باشند: بعد از اولین deploy از
   **Worker → Settings → Variables and Secrets** یا با `wrangler secret put`.
