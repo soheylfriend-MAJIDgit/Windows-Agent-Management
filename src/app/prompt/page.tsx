@@ -3,15 +3,24 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useApi, postJson, ApiRequestError } from "@/hooks/useApi";
-import { useOverview } from "@/components/OverviewProvider";
 import { CommandMonitorModal } from "@/components/CommandMonitorModal";
 import { PageHeader, Banner, ErrorBanner, EmptyState, StatusChip, IssueList, FieldError } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/ToastProvider";
 import { faNumber, formatJalaliDateTime, relativeFa, toPersianDigits } from "@/lib/jalali";
-import type { JobsResponse, LintResult, PromptRecord, Issue, PromptMode } from "@/lib/types";
+import type { LintResult, PromptRecord, Issue, PromptMode } from "@/lib/types";
 
 type TelegramReportMode = "off" | "final" | "start_final";
+
+interface AutomationOption {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  activeVersion: number | null;
+  updatedAt: string;
+}
 
 interface PromptResponse {
   promptId: number;
@@ -26,7 +35,7 @@ interface PromptResponse {
 }
 
 const RULES = [
-  "فقط در ریشه‌ی مخزن، با نام job_ و پسوند .py",
+  "شناسه یکتا در D1، با نام اجرایی job_ و پسوند .py",
   "فقط کتابخانه‌ی استاندارد پایتون ۳.۹+",
   "بدون input() و بدون کنسول تعاملی",
   "حداکثر ۶۰۰ ثانیه زمان اجرا",
@@ -53,9 +62,8 @@ function toJobName(slug: string): string {
 }
 
 export default function PromptPage() {
-  const jobsApi = useApi<JobsResponse>("/api/jobs?enrich=0", { refreshMs: 180_000 });
+  const jobsApi = useApi<{ automations: AutomationOption[] }>("/api/automations", { refreshMs: 60_000 });
   const historyApi = useApi<{ prompts: PromptRecord[] }>("/api/prompts");
-  const overview = useOverview();
   const notify = useToast();
 
   const [mode, setMode] = useState<PromptMode>("arena");
@@ -73,7 +81,13 @@ export default function PromptPage() {
   const [result, setResult] = useState<PromptResponse | null>(null);
   const [activeCommandId, setActiveCommandId] = useState<string | null>(null);
 
-  const jobs = useMemo(() => (jobsApi.data?.jobs ?? []).filter((job) => job.present), [jobsApi.data]);
+  const jobs = useMemo(() => (jobsApi.data?.automations ?? []).map((automation) => ({
+    name: `job_${automation.slug}.py`,
+    status: automation.enabled ? "pending" as const : "error" as const,
+    statusNote: automation.enabled ? "نسخه فعال در D1" : "غیرفعال",
+    docstring: automation.description ?? automation.name,
+    commitDate: automation.updatedAt,
+  })), [jobsApi.data]);
 
   useEffect(() => {
     if (!target && jobs.length) setTarget(jobs[0].name);
@@ -82,7 +96,6 @@ export default function PromptPage() {
   const previewName = toJobName(slug);
   const cleanedSlug = previewName.replace(/^job_/, "").replace(/\.py$/, "");
   const targetJob = jobs.find((job) => job.name === target) ?? null;
-  const tokenReady = overview.data?.connections.token.configured ?? true;
   const canSubmit =
     prompt.trim().length >= 8 &&
     (mode === "arena" || (mode === "new" ? slug.trim().length > 0 : Boolean(target))) &&
@@ -132,11 +145,6 @@ export default function PromptPage() {
       setFormError("یک کد موجود برای افزودن پرامپت انتخاب کنید.");
       return;
     }
-    if (!tokenReady) {
-      setFormError("توکن گیت‌هاب تنظیم نشده است؛ برای نوشتن در مخزن به GITHUB_TOKEN نیاز است.");
-      return;
-    }
-
     setSubmitting(true);
     try {
       const res = await postJson<PromptResponse>("/api/prompts", {
@@ -155,7 +163,6 @@ export default function PromptPage() {
       setLint(null);
       setLintNote(null);
       await Promise.all([historyApi.reload({ silent: true }), jobsApi.reload({ silent: true })]);
-      await overview.refresh();
     } catch (err) {
       if (err instanceof ApiRequestError) {
         setSubmitError(err);
@@ -186,12 +193,9 @@ export default function PromptPage() {
         }
       />
 
-      {!tokenReady ? (
-        <Banner tone="warn" title="حالت فقط خواندن">
-          توکن گیت‌هاب روی سرور تنظیم نشده است؛ دکمه‌ی ارسال غیرفعال می‌شود. مقدار{" "}
-          <span className="mono">GITHUB_TOKEN</span> را در تنظیمات کلادفلر بگذارید.
-        </Banner>
-      ) : null}
+      <Banner tone="info" title="مسیر مستقیم D1">
+        پرامپت و نسخه تازه کد اتوماسیون در D1 ثبت می‌شود؛ ایجنت همکار برای این مسیر به GitHub یا Push نیاز ندارد.
+      </Banner>
 
       <div className="split-grid">
         <section className="card form-card">
@@ -200,7 +204,7 @@ export default function PromptPage() {
               <Icon name="send" size={17} />
               پرامپت جدید
             </h2>
-            <span className="card-head-sub">کامیت مستقیم در مخزن ایجنت همکار</span>
+            <span className="card-head-sub">ثبت نسخه مستقیم در کاتالوگ D1</span>
           </div>
 
           <form onSubmit={submit}>
@@ -228,8 +232,8 @@ export default function PromptPage() {
                 <div>
                   <strong>مسیر اختصاصی Arena آماده است</strong>
                   <p className="field-helper">
-                    مقصد ثابت: <bdi className="mono" dir="ltr">job_arena.py</bdi> در ریشه‌ی مخزن همکار. هر ارسال یک
-                    شناسه‌ی یکتا دارد و با تغییر واقعی فایل، اجرای پنل ویندوز را فعال می‌کند.
+                    مقصد ثابت: <bdi className="mono" dir="ltr">job_arena.py</bdi> در کاتالوگ D1. هر ارسال یک
+                    نسخه و hash یکتا می‌سازد و اجرای پنل ویندوز را فعال می‌کند.
                   </p>
                 </div>
                 <StatusChip status="success" label="اختصاصی" />
@@ -254,7 +258,7 @@ export default function PromptPage() {
                 <div className="preview-file">
                   فایل نهایی: <b>{previewName}</b>
                 </div>
-                <span className="field-helper">فقط حروف لاتین، عدد و زیرخط. این نام در ریشه‌ی مخزن ساخته می‌شود.</span>
+                <span className="field-helper">فقط حروف لاتین، عدد و زیرخط. این شناسه در کاتالوگ D1 ساخته می‌شود.</span>
               </div>
             ) : (
               <div className="field" style={{ marginTop: 12 }}>
@@ -263,7 +267,7 @@ export default function PromptPage() {
                   <option value="">یک کد را انتخاب کنید…</option>
                   {jobs.map((job) => (
                     <option key={job.name} value={job.name}>
-                      {job.name} — {job.status === "success" ? "اجرا شده" : job.status === "error" ? "خطا" : "در انتظار"}
+                      {job.name} — {job.status === "error" ? "غیرفعال" : "نسخه فعال D1"}
                     </option>
                   ))}
                 </select>
@@ -276,7 +280,7 @@ export default function PromptPage() {
                     </span>
                   </div>
                 ) : jobs.length === 0 && !jobsApi.loading ? (
-                  <span className="field-helper">هنوز کدی در مخزن نیست؛ از حالت «کد جدید» شروع کنید.</span>
+                  <span className="field-helper">هنوز کدی در D1 نیست؛ از حالت «کد جدید» شروع کنید یا انتقال اولیه را انجام دهید.</span>
                 ) : null}
               </div>
             )}
@@ -319,7 +323,7 @@ export default function PromptPage() {
                 </select>
                 <span className="field-helper">
                   پیام از طریق bot_api.json خود Windows Agent به مقصد پیش‌فرض ربات می‌رود؛ هیچ توکن تلگرامی وارد
-                  این سایت یا گیت‌هاب نمی‌شود.
+                  این سایت، D1 یا GitHub نمی‌شود.
                 </span>
                 <div className="callout" style={{ marginTop: 8 }}>
                   <strong>اصلاح خودکار شکست:</strong> اگر job_arena.py خطای جدی بدهد، ابتدا لاگ و اسکرین‌شات شکست در
@@ -413,7 +417,7 @@ export default function PromptPage() {
               </button>
               <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
                 {submitting ? <span className="spinner" /> : <Icon name="send" size={15} />}
-                {submitting ? "در حال کامیت…" : mode === "arena" ? "ارسال به Arena از طریق ویندوز" : "ارسال به ایجنت همکار"}
+                {submitting ? "در حال ثبت نسخه D1…" : mode === "arena" ? "ارسال به Arena از طریق ویندوز" : "ثبت و اجرا از طریق D1"}
               </button>
             </div>
           </form>
@@ -432,18 +436,14 @@ export default function PromptPage() {
                   {promptModeMeta(result.mode).label}
                 </span>
                 <StatusChip status="pending" label="در انتظار اجرا" />
-                <span>کامیت: {result.commitSha.slice(0, 7)}</span>
+                <span>هش نسخه D1: {result.commitSha.slice(0, 12)}</span>
               </div>
               <p className="field-helper">
                 {result.mode === "arena"
-                  ? "job_arena.py با متن و شناسه‌ی یکتای این درخواست کامیت شد. پنل ویندوز آن را می‌گیرد، Arena را باز می‌کند و نتیجه را طبق انتخاب شما به تلگرام گزارش می‌دهد."
-                  : "فایل در مخزن همکار کامیت شد. پنل ویندوز در بررسی بعدی، آن را در CODES می‌نویسد و اجرا می‌کند؛ نتیجه در گزارش اجرا دیده می‌شود."}
+                  ? "نسخه تازه job_arena.py در D1 فعال شد. پنل ویندوز همان نسخه را با بررسی SHA-256 می‌گیرد، Arena را باز می‌کند و نتیجه را گزارش می‌دهد."
+                  : "نسخه تازه در D1 فعال و برای Windows Agent صف شد؛ نتیجه در گزارش زنده اجرا دیده می‌شود."}
               </p>
               <div className="actions-inline">
-                <a href={result.commitLink} target="_blank" rel="noreferrer" className="btn btn-small">
-                  <Icon name="external" size={13} />
-                  مشاهده‌ی کامیت
-                </a>
                 <Link href="/codes" className="btn btn-small btn-primary">
                   <Icon name="code" size={13} />
                   دیدن در فهرست کدها

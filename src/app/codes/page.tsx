@@ -1,545 +1,204 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { useApi, apiRequest, postJson, ApiRequestError } from "@/hooks/useApi";
-import { useOverview } from "@/components/OverviewProvider";
-import { CodeViewer } from "@/components/CodeViewer";
-import { CommandMonitorModal } from "@/components/CommandMonitorModal";
-import { PageHeader, Banner, ErrorBanner, EmptyState, StatusChip, LoadingState, IssueList } from "@/components/ui";
+import { useMemo, useState } from "react";
+import { apiRequest, postJson, ApiRequestError, useApi } from "@/hooks/useApi";
+import { PageHeader, Banner, ErrorBanner, EmptyState, LoadingState, StatusChip } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/ToastProvider";
-import { faBytes, faLines } from "@/lib/format";
-import { faNumber, formatJalali, formatJalaliDateTime, relativeFa } from "@/lib/jalali";
-import type { JobDetailResponse, JobsResponse, JobView, Issue, RepoConfig } from "@/lib/types";
+import { CommandMonitorModal } from "@/components/CommandMonitorModal";
+import { faNumber, formatJalaliDateTime } from "@/lib/jalali";
 
-type Filter = "all" | "success" | "error" | "pending";
-type Sort = "name" | "recent" | "size";
-type View = "rows" | "cards";
-type PanelTab = "code" | "rules";
-
-interface RerunResponse {
-  jobName: string;
-  commitSha: string;
-  commitUrl: string;
-  message: string;
-  fileUrl: string | null;
-  commandId: string;
+interface Automation {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  target: "windows" | "management" | "both";
+  enabled: boolean;
+  activeVersionId: string | null;
+  activeVersion: number | null;
+  sourceSha256: string | null;
+  changeSummary: string | null;
+  createdBy: string;
+  updatedAt: string;
+  versionCreatedAt: string | null;
 }
+interface Version { id: string; version: number; sourceCode?: string; sourceSha256: string; status: string; changeSummary: string | null; createdBy: string; createdAt: string }
+interface Detail { automation: Automation; activeVersion: Version | null; versions: Version[] }
 
-const FILTERS: Array<{ key: Filter; label: string; cls: string }> = [
-  { key: "all", label: "همه", cls: "" },
-  { key: "success", label: "اجرا شده", cls: "chip-ok" },
-  { key: "error", label: "خطا", cls: "chip-danger" },
-  { key: "pending", label: "در انتظار", cls: "chip-warn" },
-];
-
-const SORTS: Array<{ key: Sort; label: string }> = [
-  { key: "name", label: "نام" },
-  { key: "recent", label: "تازه‌ترین" },
-  { key: "size", label: "حجم" },
-];
-
-export default function CodesPage() {
-  const { data, error, loading, refreshing, reload, setData } = useApi<JobsResponse>("/api/jobs", { refreshMs: 120_000 });
-  const overview = useOverview();
+export default function AutomationsPage() {
+  const catalog = useApi<{ automations: Automation[]; sourceOfTruth: string }>("/api/automations", { refreshMs: 20_000 });
   const notify = useToast();
-
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<Detail | null>(null);
+  const [source, setSource] = useState("");
+  const [summary, setSummary] = useState("");
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [description, setDescription] = useState("");
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<Filter>("all");
-  const [sort, setSort] = useState<Sort>("name");
-  const [view, setView] = useState<View>("rows");
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [panelTab, setPanelTab] = useState<PanelTab>("code");
-  const [details, setDetails] = useState<Record<string, JobDetailResponse>>({});
-  const [detailLoading, setDetailLoading] = useState<string | null>(null);
-  const [detailError, setDetailError] = useState<ApiRequestError | null>(null);
-  const [confirming, setConfirming] = useState<string | null>(null);
-  const [busyRerun, setBusyRerun] = useState<string | null>(null);
-  const [hardRefreshing, setHardRefreshing] = useState(false);
-  const [rerunInfo, setRerunInfo] = useState<{ name: string; url: string } | null>(null);
-  const [activeCommandId, setActiveCommandId] = useState<string | null>(null);
-
-  const tokenReady = overview.data?.connections.token.configured ?? true;
-  const repos = data?.repos.collab;
-  const jobs = useMemo(() => data?.jobs ?? [], [data]);
-
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("wam-code-view");
-      if (saved === "cards" || saved === "rows") setView(saved);
-    } catch {
-      // نادیده بگیر
-    }
-  }, []);
-
-  function changeView(next: View) {
-    setView(next);
-    try {
-      localStorage.setItem("wam-code-view", next);
-    } catch {
-      // نادیده بگیر
-    }
-  }
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<ApiRequestError | null>(null);
+  const [commandId, setCommandId] = useState<string | null>(null);
+  const [showNew, setShowNew] = useState(false);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const list = jobs
-      .filter((job) => (q ? job.name.toLowerCase().includes(q) || job.docstring.toLowerCase().includes(q) : true))
-      .filter((job) => (filter === "all" ? true : job.status === filter));
-    const weight = (job: JobView) => (job.present ? 0 : 1);
-    return list.sort((a, b) => {
-      const present = weight(a) - weight(b);
-      if (present) return present;
-      if (sort === "name") return a.name.localeCompare(b.name);
-      if (sort === "size") return b.size - a.size;
-      const da = a.commitDate ?? a.archiveUpdatedAt ?? a.changedAt ?? "";
-      const db = b.commitDate ?? b.archiveUpdatedAt ?? b.changedAt ?? "";
-      return db.localeCompare(da);
-    });
-  }, [jobs, query, filter, sort]);
+    const needle = query.trim().toLowerCase();
+    return (catalog.data?.automations ?? []).filter((item) => !needle || `${item.name} ${item.slug} ${item.description ?? ""}`.toLowerCase().includes(needle));
+  }, [catalog.data, query]);
 
-  const counts = useMemo(() => {
-    return {
-      all: jobs.length,
-      success: jobs.filter((j) => j.status === "success").length,
-      error: jobs.filter((j) => j.status === "error").length,
-      pending: jobs.filter((j) => j.status === "pending").length,
-      errorsInCode: jobs.filter((j) => j.issues.some((i) => i.severity === "error")).length,
-    };
-  }, [jobs]);
-
-  async function hardRefresh() {
-    setHardRefreshing(true);
+  async function select(item: Automation) {
+    setSelectedId(item.id);
+    setBusy("detail");
+    setError(null);
     try {
-      const fresh = await apiRequest<JobsResponse>("/api/jobs?refresh=1");
-      setData(fresh);
-      setDetails({});
-      notify.ok("فهرست از گیت‌هاب تازه شد.");
-    } catch (err) {
-      notify.error(err instanceof ApiRequestError ? err.message : "به‌روزرسانی ممکن نشد.");
+      const value = await apiRequest<Detail>(`/api/automations/${item.id}`);
+      setDetail(value);
+      setSource(value.activeVersion?.sourceCode ?? "");
+      setSummary("");
+    } catch (cause) {
+      setError(cause instanceof ApiRequestError ? cause : new ApiRequestError("خواندن اتوماسیون ممکن نشد."));
     } finally {
-      setHardRefreshing(false);
+      setBusy(null);
     }
   }
 
-  async function toggleCode(job: JobView) {
-    if (expanded === job.name) {
-      setExpanded(null);
-      return;
-    }
-    setExpanded(job.name);
-    setPanelTab("code");
-    setDetailError(null);
-    if (details[job.name]) return;
-    setDetailLoading(job.name);
+  async function saveVersion() {
+    if (!detail) return;
+    setBusy("save");
+    setError(null);
     try {
-      const res = await apiRequest<JobDetailResponse>(`/api/jobs/${encodeURIComponent(job.name)}`);
-      setDetails((prev) => ({ ...prev, [job.name]: res }));
-    } catch (err) {
-      setDetailError(err instanceof ApiRequestError ? err : new ApiRequestError("خواندن کد ممکن نشد."));
-    } finally {
-      setDetailLoading(null);
-    }
-  }
-
-  async function doRerun(job: JobView) {
-    setBusyRerun(job.name);
-    try {
-      const res = await postJson<RerunResponse>(`/api/jobs/${encodeURIComponent(job.name)}/rerun`, {});
-      setConfirming(null);
-      setDetails((prev) => {
-        const next = { ...prev };
-        delete next[job.name];
-        return next;
+      const saved = await postJson<{ automation: Automation }>(`/api/automations/${detail.automation.id}`, {
+        action: "new_version",
+        sourceCode: source,
+        changeSummary: summary || "ویرایش از سایت مدیریت",
+        activate: true,
       });
-      setRerunInfo({ name: job.name, url: res.commitUrl });
-      setActiveCommandId(res.commandId);
-      notify.ok("فرمان اجرای دوباره ثبت شد و پایش زنده آغاز شد.");
-      await reload({ silent: true });
-      await overview.refresh();
-    } catch (err) {
-      if (err instanceof ApiRequestError) {
-        notify.error(err.hint ? `${err.message} ${err.hint}` : err.message);
-      } else {
-        notify.error("ثبت درخواست اجرا ممکن نشد.");
-      }
+      notify.ok("نسخه جدید در D1 ثبت و فعال شد.");
+      await catalog.reload({ silent: true });
+      await select(saved.automation);
+    } catch (cause) {
+      setError(cause instanceof ApiRequestError ? cause : new ApiRequestError("ذخیره نسخه ممکن نشد."));
     } finally {
-      setBusyRerun(null);
+      setBusy(null);
     }
   }
 
-  const lastChecked = data ? formatJalaliDateTime(data.fetchedAt) : "—";
+  async function createAutomation() {
+    setBusy("create");
+    setError(null);
+    try {
+      const saved = await postJson<{ automation: Automation }>("/api/automations", {
+        slug,
+        name,
+        description,
+        target: "windows",
+        sourceCode: source,
+        changeSummary: "نسخه نخست در D1",
+        activate: true,
+      });
+      setShowNew(false);
+      setName(""); setSlug(""); setDescription(""); setSource("");
+      notify.ok("کد اتوماسیون در D1 ساخته شد.");
+      await catalog.reload({ silent: true });
+      await select(saved.automation);
+    } catch (cause) {
+      setError(cause instanceof ApiRequestError ? cause : new ApiRequestError("ساخت اتوماسیون ممکن نشد."));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function run(item: Automation) {
+    setBusy(`run:${item.id}`);
+    setError(null);
+    try {
+      const value = await postJson<{ commandId: string }>(`/api/automations/${item.id}/run`, {});
+      setCommandId(value.commandId);
+      notify.ok("فرمان اجرای نسخه فعال ثبت شد.");
+    } catch (cause) {
+      setError(cause instanceof ApiRequestError ? cause : new ApiRequestError("اجرای اتوماسیون ممکن نشد."));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function toggle(item: Automation) {
+    setBusy(`toggle:${item.id}`);
+    try {
+      await postJson(`/api/automations/${item.id}`, { action: "set_enabled", enabled: !item.enabled });
+      await catalog.reload({ silent: true });
+      notify.ok(item.enabled ? "اتوماسیون غیرفعال شد." : "اتوماسیون فعال شد.");
+    } catch (cause) {
+      setError(cause instanceof ApiRequestError ? cause : new ApiRequestError("تغییر وضعیت ممکن نشد."));
+    } finally { setBusy(null); }
+  }
+
+  async function importGithub() {
+    setBusy("import");
+    setError(null);
+    try {
+      const value = await postJson<{ imported: unknown[]; failed: unknown[] }>("/api/automations/import-github", {});
+      notify.ok(`${faNumber(value.imported.length)} فایل به D1 منتقل شد.`);
+      if (value.failed.length) notify.error(`${faNumber(value.failed.length)} فایل منتقل نشد؛ نتیجه را بررسی کنید.`);
+      await catalog.reload({ silent: true });
+    } catch (cause) {
+      setError(cause instanceof ApiRequestError ? cause : new ApiRequestError("انتقال اولیه ممکن نشد."));
+    } finally { setBusy(null); }
+  }
 
   return (
     <>
       <PageHeader
-        eyebrow="کتابخانه"
-        title="فهرست کدها"
-        subtitle="فایل‌های job_*.py مستقیم از ریشه‌ی مخزن ایجنت همکار خوانده می‌شوند؛ بدون کلید API و بدون محدودیت نرخ."
-        actions={
-          <>
-            <button type="button" className="btn btn-small" onClick={hardRefresh} disabled={hardRefreshing || refreshing}>
-              {hardRefreshing || refreshing ? <span className="spinner" /> : <Icon name="refresh" size={14} />}
-              تازه‌سازی
-            </button>
-            <Link href="/prompt" className="btn btn-small btn-primary">
-              <Icon name="plus" size={14} />
-              پرامپت جدید
-            </Link>
-          </>
-        }
+        eyebrow="منبع اجرایی D1"
+        title="کدهای اتوماسیون"
+        subtitle="کدهای Python عملیاتی مستقل از کد پایه ایجنت ویندوز و سایت مدیریت؛ نسخه‌بندی، اجرا و رصد از طریق D1."
+        actions={<button className="btn btn-small" type="button" onClick={() => { setShowNew(true); setDetail(null); setSelectedId(null); setSource("#!/usr/bin/env python3\n\ndef main():\n    print(\"automation ready\")\n\nif __name__ == \"__main__\":\n    main()\n"); }}><Icon name="plus" size={14} /> اتوماسیون جدید</button>}
       />
 
-      {data?.stale ? (
-        <Banner tone="warn" title="فهرست از حافظه‌ی ذخیره‌شده است" actions={<button type="button" className="btn btn-small" onClick={hardRefresh}>تلاش دوباره</button>}>
-          {data.githubError ?? "ارتباط با گیت‌هاب برقرار نشد."}
-        </Banner>
-      ) : null}
+      <Banner tone="info" title="تفکیک کدها">
+        منبع اصلی این صفحه Cloudflare D1 است. کد پایه Windows Agent در مخزن مادر و کد پایه سایت مدیریت در مخزن مدیریت باقی می‌ماند. ایجنت همکار برای ساخت و اجرای اتوماسیون‌ها به Git نیاز ندارد.
+      </Banner>
+      <ErrorBanner error={error ?? catalog.error} onRetry={() => catalog.reload()} />
 
-      {rerunInfo ? (
-        <Banner
-          tone="ok"
-          title={`درخواست اجرای دوباره‌ی ${rerunInfo.name} ثبت شد`}
-          actions={
-            <>
-              {rerunInfo.url ? (
-                <a href={rerunInfo.url} target="_blank" rel="noreferrer" className="btn btn-small">
-                  <Icon name="external" size={13} />
-                  مشاهده‌ی کامیت
-                </a>
-              ) : null}
-              <button type="button" className="btn btn-small btn-ghost" onClick={() => setRerunInfo(null)}>
-                بستن
-              </button>
-            </>
-          }
-        >
-          محتوای فایل یک خط نشانه گرفت تا هشِ آن تغییر کند؛ پنل ویندوز در بررسی بعدی آن را در CODES می‌نویسد و اجرا
-          می‌کند. تغییر <span className="mono">version.txt</span> روی اجرای کدها اثری ندارد.
-        </Banner>
-      ) : null}
-
-      <ErrorBanner error={error} onRetry={() => reload()} />
-
-      <section className="card card-tight filter-panel">
-        <div className="filter-bar">
-          <div className="search-field">
-            <Icon name="search" size={15} />
-            <input
-              className="input"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="جستجو در نام فایل یا توضیح کوتاه…"
-              aria-label="جستجوی کد"
-            />
-          </div>
-          <div className="row" style={{ gap: 8 }}>
-            {counts.errorsInCode > 0 ? (
-              <span className="chip chip-danger" title="تعداد فایل‌هایی که تخلف قاعده دارند">
-                <Icon name="alert" size={12} />
-                {faNumber(counts.errorsInCode)} تخلف
-              </span>
-            ) : null}
-            <div className="view-switch" role="group" aria-label="نوع نمایش">
-              <button type="button" className={view === "rows" ? "is-active" : ""} onClick={() => changeView("rows")} aria-pressed={view === "rows"}>
-                <Icon name="report" size={13} /> ردیفی
-              </button>
-              <button type="button" className={view === "cards" ? "is-active" : ""} onClick={() => changeView("cards")} aria-pressed={view === "cards"}>
-                <Icon name="dashboard" size={13} /> کارتی
-              </button>
-            </div>
-          </div>
-        </div>
-        <div className="filter-bar">
-          <div className="chip-row">
-            <span className="chip-label">وضعیت</span>
-            {FILTERS.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                className={`chip ${item.cls}`}
-                aria-pressed={filter === item.key}
-                onClick={() => setFilter(item.key)}
-              >
-                {item.label}
-                <span className="tiny" style={{ opacity: 0.7 }}>
-                  {faNumber(counts[item.key])}
-                </span>
-              </button>
-            ))}
-          </div>
-          <div className="chip-row">
-            <span className="chip-label">مرتب‌سازی</span>
-            {SORTS.map((item) => (
-              <button key={item.key} type="button" className="chip" aria-pressed={sort === item.key} onClick={() => setSort(item.key)}>
-                {item.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <div className="list-summary">
-        <span>
-          {faNumber(filtered.length)} از {faNumber(counts.all)} کد
-          {counts.pending ? ` · ${faNumber(counts.pending)} در انتظار اجرا` : ""}
-        </span>
-        <span>آخرین بررسی: {lastChecked}</span>
+      <div className="toolbar" style={{ marginTop: 16 }}>
+        <div className="search-wrap"><Icon name="search" size={14} /><input className="input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجوی اتوماسیون…" /></div>
+        <button className="btn btn-small btn-ghost" type="button" disabled={busy === "import"} onClick={() => void importGithub()}>
+          <Icon name="github" size={14} /> {busy === "import" ? "در حال انتقال…" : "انتقال اولیه از GitHub"}
+        </button>
       </div>
 
-      {loading && !data ? (
-        <div className="list-rows">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <span key={i} className="skeleton skeleton-card" />
+      {catalog.loading && !catalog.data ? <LoadingState label="در حال خواندن کاتالوگ D1…" /> : filtered.length === 0 ? (
+        <EmptyState icon="code" title="هنوز کد اتوماسیونی در D1 نیست" text="یک اتوماسیون بسازید یا فایل‌های مخزن قدیمی را یک‌بار به D1 منتقل کنید." />
+      ) : (
+        <div className="automation-grid">
+          {filtered.map((item) => (
+            <article className={`card automation-card ${selectedId === item.id ? "is-selected" : ""}`} key={item.id}>
+              <div className="card-head"><div><h2>{item.name}</h2><bdi className="mono" dir="ltr">job_{item.slug}.py</bdi></div><StatusChip status={item.enabled ? "success" : "neutral"} label={item.enabled ? "فعال" : "غیرفعال"} /></div>
+              <p>{item.description ?? "بدون توضیح"}</p>
+              <div className="automation-meta"><span>نسخه {faNumber(item.activeVersion ?? 0)}</span><span>{formatJalaliDateTime(item.updatedAt, true)}</span><code dir="ltr">{item.sourceSha256?.slice(0, 12) ?? "—"}</code></div>
+              <div className="actions-inline">
+                <button className="btn btn-small" type="button" onClick={() => void select(item)}>مشاهده و ویرایش</button>
+                <button className="btn btn-small btn-ghost" type="button" disabled={!item.enabled || busy === `run:${item.id}`} onClick={() => void run(item)}>اجرا در ویندوز</button>
+                <button className="btn btn-small btn-ghost" type="button" disabled={busy === `toggle:${item.id}`} onClick={() => void toggle(item)}>{item.enabled ? "غیرفعال‌کردن" : "فعال‌کردن"}</button>
+              </div>
+            </article>
           ))}
         </div>
-      ) : filtered.length === 0 ? (
-        <section className="card">
-          <EmptyState
-            icon="code"
-            title={jobs.length ? "کدی با این فیلتر پیدا نشد" : "هنوز کدی در مخزن همکار نیست"}
-            text={
-              jobs.length
-                ? "جستجو یا فیلتر وضعیت را تغییر دهید."
-                : "با ارسال یک پرامپت، فایل job_*.py ساخته می‌شود و پنل ویندوز آن را اجرا می‌کند."
-            }
-            actions={
-              jobs.length ? (
-                <button
-                  type="button"
-                  className="btn btn-small"
-                  onClick={() => {
-                    setQuery("");
-                    setFilter("all");
-                  }}
-                >
-                  پاک کردن فیلترها
-                </button>
-              ) : (
-                <>
-                  <Link href="/prompt" className="btn btn-small btn-primary">
-                    ارسال پرامپت
-                  </Link>
-                  <Link href="/help" className="btn btn-small">
-                    قواعد فایل
-                  </Link>
-                </>
-              )
-            }
-          />
-        </section>
-      ) : (
-        <div className={view === "rows" ? "list-rows" : "list-cards"}>
-          {filtered.map((job) => {
-            const isOpen = expanded === job.name;
-            const detail = details[job.name];
-            const codeIssues: Issue[] = job.issues ?? [];
-            const errorCount = codeIssues.filter((i) => i.severity === "error").length;
-            return (
-              <article
-                key={job.name}
-                className={`item ${view === "rows" ? "view-rows" : "view-cards"} b-${job.status} ${!job.present ? "is-deleted" : ""} ${
-                  busyRerun === job.name ? "is-busy" : ""
-                }`}
-              >
-                {view === "rows" ? (
-                  <span className={`job-mark ${job.status === "error" ? "is-danger" : job.status === "pending" ? "is-warn" : ""}`}>
-                    <Icon name="file" size={16} />
-                  </span>
-                ) : null}
-
-                <div className="item-main">
-                  <div className="item-title-row">
-                    {view === "cards" ? (
-                      <span className={`job-mark ${job.status === "error" ? "is-danger" : job.status === "pending" ? "is-warn" : ""}`} style={{ width: 30, height: 30, borderRadius: 8 }}>
-                        <Icon name="file" size={14} />
-                      </span>
-                    ) : null}
-                    <bdi className="item-title mono" dir="ltr">
-                      {job.name}
-                    </bdi>
-                    <StatusChip status={job.status} note={job.statusNote} />
-                    {job.isFresh ? <span className="chip chip-tiny chip-ok">تازه</span> : null}
-                    {!job.present ? <span className="chip chip-tiny">حذف‌شده</span> : null}
-                    {errorCount ? (
-                      <span className="chip chip-tiny chip-danger" title="این فایل قاعده‌های اجرای پنل را رعایت نمی‌کند">
-                        <Icon name="alert" size={10} />
-                        {faNumber(errorCount)} تخلف
-                      </span>
-                    ) : null}
-                  </div>
-                  <p className={`item-doc ${job.docstring ? "" : "is-empty"}`}>
-                    {job.docstring || "بدون داک‌استرینگ یا توضیح کوتاه"}
-                  </p>
-                </div>
-
-                <div className="item-meta">
-                  <span>
-                    {faBytes(job.size)} · {faLines(job.lines)}
-                  </span>
-                  <span title={job.commitDate ? formatJalaliDateTime(job.commitDate) : undefined}>
-                    {job.commitDate
-                      ? `کامیت: ${relativeFa(job.commitDate)}`
-                      : job.archiveUpdatedAt
-                        ? `مخزن: ${formatJalali(job.archiveUpdatedAt)}`
-                        : "بدون تاریخ"}
-                  </span>
-                  {job.commitSha ? (
-                    <a
-                      className="commit-line"
-                      href={`https://github.com/${repos?.owner ?? ""}/${repos?.repo ?? ""}/commit/${job.commitSha}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="مشاهده‌ی کامیت در گیت‌هاب"
-                    >
-                      <bdi className="commit-sha">{job.commitSha.slice(0, 7)}</bdi>
-                      <Icon name="external" size={10} />
-                    </a>
-                  ) : null}
-                </div>
-
-                <div className="item-actions">
-                  <button type="button" className="btn btn-small" onClick={() => toggleCode(job)}>
-                    <Icon name="code" size={13} />
-                    {isOpen ? "بستن کد" : "مشاهده کد"}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-small btn-primary"
-                    disabled={!job.present || !tokenReady || busyRerun === job.name}
-                    title={!tokenReady ? "برای اجرای دوباره، توکن گیت‌هاب لازم است." : !job.present ? "این فایل از مخزن حذف شده است." : undefined}
-                    onClick={() => {
-                      setConfirming(job.name);
-                      setExpanded(null);
-                    }}
-                  >
-                    {busyRerun === job.name ? <span className="spinner" /> : <Icon name="play" size={13} />}
-                    اجرای دوباره
-                  </button>
-                  <a className="btn btn-small btn-ghost" href={`/api/jobs/${encodeURIComponent(job.name)}/download`}>
-                    <Icon name="download" size={13} />
-                    دانلود
-                  </a>
-                </div>
-
-                {confirming === job.name ? (
-                  <div className="item-editor confirm-panel">
-                    <div className="confirm-title">
-                      <Icon name="alert" size={15} />
-                      اجرای دوباره‌ی {job.name}
-                    </div>
-                    <p>
-                      یک کامیت کوچک به بالای فایل اضافه می‌شود تا محتوایش تغییر کند؛ پنل ویندوز هش تازه را می‌بیند و کد
-                      را در <span className="mono">Desktop\CODES</span> می‌نویسد و اجرا می‌کند.
-                    </p>
-                    <p className="field-helper">
-                      تغییر <span className="mono">version.txt</span> فقط نسخه‌ی برنامه است و اجرای کدها را تحریک
-                      نمی‌کند. هر اجرای دوباره یک کامیت واقعی در مخزن همکار می‌سازد.
-                    </p>
-                    <div className="confirm-actions">
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-small"
-                        onClick={() => doRerun(job)}
-                        disabled={busyRerun === job.name}
-                      >
-                        {busyRerun === job.name ? <span className="spinner" /> : <Icon name="play" size={13} />}
-                        بله، اجرای دوباره
-                      </button>
-                      <button type="button" className="btn btn-small" onClick={() => setConfirming(null)}>
-                        نه، انصراف
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-
-                {isOpen ? (
-                  <div className="item-editor code-panel">
-                    <div className="code-head">
-                      <div className="code-head-info">
-                        <span className="code-head-title mono" dir="ltr">
-                          {job.name}
-                        </span>
-                        <span className="code-head-meta">
-                          <span>{faLines(job.lines)}</span>
-                          <span aria-hidden="true">·</span>
-                          <span>{faBytes(job.size)}</span>
-                          <span aria-hidden="true">·</span>
-                          <span>sha: {job.contentSha.slice(0, 8)}</span>
-                        </span>
-                      </div>
-                      <div className="actions-inline">
-                        <button
-                          type="button"
-                          className={`chip-tab ${panelTab === "code" ? "is-active" : ""}`}
-                          onClick={() => setPanelTab("code")}
-                          aria-pressed={panelTab === "code"}
-                        >
-                          کد
-                        </button>
-                        <button
-                          type="button"
-                          className={`chip-tab ${panelTab === "rules" ? "is-active" : ""}`}
-                          onClick={() => setPanelTab("rules")}
-                          aria-pressed={panelTab === "rules"}
-                        >
-                          قواعد ({faNumber(codeIssues.length)})
-                        </button>
-                        {repos && job.commitSha ? (
-                          <a
-                            className="btn btn-small btn-ghost"
-                            href={`https://github.com/${repos.owner}/${repos.repo}/commit/${job.commitSha}`}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            <Icon name="github" size={13} />
-                            کامیت
-                          </a>
-                        ) : null}
-                        <button type="button" className="icon-btn" style={{ width: 30, height: 30 }} onClick={() => setExpanded(null)} aria-label="بستن">
-                          <Icon name="x" size={14} />
-                        </button>
-                      </div>
-                    </div>
-
-                    {panelTab === "code" ? (
-                      detailLoading === job.name ? (
-                        <LoadingState label="در حال خواندن فایل از حافظه‌ی D1…" />
-                      ) : detailError && !detail ? (
-                        <ErrorBanner error={detailError} onRetry={() => toggleCode(job)} />
-                      ) : detail ? (
-                        <CodeViewer
-                          content={detail.content}
-                          fileName={job.name}
-                          downloadHref={`/api/jobs/${encodeURIComponent(job.name)}/download`}
-                        />
-                      ) : (
-                        <div className="code-empty">کد هنوز بارگذاری نشده است.</div>
-                      )
-                    ) : (
-                      <div className="stack-sm">
-                        <p className="field-helper">
-                          بررسی ایستا روی importها، ورودی تعاملی، مسیر مطلق و محدودیت زمان. هشدارها مانع کامیت
-                          نمی‌شوند، خطاها مانع هستند.
-                        </p>
-                        {codeIssues.length ? (
-                          <IssueList issues={codeIssues} />
-                        ) : (
-                          <div className="callout">
-                            <Icon name="check-circle" size={15} /> هیچ تخلف یا هشداری در این فایل پیدا نشد.
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </article>
-            );
-          })}
-        </div>
       )}
-      {activeCommandId ? <CommandMonitorModal commandId={activeCommandId} onClose={() => setActiveCommandId(null)} /> : null}
+
+      {(detail || showNew) ? (
+        <section className="card automation-editor">
+          <div className="card-head"><h2>{showNew ? "ساخت کد اتوماسیون" : `ویرایش ${detail?.automation.name}`}</h2>{!showNew && detail ? <span>نسخه فعال {faNumber(detail.automation.activeVersion ?? 0)}</span> : null}</div>
+          {showNew ? <div className="form-grid"><div className="field"><label>نام نمایشی</label><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></div><div className="field"><label>شناسه لاتین</label><input className="input" dir="ltr" value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="arena_helper" /></div><div className="field field-wide"><label>توضیح</label><input className="input" value={description} onChange={(e) => setDescription(e.target.value)} /></div></div> : null}
+          <div className="field"><label htmlFor="automation-source">کد Python</label><textarea id="automation-source" className="code-input automation-source" dir="ltr" value={source} onChange={(e) => setSource(e.target.value)} spellCheck={false} /></div>
+          <div className="field"><label>شرح تغییر</label><input className="input" value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="چه چیزی تغییر کرده است؟" /></div>
+          <div className="actions-inline"><button className="btn" type="button" disabled={Boolean(busy)} onClick={() => void (showNew ? createAutomation() : saveVersion())}>{busy === "save" || busy === "create" ? "در حال ثبت…" : "ثبت نسخه فعال در D1"}</button><button className="btn btn-ghost" type="button" onClick={() => { setDetail(null); setShowNew(false); setSelectedId(null); }}>بستن</button></div>
+          {detail?.versions.length ? <div className="automation-versions"><h3>تاریخچه نسخه‌ها</h3>{detail.versions.map((version) => <div key={version.id}><span>نسخه {faNumber(version.version)} · {version.status}</span><code dir="ltr">{version.sourceSha256.slice(0, 16)}</code><time>{formatJalaliDateTime(version.createdAt, true)}</time></div>)}</div> : null}
+        </section>
+      ) : null}
+
+      {commandId ? <CommandMonitorModal commandId={commandId} onClose={() => setCommandId(null)} /> : null}
     </>
   );
 }

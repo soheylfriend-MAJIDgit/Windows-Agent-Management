@@ -6,7 +6,9 @@
 
 - فرمان shell یا Python آزاد وجود ندارد. `type` فقط از allowlist محلی پذیرفته شود:
   - `run_arena_prompt`: Sync مخزن همکار و اجرای دقیق `job_arena.py`
-  - `sync_and_run_job`: Sync مخزن همکار و اجرای دقیق `payload.jobName`
+  - `sync_and_run_job`: مسیر قدیمی سازگاری با Sync مخزن همکار
+  - `run_automation`: دریافت نسخه immutable از API/D1، بررسی SHA-256 و اجرای `payload.jobName`
+- در مسیر جدید `run_automation` هیچ Git clone/pull لازم نیست. `sourceEndpoint` فقط باید relative و زیر `/api/agent/automations/` باشد.
 - `jobName` باید با `^job_[A-Za-z0-9_]+\.py$` تطبیق کند، بدون `/`، `\\` یا `..`، و پس از `resolve()` داخل پوشه‌ی شناخته‌شده‌ی `Desktop\\CODES` بماند.
 - `payload` آرگومان shell، مسیر اجرایی، URL دلخواه یا قطعه کد نیست.
 - کلید Bearer فقط در DPAPI بماند. تصویر یا secret هرگز در D1/رخدادها ارسال نشود.
@@ -31,6 +33,8 @@ Content-Type: application/json
 ```
 
 فرمان دریافتی شامل `id`, `type`, `payload`, `requiresConfirmation`, `timeoutSeconds`, `noProgressSeconds` و `autoStopOnAnomaly` است. هر لحظه فقط یک فرمان اجرا شود. شناسه‌ی فرمان در RAM به عنوان `busy` نگه‌داری شود.
+
+برای `run_automation`، client با همان Bearer key روی `payload.sourceEndpoint` درخواست GET می‌زند. پاسخ شامل `sourceCode`, `sourceSha256`, `jobName`, `versionId` و `version` است. SHA-256 محاسبه‌شده باید دقیقاً با هر دو مقدار پاسخ و payload فرمان یکسان باشد؛ در غیر این صورت فرمان با رخداد fatal رد شود. فایل در workspace موقت فرمان نوشته شود و دریافت/اجرای آن به GitHub وابسته نباشد.
 
 ## ماشین حالت
 

@@ -9,6 +9,9 @@ export const AGENT_KEY_SCOPES = [
   "results:write",
   "artifacts:write",
   "reports:read",
+  "automations:read",
+  "automations:write",
+  "automations:run",
 ] as const;
 
 export type AgentKeyScope = (typeof AGENT_KEY_SCOPES)[number];
@@ -20,6 +23,9 @@ export const AGENT_SCOPE_LABELS: Record<AgentKeyScope, string> = {
   "results:write": "ثبت نتیجه‌ی اجرای فرمان",
   "artifacts:write": "ثبت مشخصات فایل و اسکرین‌شات",
   "reports:read": "خواندن گزارش‌های مدیریتی",
+  "automations:read": "خواندن کدهای اتوماسیون",
+  "automations:write": "ساخت و نسخه‌بندی کدهای اتوماسیون",
+  "automations:run": "درخواست اجرای کدهای اتوماسیون",
 };
 
 interface AgentKeyRow {

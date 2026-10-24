@@ -21,7 +21,7 @@ interface NavItem {
 
 const PRIMARY = [
   { href: "/", label: "داشبورد", icon: "dashboard" },
-  { href: "/codes", label: "کدها", icon: "code" },
+  { href: "/codes", label: "کدهای اتوماسیون", icon: "code" },
   { href: "/prompt", label: "پرامپت", icon: "send" },
   { href: "/reports", label: "گزارش‌ها", icon: "report" },
   { href: "/database", label: "دیتابیس", icon: "database" },

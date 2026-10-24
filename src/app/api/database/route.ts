@@ -19,6 +19,9 @@ const EXPECTED_TABLES = [
   ["commands", "فرمان‌های ویندوز"],
   ["command_events", "رخدادهای فرمان"],
   ["command_artifacts", "فراداده تصویرها"],
+  ["automations", "کدهای اتوماسیون"],
+  ["automation_versions", "نسخه‌های اتوماسیون"],
+  ["automation_runs", "اجرای اتوماسیون"],
 ] as const;
 
 type CountRow = Record<(typeof EXPECTED_TABLES)[number][0], number>;
@@ -54,7 +57,10 @@ export async function GET() {
         (SELECT COUNT(*) FROM agent_connection_tests) AS agent_connection_tests,
         (SELECT COUNT(*) FROM commands) AS commands,
         (SELECT COUNT(*) FROM command_events) AS command_events,
-        (SELECT COUNT(*) FROM command_artifacts) AS command_artifacts
+        (SELECT COUNT(*) FROM command_artifacts) AS command_artifacts,
+        (SELECT COUNT(*) FROM automations) AS automations,
+        (SELECT COUNT(*) FROM automation_versions) AS automation_versions,
+        (SELECT COUNT(*) FROM automation_runs) AS automation_runs
     `);
     // D1 تعداد termهای compound SELECT را محدود می‌کند؛ timestampها جداگانه خوانده
     // و چون ISO/UTC هستند به‌صورت واژه‌نامه‌ای مقایسه می‌شوند.
@@ -73,6 +79,9 @@ export async function GET() {
       "SELECT MAX(COALESCE(completed_at, last_event_at, created_at)) AS value FROM commands",
       "SELECT MAX(created_at) AS value FROM command_events",
       "SELECT MAX(created_at) AS value FROM command_artifacts",
+      "SELECT MAX(updated_at) AS value FROM automations",
+      "SELECT MAX(created_at) AS value FROM automation_versions",
+      "SELECT MAX(created_at) AS value FROM automation_runs",
     ];
     const activityRows = await Promise.all(
       activityQueries.map((query) => dbFirst<{ value: string | null }>(query)),
@@ -96,7 +105,7 @@ export async function GET() {
       connected: true,
       binding: "DB",
       engine: "Cloudflare D1 / SQLite",
-      schemaVersion: 4,
+      schemaVersion: 5,
       schemaReady: tables.every((table) => table.ready),
       tables,
       tableCount: tables.filter((table) => table.ready).length,

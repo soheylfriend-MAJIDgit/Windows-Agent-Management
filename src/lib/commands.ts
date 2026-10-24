@@ -255,7 +255,7 @@ function parseScopes(value: string): string[] {
   }
 }
 
-export async function findOnlineCommandAgent(): Promise<{ keyId: string; agentId: string; agentName: string }> {
+export async function findOnlineCommandAgent(requiredCapability = "command_plane"): Promise<{ keyId: string; agentId: string; agentName: string }> {
   const cutoff = new Date(Date.now() - 90_000).toISOString();
   const rows = await dbAll<{ agent_key_id: string; agent_id: string; agent_name: string; scopes: string; capabilities: string }>(
     `SELECT a.agent_key_id, a.id AS agent_id, a.name AS agent_name, a.capabilities, k.scopes
@@ -270,6 +270,7 @@ export async function findOnlineCommandAgent(): Promise<{ keyId: string; agentId
     const scopes = parseScopes(row.scopes);
     const capabilities = parseObject(row.capabilities);
     return capabilities.command_plane === true
+      && (requiredCapability === "command_plane" || capabilities[requiredCapability] === true)
       && scopes.includes("commands:read")
       && scopes.includes("events:write")
       && scopes.includes("results:write")
@@ -279,7 +280,7 @@ export async function findOnlineCommandAgent(): Promise<{ keyId: string; agentId
     throw new AppError("Windows Agent آنلاین و آماده‌ی دریافت فرمان پیدا نشد.", {
       status: 409,
       code: "command_agent_offline",
-      hint: "نسخه‌ی سازگار manager_client را اجرا کنید تا capability فرمان را گزارش دهد؛ کلید نیز به commands:read، events:write، results:write و artifacts:write نیاز دارد.",
+      hint: `نسخه‌ی سازگار manager_client را اجرا کنید تا capability ${requiredCapability} را گزارش دهد؛ کلید نیز به commands:read، events:write، results:write و artifacts:write نیاز دارد.`,
     });
   }
   return { keyId: match.agent_key_id, agentId: match.agent_id, agentName: match.agent_name };
