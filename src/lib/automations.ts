@@ -285,14 +285,18 @@ export async function rerunAutomation(identifier: unknown, actor: string, dryRun
   return { dryRun: false, marker, automation: saved.automation, version: saved.version, commandId: run.commandId };
 }
 
-export async function requestAutomationRun(identifier: unknown, actor: string): Promise<{ commandId: string; automation: AutomationView; version: AutomationVersionView }> {
+export async function requestAutomationRun(
+  identifier: unknown,
+  actor: string,
+  targetOverride?: { keyId: string; agentId: string; agentName?: string },
+): Promise<{ commandId: string; automation: AutomationView; version: AutomationVersionView }> {
   const detail = await getAutomation(identifier, true);
   if (!detail.automation.enabled) throw new AppError("این اتوماسیون غیرفعال است.", { status: 409, code: "automation_disabled" });
   if (!detail.activeVersion?.sourceCode) throw new AppError("نسخه فعال برای اجرا وجود ندارد.", { status: 409, code: "automation_version_missing" });
   if (detail.automation.target === "management") {
     throw new AppError("اتوماسیون مقصد مدیریت باید از APIهای عملیاتی مدیریت استفاده کند و روی ویندوز اجرا نمی‌شود.", { status: 409, code: "automation_target_management" });
   }
-  const target = await findOnlineCommandAgent("d1_automations");
+  const target = targetOverride ?? await findOnlineCommandAgent("d1_automations");
   const command = await createManagedCommand({
     type: "run_automation",
     title: `اجرای اتوماسیون ${detail.automation.name}`,

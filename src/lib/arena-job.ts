@@ -124,7 +124,7 @@ def send_failure_feedback(detail, artifact_paths):
     paths_text = "، ".join(artifact_paths) if artifact_paths else "پوشه‌های logs و ScreenShots"
     feedback = (
         "اجرای درخواست ناموفق بود. لطفاً گزارش‌ها و در صورت نیاز اسکرین‌شات‌ها را "
-        "در Google Drive بررسی کن، علت را پیدا کن و کد را اصلاح یا دوباره بازنویسی و commit کن. "
+        "در Google Drive بررسی کن، علت را پیدا کن و یک نسخه اصلاح‌شده یا بازنویسی‌شده در کاتالوگ D1 ثبت کن. "
         f"شناسه درخواست: {PROMPT_REQUEST_ID}. مسیرهای مرتبط: {paths_text}"
     )
     last_error = None
@@ -180,6 +180,8 @@ const LEGACY_PASTE_LOOP_START =
   "    # حلقه تایپ: کلیک روی کادر → Paste → تأیید با خواندن متن عنصر فوکوس‌شده\n";
 const V3_PASTE_LOOP_START =
   "    # حلقه ورود متن: هر تلاش ابتدا کادر را پاک می‌کند و یک روش Paste متفاوت دارد.\n";
+const CURRENT_V3_PASTE_LOOP_START =
+  "    for ($try = 1; $try -le 3 -and -not $textConfirmed; $try++) {\n        try { [WinApi]::SetForegroundWindow($browserWin.Current.NativeWindowHandle) | Out-Null } catch {}\n";
 const PASTE_LOOP_END = "\n}\n\nif ($textConfirmed)";
 
 const SEND_INPUT_CSHARP_ANCHOR = `    [DllImport("user32.dll")]
@@ -459,7 +461,7 @@ function hardenArenaTyping(source: string): string {
   }
 
   if (!source.includes("Bridge 4: ورود متن")) {
-    const starts = [LEGACY_PASTE_LOOP_START, V3_PASTE_LOOP_START];
+    const starts = [LEGACY_PASTE_LOOP_START, V3_PASTE_LOOP_START, CURRENT_V3_PASTE_LOOP_START];
     const start = starts.map((anchor) => source.indexOf(anchor)).find((index) => index >= 0) ?? -1;
     const end = source.indexOf(PASTE_LOOP_END, start);
     if (start < 0 || end < 0) {
@@ -479,9 +481,14 @@ function hardenArenaTyping(source: string): string {
     );
   }
   if (!source.includes("ARENA_SUBMIT_BLOCKED_UNVERIFIED")) {
-    const submitStartAnchor = "$sent = $false\n\nif ($textConfirmed) {";
+    const submitStartAnchors = [
+      "$sent = $false\n\nif ($textConfirmed) {",
+      "$sent = $false\nif ($textConfirmed) {",
+    ];
     const submitEndAnchor = "\nif ($sent) { Write-Output 'ARENA_SENT_VERIFIED' }";
-    const submitStart = source.indexOf(submitStartAnchor);
+    const submitStart = submitStartAnchors
+      .map((anchor) => source.indexOf(anchor))
+      .find((index) => index >= 0) ?? -1;
     const submitEnd = source.indexOf(submitEndAnchor, submitStart);
     if (submitStart < 0 || submitEnd < 0) {
       throw new AppError("بخش ارسال و تأیید نهایی Arena برای ارتقای Bridge 4 پیدا نشد.", {
@@ -506,6 +513,14 @@ function hardenArenaTyping(source: string): string {
     )
     markers = [line.strip() for line in output.splitlines() if line.strip()]
 `;
+  const currentRunner = `def type_and_submit():
+    output = run_hidden_powershell(
+        TYPE_PS_SCRIPT,
+        extra_env={"ARENA_PROMPT": PROMPT_TEXT, "ARENA_URL": URL},
+        timeout=150,
+    )
+    markers = [line.strip() for line in output.splitlines() if line.strip()]
+`;
   const diagnosticRunner = `def type_and_submit():
     safe_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in PROMPT_REQUEST_ID)
     diagnostic_dir = os.path.join(os.path.dirname(SCREENSHOT_DIR), "logs", "errors")
@@ -526,6 +541,7 @@ function hardenArenaTyping(source: string): string {
         print("گزارش فنی Arena: " + " | ".join(markers))
 `;
   if (source.includes(oldRunner)) source = source.replace(oldRunner, diagnosticRunner);
+  else if (source.includes(currentRunner)) source = source.replace(currentRunner, diagnosticRunner);
   if (!source.includes("ARENA_DIAGNOSTIC_DIR")) {
     throw new AppError("تابع اجرای PowerShell برای ثبت تصاویر مرحله‌ای قابل ارتقا نیست.", {
       status: 409,

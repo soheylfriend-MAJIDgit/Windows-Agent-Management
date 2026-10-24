@@ -2,6 +2,7 @@ import { AppError } from "./errors";
 import { ARENA_JOB_NAME, buildArenaJobFile, type TelegramReportMode } from "./arena-job";
 import { buildAppendBlock, buildNewJobFile, type PromptInput, type PromptResult } from "./actions";
 import { getAutomation, normalizeAutomationSlug, requestAutomationRun, saveAutomationVersion } from "./automations";
+import { findOnlineCommandAgent } from "./commands";
 import { insertEvent, insertPrompt, updatePromptResult } from "./store";
 import type { Issue, PromptMode } from "./types";
 
@@ -81,6 +82,9 @@ export async function submitAutomationPrompt(input: PromptInput): Promise<Prompt
     };
   }
 
+  // پیش از ساخت نسخه فعال مطمئن می‌شویم Windows Agent سازگار آماده دریافت است؛
+  // در قطع بودن ایجنت، نسخه‌ای بدون فرمان اجرا در D1 باقی نمی‌ماند.
+  const commandTarget = await findOnlineCommandAgent("d1_automations");
   const promptId = await insertPrompt({ jobName: `job_${slug}.py`, mode, prompt, code: input.code?.trim() || null, issues, status: "sending" });
   try {
     const saved = await saveAutomationVersion({
@@ -94,7 +98,7 @@ export async function submitAutomationPrompt(input: PromptInput): Promise<Prompt
       actor: "manager:prompt",
       activate: true,
     });
-    const run = await requestAutomationRun(saved.automation.id, "manager:prompt");
+    const run = await requestAutomationRun(saved.automation.id, "manager:prompt", commandTarget);
     await updatePromptResult(promptId, { commitSha: saved.version.sourceSha256, commitUrl: null, status: "pending" });
     await insertEvent({
       kind: "automation_prompt",

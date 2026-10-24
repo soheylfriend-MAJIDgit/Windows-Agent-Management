@@ -546,11 +546,19 @@ export async function appendCommandEvent(
   if (!["debug", "info", "warning", "error", "fatal"].includes(levelValue)) {
     throw new AppError("سطح رخداد معتبر نیست.", { status: 400, code: "command_event_level_invalid" });
   }
-  const data = objectJson(input.data, "داده رخداد", 24_000);
-  const parsed = parseObject(data);
+  const parsed = parseObject(objectJson(input.data, "داده رخداد", 24_000));
+  const reportedOccurredAt = input.occurredAt === undefined || input.occurredAt === null
+    ? null
+    : occurredAt(input.occurredAt);
+  const data = objectJson(
+    reportedOccurredAt ? { ...parsed, reportedOccurredAt } : parsed,
+    "داده رخداد",
+    24_000,
+  );
   const autoTrigger = row.auto_stop_on_anomaly === 1 && (levelValue === "fatal" || parsed.autoStop === true);
+  // ترتیب و زمان timeline بر اساس ساعت قابل‌اعتماد Cloudflare ثبت می‌شود؛
+  // زمان گزارش‌شده‌ی ویندوز برای عیب‌یابی داخل data باقی می‌ماند.
   const now = new Date().toISOString();
-  const eventTime = occurredAt(input.occurredAt);
   const queries = [
     {
       sql: `INSERT INTO command_events (command_id, seq, stage, level, message, data, created_at)
@@ -558,7 +566,7 @@ export async function appendCommandEvent(
             ON CONFLICT(command_id, seq) DO UPDATE SET
               stage = excluded.stage, level = excluded.level, message = excluded.message,
               data = excluded.data, created_at = excluded.created_at`,
-      params: [id, seq, stage, levelValue, message, data, eventTime],
+      params: [id, seq, stage, levelValue, message, data, now],
     },
     { sql: "UPDATE commands SET last_event_at = ? WHERE id = ?", params: [now, id] },
   ];
@@ -609,8 +617,9 @@ export async function appendCommandArtifact(
   if (size !== null && (!Number.isFinite(size) || size < 0 || size > 2_000_000_000)) {
     throw new AppError("اندازه artifact معتبر نیست.", { status: 400, code: "artifact_size_invalid" });
   }
+  if (input.occurredAt !== undefined && input.occurredAt !== null) occurredAt(input.occurredAt);
+  // زمان سرور برای ترتیب قطعی artifactها؛ timestamp ویندوز در نام فایل حفظ می‌شود.
   const now = new Date().toISOString();
-  const artifactTime = occurredAt(input.occurredAt);
   await dbBatch([
     {
       sql: `INSERT INTO command_artifacts
@@ -620,7 +629,7 @@ export async function appendCommandArtifact(
           stage = excluded.stage, name = excluded.name, local_path = excluded.local_path,
           drive_file_id = excluded.drive_file_id, drive_url = excluded.drive_url,
           mime_type = excluded.mime_type, size = excluded.size`,
-      params: [artifactId, id, kind, stage, name, localPath, driveFileId, driveUrl, mimeType, size, artifactTime],
+      params: [artifactId, id, kind, stage, name, localPath, driveFileId, driveUrl, mimeType, size, now],
     },
     { sql: "UPDATE commands SET last_event_at = ? WHERE id = ?", params: [now, id] },
   ]);
