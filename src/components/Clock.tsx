@@ -1,10 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { formatJalaliLong, formatTehranTime, formatWeekday } from "@/lib/jalali";
+import {
+  formatJalaliDateTime,
+  formatJalaliLong,
+  formatTehranTime,
+  formatWeekday,
+} from "@/lib/jalali";
+
+const BUILD_COMMIT_DATE = process.env.NEXT_PUBLIC_BUILD_COMMIT_DATE ?? "";
+const BUILD_COMMIT_SHA = process.env.NEXT_PUBLIC_BUILD_COMMIT_SHA ?? "";
 
 export function Clock() {
   const [now, setNow] = useState<Date | null>(null);
+  const commitDate = BUILD_COMMIT_DATE ? new Date(BUILD_COMMIT_DATE) : null;
+  const validCommitDate = commitDate && !Number.isNaN(commitDate.getTime()) ? commitDate : null;
+  const shortSha = BUILD_COMMIT_SHA.slice(0, 7);
 
   useEffect(() => {
     setNow(new Date());
@@ -13,11 +24,25 @@ export function Clock() {
   }, []);
 
   return (
-    <div className="clock" title="ساعت تهران (UTC+03:30)">
-      <span className="clock-time">{now ? formatTehranTime(now).slice(0, 5) : "—:—"}</span>
-      <span className="clock-date">
-        {now ? `${formatWeekday(now)} · ${formatJalaliLong(now)}` : "در حال هم‌زمان‌سازی"}
-      </span>
+    <div className="clock-cluster">
+      <div
+        className="commit-clock"
+        title={shortSha ? `آخرین کامیت منتشرشده: ${shortSha}` : "آخرین کامیت منتشرشده"}
+      >
+        <span className="commit-clock-label">
+          آخرین کامیت{shortSha ? ` · ${shortSha}` : ""}
+        </span>
+        <span className="commit-clock-date">
+          {validCommitDate ? formatJalaliDateTime(validCommitDate) : "زمان کامیت نامشخص"}
+        </span>
+      </div>
+      <span className="clock-separator" aria-hidden="true" />
+      <div className="clock" title="ساعت تهران (UTC+03:30)">
+        <span className="clock-time">{now ? formatTehranTime(now).slice(0, 5) : "—:—"}</span>
+        <span className="clock-date">
+          {now ? `${formatWeekday(now)} · ${formatJalaliLong(now)}` : "در حال هم‌زمان‌سازی"}
+        </span>
+      </div>
     </div>
   );
 }

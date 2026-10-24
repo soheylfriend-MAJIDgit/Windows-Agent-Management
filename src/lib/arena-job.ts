@@ -3,7 +3,8 @@ import { AppError } from "./errors";
 export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
-const BRIDGE_MARKER = "# management-arena-bridge: 5";
+const BRIDGE_MARKER = "# management-arena-bridge: 6";
+const BRIDGE_5_MARKER = "# management-arena-bridge: 5";
 const BRIDGE_4_MARKER = "# management-arena-bridge: 4";
 const BRIDGE_3_MARKER = "# management-arena-bridge: 3";
 const BRIDGE_2_MARKER = "# management-arena-bridge: 2";
@@ -33,6 +34,8 @@ const TELEGRAM_BRIDGE = `${BRIDGE_MARKER}
 TELEGRAM_REPORT_MODE = "final"
 PROMPT_REQUEST_ID = "initial"
 FAILURE_FEEDBACK_ATTEMPTS = 3
+ARENA_COMPLETION_TIMEOUT = 180
+ARENA_COMPLETION_POLL_SECONDS = 3
 BOT_API_CONFIG = os.path.join(
     os.environ.get("LOCALAPPDATA", ""), "Windows-Agent", "bot_api.json"
 )
@@ -85,7 +88,7 @@ def save_failure_artifacts(detail):
             fh.write(
                 "زمان: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " تهران\\n"
                 "موضوع: شکست job_arena.py و نیاز به بررسی ایجنت همکار\\n"
-                "نسخه برنامه: Arena Bridge 5\\n"
+                "نسخه برنامه: Arena Bridge 6\\n"
                 "شناسه درخواست: " + PROMPT_REQUEST_ID + "\\n"
                 "پرامپت: " + PROMPT_TEXT + "\\n\\n"
                 "جزئیات خطا:\\n" + str(detail)
@@ -118,6 +121,41 @@ def handle_failure_dialog_if_present():
     return False
 
 
+def wait_for_arena_completion():
+    """پایان واقعی کار را فقط با ظهور پنجره Was this task successful? تأیید می‌کند."""
+    detector_anchor = (
+        "$candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, "
+        "[System.Windows.Automation.Condition]::TrueCondition)"
+    )
+    detector_exit = (
+        "Write-Output 'ARENA_COMPLETION_DIALOG_FOUND'\\n"
+        "exit 0\\n\\n"
+        + detector_anchor
+    )
+    if detector_anchor not in DIALOG_PS_SCRIPT:
+        raise RuntimeError("ساختار تشخیص پنجره پایان Arena قابل شناسایی نیست")
+    detector_script = DIALOG_PS_SCRIPT.replace(detector_anchor, detector_exit, 1)
+    deadline = time.monotonic() + ARENA_COMPLETION_TIMEOUT
+    attempt = 0
+    while time.monotonic() < deadline:
+        attempt += 1
+        print(f"پایش پایان Arena؛ انتظار برای «{DIALOG_PHRASE}» (بررسی {attempt})...")
+        try:
+            output = run_hidden_powershell(detector_script, timeout=60)
+        except Exception as exc:
+            print(f"هشدار: بررسی پایان Arena موقتاً ناموفق بود: {exc}")
+            output = ""
+        if "ARENA_COMPLETION_DIALOG_FOUND" in output:
+            print("پنجره پایان Arena دیده شد؛ اجرای ایجنت همکار کامل شده است")
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(ARENA_COMPLETION_POLL_SECONDS, remaining))
+    raise TimeoutError(
+        f"تا {ARENA_COMPLETION_TIMEOUT} ثانیه پنجره «{DIALOG_PHRASE}» ظاهر نشد"
+    )
+
+
 def send_failure_feedback(detail, artifact_paths):
     """حداکثر سه بار تلاش می‌کند شکست را به گفت‌وگوی ایجنت همکار برگرداند."""
     global PROMPT_TEXT
@@ -139,7 +177,8 @@ def send_failure_feedback(detail, artifact_paths):
                 maximize_browser()
                 handle_failure_dialog_if_present()
                 type_and_submit()
-                print("بازخورد اجرای ناموفق به ایجنت همکار ارسال شد")
+                wait_for_arena_completion()
+                print("بازخورد اجرای ناموفق به ایجنت همکار ارسال و پایان آن تأیید شد")
                 return True
             except Exception as exc:
                 last_error = exc
@@ -531,6 +570,40 @@ function hardenArenaTyping(source: string): string {
     );
   }
 
+  const oldDialogCandidates = `$btnCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+$itemCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem)
+$orCond = New-Object System.Windows.Automation.OrCondition($btnCond, $itemCond)
+$candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, $orCond)`;
+  const safeDialogCandidates = `$candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)`;
+  if (source.includes(oldDialogCandidates)) {
+    source = source.replace(oldDialogCandidates, safeDialogCandidates);
+  }
+  if (!source.includes(safeDialogCandidates)) {
+    throw new AppError("بخش گزینه‌های پنجره نتیجه Arena قابل ارتقا نیست.", {
+      status: 409,
+      code: "arena_dialog_upgrade_failed",
+    });
+  }
+
+  if (!source.includes("# ۶) پایان واقعی فقط با ظهور پنجره نتیجه Arena تأیید می‌شود.")) {
+    const fixedWaitBlock = `    # ۶) صبر کوتاه بعد از Enter تا نتیجه ارسال در صفحه دیده شود
+    print(f"صبر {AFTER_ENTER_WAIT} ثانیه‌ای پیش از اسکرین‌شات...")
+    time.sleep(AFTER_ENTER_WAIT)
+`;
+    const completionWaitBlock = `    # ۶) پایان واقعی فقط با ظهور پنجره نتیجه Arena تأیید می‌شود.
+    print("ارسال انجام شد؛ منتظر پایان کار ایجنت همکار و پنجره نتیجه Arena هستیم...")
+    wait_for_arena_completion()
+`;
+    if (!source.includes(fixedWaitBlock)) {
+      throw new AppError("بخش انتظار پاسخ Arena برای ارتقای پایش پایان کار پیدا نشد.", {
+        status: 409,
+        code: "arena_completion_upgrade_failed",
+        hint: "بخش AFTER_ENTER_WAIT فایل job_arena.py را با نسخه‌ی شناخته‌شده مقایسه کنید.",
+      });
+    }
+    source = source.replace(fixedWaitBlock, completionWaitBlock);
+  }
+
   const oldRunner = `def type_and_submit():
     output = run_hidden_powershell(
         TYPE_PS_SCRIPT,
@@ -587,7 +660,7 @@ function hardenArenaTyping(source: string): string {
 }
 
 
-/** ارتقای درجا از Bridge 1 تا 4؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+/** ارتقای درجا از Bridge 1 تا 5؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
 function upgradeLegacyBridge(source: string, oldMarker: string): string {
   const bridgeStart = source.indexOf(oldMarker);
   const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
@@ -599,7 +672,7 @@ function upgradeLegacyBridge(source: string, oldMarker: string): string {
     });
   }
 
-  // کل بلوک Bridge قدیمی با Bridge 5 جایگزین می‌شود؛ بدنه‌ی اصلی کار حفظ می‌شود.
+  // کل بلوک Bridge قدیمی با Bridge 6 جایگزین می‌شود؛ بدنه‌ی اصلی کار حفظ می‌شود.
   let upgraded = source.slice(0, bridgeStart) + TELEGRAM_BRIDGE.trimEnd() + source.slice(openSiteStart);
   const wrapperStart = upgraded.lastIndexOf("\ndef main():\n");
   if (wrapperStart < 0 || !upgraded.includes("\ndef _run_arena_task():\n")) {
@@ -630,18 +703,21 @@ export function buildArenaJobFile(options: {
     return source.endsWith("\n") ? source : `${source}\n`;
   }
   if (
+    source.includes(BRIDGE_5_MARKER) ||
     source.includes(BRIDGE_4_MARKER) ||
     source.includes(BRIDGE_3_MARKER) ||
     source.includes(BRIDGE_2_MARKER) ||
     source.includes(LEGACY_BRIDGE_MARKER)
   ) {
-    const oldMarker = source.includes(BRIDGE_4_MARKER)
-      ? BRIDGE_4_MARKER
-      : source.includes(BRIDGE_3_MARKER)
-        ? BRIDGE_3_MARKER
-        : source.includes(BRIDGE_2_MARKER)
-          ? BRIDGE_2_MARKER
-          : LEGACY_BRIDGE_MARKER;
+    const oldMarker = source.includes(BRIDGE_5_MARKER)
+      ? BRIDGE_5_MARKER
+      : source.includes(BRIDGE_4_MARKER)
+        ? BRIDGE_4_MARKER
+        : source.includes(BRIDGE_3_MARKER)
+          ? BRIDGE_3_MARKER
+          : source.includes(BRIDGE_2_MARKER)
+            ? BRIDGE_2_MARKER
+            : LEGACY_BRIDGE_MARKER;
     source = upgradeLegacyBridge(source, oldMarker);
     source = hardenArenaTyping(source);
     source = replaceAssignment(source, "TELEGRAM_REPORT_MODE", options.telegramMode);
@@ -652,7 +728,7 @@ export function buildArenaJobFile(options: {
     throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 5 به‌صورت خودکار پشتیبانی می‌شوند.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 6 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 

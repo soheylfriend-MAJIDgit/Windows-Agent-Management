@@ -370,12 +370,46 @@ html[data-theme="light"] .logo {
   margin-inline-start: auto;
 }
 
+.clock-cluster {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  direction: rtl;
+  min-width: 0;
+}
+
+.commit-clock,
 .clock {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  justify-content: center;
   line-height: 1.35;
+  min-width: 0;
+}
+
+.clock {
   padding-inline-end: 4px;
+}
+
+.commit-clock-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.commit-clock-date {
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.clock-separator {
+  width: 1px;
+  min-height: 34px;
+  align-self: center;
+  background: var(--border-strong);
 }
 
 .clock-time {
@@ -2962,8 +2996,17 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
     white-space: nowrap;
   }
 
-  .clock {
+  .clock,
+  .clock-separator {
     display: none;
+  }
+
+  .commit-clock-label {
+    font-size: 10px;
+  }
+
+  .commit-clock-date {
+    font-size: 11px;
   }
 
   .header-side {

@@ -477,33 +477,36 @@ export async function updatePromptResult(
 }
 
 export async function listPrompts(limit = 20): Promise<PromptRecord[]> {
-  // نسخه‌های D1 با SHA-256 به فرمان متصل‌اند. این reconciliation علاوه بر مسیر اصلی
-  // prompt_id، رکورد تست‌های ساخته‌شده پیش از اضافه‌شدن آن اتصال را نیز اصلاح می‌کند.
-  await dbRun(`
-    UPDATE prompts AS p
-    SET status = (
-          SELECT c.status FROM commands c
-          WHERE c.job_name = p.job_name
-            AND c.payload LIKE '%"sourceSha256":"' || p.commit_sha || '"%'
-          ORDER BY c.created_at DESC LIMIT 1
-        ),
-        error = (
-          SELECT c.error FROM commands c
-          WHERE c.job_name = p.job_name
-            AND c.payload LIKE '%"sourceSha256":"' || p.commit_sha || '"%'
-          ORDER BY c.created_at DESC LIMIT 1
-        )
-    WHERE p.commit_url IS NULL
-      AND p.commit_sha IS NOT NULL
-      AND EXISTS (
-        SELECT 1 FROM commands c
-        WHERE c.job_name = p.job_name
-          AND c.payload LIKE '%"sourceSha256":"' || p.commit_sha || '"%'
-      )
-  `);
   const rows = await dbAll<Row>("SELECT * FROM prompts ORDER BY created_at DESC, id DESC LIMIT ?", [
     Math.min(Math.max(limit, 1), 100),
   ]);
+
+  // به‌جای UPDATE هم‌بسته و وابسته به جزئیات SQLite، هر رکورد با فرمان خودش
+  // reconcile می‌شود. مسیر اصلی prompt_id است و SHA-256 فقط تست‌های قدیمی را پوشش می‌دهد.
+  for (const row of rows) {
+    const promptId = n(row.id);
+    let command = await dbFirst<Row>(
+      "SELECT status, error FROM commands WHERE prompt_id = ? ORDER BY created_at DESC LIMIT 1",
+      [promptId],
+    );
+    const sourceSha = nullableS(row.commit_sha);
+    if (!command && !nullableS(row.commit_url) && sourceSha) {
+      command = await dbFirst<Row>(
+        "SELECT status, error FROM commands WHERE job_name = ? AND payload LIKE ? ORDER BY created_at DESC LIMIT 1",
+        [s(row.job_name), `%${sourceSha}%`],
+      );
+    }
+    if (!command) continue;
+
+    const status = s(command.status);
+    const error = nullableS(command.error);
+    if (status !== s(row.status) || error !== nullableS(row.error)) {
+      await dbRun("UPDATE prompts SET status = ?, error = ? WHERE id = ?", [status, error, promptId]);
+      row.status = status;
+      row.error = error;
+    }
+  }
+
   return rows.map(mapPrompt);
 }
 
