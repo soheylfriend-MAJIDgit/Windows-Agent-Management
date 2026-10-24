@@ -90,6 +90,39 @@ npm run deploy
 برای secretها می‌توانید از پنل Cloudflare (Workers → Settings → Variables) هم استفاده کنید.
 secretها فقط روی سرور در دسترس‌اند و هرگز در باندل کلاینت قرار نمی‌گیرند.
 
+### استقرار از طریق داشبورد (Git / Workers Builds)
+
+اگر می‌خواهید با هر push خودکار deploy شود، در داشبورد Cloudflare →
+**Workers & Pages → Create → Connect to Git** این مقدارها را بگذارید:
+
+| فیلد | مقدار |
+| --- | --- |
+| Project name | `windows-agent-management` (همان `name` در `wrangler.jsonc`) |
+| Build command | `npm run build:worker` (یعنی `opennextjs-cloudflare build`؛ خالی نگذارید) |
+| Deploy command | `npx wrangler deploy` |
+| Preview command | `npx wrangler versions upload` — یا «Enable Preview builds» را خاموش کنید |
+| Path (Advanced) | `/` |
+
+نکته‌های مهم:
+
+- **Build command را خالی نگذارید.** فایل `.open-next/worker.js` که `main` در
+  `wrangler.jsonc` است، در مخزن نیست و فقط با `opennextjs-cloudflare build` ساخته می‌شود؛
+  `npm run build` به‌تنهایی کافی نیست.
+- **شاخه‌ی production** باید همان شاخه‌ای باشد که کد در آن است. اگر کد روی شاخه‌ی
+  `arena/...` است، در **Settings → Builds → production branch** همان را انتخاب کنید یا
+  ابتدا آن را به `main` مرج کنید؛ وگرنه Build روی `main` خالی اجرا می‌شود.
+- Workers Builds خودش `npm ci` را اجرا می‌کند؛ لازم نیست در Build command بنویسید.
+  نسخه‌ی Node از `.nvmrc` (این مخزن: `22`) خوانده می‌شود و با `NODE_VERSION` هم قابل
+  بازنویسی است.
+- توکنی که «Create new token» می‌سازد برای deploy کافی است، اما برای **ساخت خودکار D1**
+  ممکن است دسترسی نداشته باشد. مطمئن‌ترین راه: یک بار محلی
+  `npx wrangler d1 create windows-agent-management-db` را اجرا کنید، `database_id` را
+  در `wrangler.jsonc` بگذارید و push کنید. (اگر توکن دسترسی D1 داشت، همان deploy اول
+  دیتابیس را می‌سازد.)
+- متغیرهای این فرم **build variables** هستند. `GITHUB_TOKEN` و بقیه‌ی secretها باید
+  **runtime secret** باشند: بعد از اولین deploy از
+  **Worker → Settings → Variables and Secrets** یا با `wrangler secret put`.
+
 نسخه‌ی دستی جدول‌ها (اختیاری، برای بازیابی/مستندسازی):
 
 ```bash
