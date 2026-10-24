@@ -3,7 +3,8 @@ import { AppError } from "./errors";
 export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
-const BRIDGE_MARKER = "# management-arena-bridge: 2";
+const BRIDGE_MARKER = "# management-arena-bridge: 3";
+const BRIDGE_2_MARKER = "# management-arena-bridge: 2";
 const LEGACY_BRIDGE_MARKER = "# management-arena-bridge: 1";
 const ANY_BRIDGE_MARKER = "# management-arena-bridge:";
 
@@ -82,7 +83,7 @@ def save_failure_artifacts(detail):
             fh.write(
                 "زمان: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " تهران\\n"
                 "موضوع: شکست job_arena.py و نیاز به بررسی ایجنت همکار\\n"
-                "نسخه برنامه: Arena Bridge 2\\n"
+                "نسخه برنامه: Arena Bridge 3\\n"
                 "شناسه درخواست: " + PROMPT_REQUEST_ID + "\\n"
                 "پرامپت: " + PROMPT_TEXT + "\\n\\n"
                 "جزئیات خطا:\\n" + str(detail)
@@ -174,26 +175,115 @@ if __name__ == "__main__":
     main()
 `;
 
-/** ارتقای درجا از Bridge 1؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
-function upgradeLegacyBridge(source: string): string {
-  const bridgeStart = source.indexOf(LEGACY_BRIDGE_MARKER);
+const LEGACY_PASTE_LOOP_START =
+  "    # حلقه تایپ: کلیک روی کادر → Paste → تأیید با خواندن متن عنصر فوکوس‌شده\n";
+const LEGACY_PASTE_LOOP_END = "\n}\n\nif ($textConfirmed)";
+
+const VERIFIED_PASTE_LOOP = `    # حلقه ورود متن: هر تلاش ابتدا کادر را پاک می‌کند و یک روش Paste متفاوت دارد.
+    # چون contenteditable کروم همیشه متن را از UI Automation برنمی‌گرداند، تأیید نهایی
+    # با Select All + Copy و مقایسه‌ی دقیق محتوای کپی‌شده انجام می‌شود.
+    for ($try = 1; $try -le 3 -and -not $textConfirmed; $try++) {
+        if ($composer) { try { $composer.SetFocus() } catch {} }
+        Start-Sleep -Milliseconds 300
+        Left-Click $clickPoint.X $clickPoint.Y
+        Start-Sleep -Milliseconds 500
+
+        # متن باقی‌مانده از تلاش قبلی نباید باعث Paste تکراری شود.
+        try {
+            [System.Windows.Forms.SendKeys]::SendWait('^a')
+            Start-Sleep -Milliseconds 100
+            [System.Windows.Forms.SendKeys]::SendWait('{BACKSPACE}')
+        } catch {}
+
+        Set-Clipboard -Value $env:ARENA_PROMPT
+        Start-Sleep -Milliseconds 300
+        if ($try -eq 1) {
+            Hardware-Paste
+            Write-Output 'ARENA_PASTE_HARDWARE'
+        } elseif ($try -eq 2) {
+            [System.Windows.Forms.SendKeys]::SendWait('^v')
+            Write-Output 'ARENA_PASTE_SENDKEYS'
+        } else {
+            [System.Windows.Forms.SendKeys]::SendWait('+{INSERT}')
+            Write-Output 'ARENA_PASTE_SHIFT_INSERT'
+        }
+        Start-Sleep -Milliseconds 1000
+
+        $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+        $focusedText = Get-ElText $focused
+        $composerText = Get-ElText $composer
+        $promptNormalized = ([string]$env:ARENA_PROMPT).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
+        $focusedNormalized = ([string]$focusedText).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
+        $composerNormalized = ([string]$composerText).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
+        $okFocused = ($focusedText -and $focusedNormalized.Contains($promptNormalized))
+        $okComposer = ($composerText -and $composerNormalized.Contains($promptNormalized))
+
+        # مقدار قبلی Clipboard خود پرامپت است؛ قبل از Copy یک sentinel می‌گذاریم
+        # تا موفقیت Copy واقعاً ثابت کند متن داخل کادر قرار گرفته است.
+        $okCopied = $false
+        try {
+            $sentinel = "__ARENA_VERIFY_$([Guid]::NewGuid().ToString('N'))__"
+            Set-Clipboard -Value $sentinel
+            [System.Windows.Forms.SendKeys]::SendWait('^a')
+            Start-Sleep -Milliseconds 150
+            [System.Windows.Forms.SendKeys]::SendWait('^c')
+            Start-Sleep -Milliseconds 350
+            $copiedText = [string](Get-Clipboard -Raw)
+            $copiedNormalized = $copiedText.Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
+            $okCopied = ($copiedNormalized -eq $promptNormalized)
+            [System.Windows.Forms.SendKeys]::SendWait('{END}')
+        } catch {}
+
+        if ($okFocused -or $okComposer -or $okCopied) {
+            $textConfirmed = $true
+            if ($okCopied) { Write-Output ("ARENA_SELECTION_COPY_VERIFIED_TRY" + $try) }
+            Write-Output ("ARENA_PASTE_VERIFIED_TRY" + $try)
+        } else {
+            Write-Output ("ARENA_PASTE_UNVERIFIED_TRY" + $try)
+        }
+    }`;
+
+/**
+ * تایپ Bridgeهای قبلی در contenteditable کروم فقط به UI Automation تکیه داشت.
+ * Chrome گاهی متن واقعی این عنصر را برنمی‌گرداند؛ حلقه را با Paste چندمسیره و
+ * تأیید مستقل Select All + Copy جایگزین می‌کنیم.
+ */
+function hardenArenaTyping(source: string): string {
+  if (source.includes("ARENA_SELECTION_COPY_VERIFIED_TRY")) return source;
+
+  const start = source.indexOf(LEGACY_PASTE_LOOP_START);
+  const end = source.indexOf(LEGACY_PASTE_LOOP_END, start);
+  if (start < 0 || end < 0) {
+    throw new AppError("بخش تایپ job_arena.py برای ارتقای خودکار پیدا نشد.", {
+      status: 409,
+      code: "arena_typing_upgrade_failed",
+      hint: "نسخه‌ی job_arena.py با ساختار شناخته‌شده‌ی Arena سازگار نیست؛ حلقه‌ی Paste را بررسی کنید.",
+    });
+  }
+
+  return `${source.slice(0, start)}${VERIFIED_PASTE_LOOP}${source.slice(end)}`;
+}
+
+/** ارتقای درجا از Bridge 1 یا 2؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+function upgradeLegacyBridge(source: string, oldMarker: string): string {
+  const bridgeStart = source.indexOf(oldMarker);
   const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
   if (bridgeStart < 0 || openSiteStart < 0) {
-    throw new AppError("ساختار Arena Bridge 1 برای ارتقای خودکار کامل نیست.", {
+    throw new AppError("ساختار Arena Bridge قبلی برای ارتقای خودکار کامل نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_failed",
       hint: "بلوک Bridge قدیمی یا تابع open_site پیدا نشد؛ job_arena.py را بررسی کنید.",
     });
   }
 
-  // کل بلوک Bridge 1 (تنظیم تلگرام و notifier قدیمی) با Bridge 2 جایگزین می‌شود.
+  // کل بلوک Bridge قدیمی با Bridge 3 جایگزین می‌شود؛ بدنه‌ی اصلی کار حفظ می‌شود.
   let upgraded = source.slice(0, bridgeStart) + TELEGRAM_BRIDGE.trimEnd() + source.slice(openSiteStart);
   const wrapperStart = upgraded.lastIndexOf("\ndef main():\n");
   if (wrapperStart < 0 || !upgraded.includes("\ndef _run_arena_task():\n")) {
-    throw new AppError("تابع‌های Arena Bridge 1 برای ارتقای خودکار پیدا نشدند.", {
+    throw new AppError("تابع‌های Arena Bridge قبلی برای ارتقای خودکار پیدا نشدند.", {
       status: 409,
       code: "arena_bridge_upgrade_failed",
-      hint: "job_arena.py باید شامل _run_arena_task و wrapper اصلی Bridge 1 باشد.",
+      hint: "job_arena.py باید شامل _run_arena_task و wrapper اصلی Bridge قبلی باشد.",
     });
   }
 
@@ -216,8 +306,10 @@ export function buildArenaJobFile(options: {
     source = replaceAssignment(source, "PROMPT_REQUEST_ID", options.requestId);
     return source.endsWith("\n") ? source : `${source}\n`;
   }
-  if (source.includes(LEGACY_BRIDGE_MARKER)) {
-    source = upgradeLegacyBridge(source);
+  if (source.includes(BRIDGE_2_MARKER) || source.includes(LEGACY_BRIDGE_MARKER)) {
+    const oldMarker = source.includes(BRIDGE_2_MARKER) ? BRIDGE_2_MARKER : LEGACY_BRIDGE_MARKER;
+    source = upgradeLegacyBridge(source, oldMarker);
+    source = hardenArenaTyping(source);
     source = replaceAssignment(source, "TELEGRAM_REPORT_MODE", options.telegramMode);
     source = replaceAssignment(source, "PROMPT_REQUEST_ID", options.requestId);
     return source.endsWith("\n") ? source : `${source}\n`;
@@ -226,7 +318,7 @@ export function buildArenaJobFile(options: {
     throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridge 1 و Bridge 2 به‌صورت خودکار پشتیبانی می‌شوند.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1، 2 و 3 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 
@@ -290,5 +382,6 @@ export function buildArenaJobFile(options: {
     });
   }
   source = source.replace(footerPattern, `\n\n${WRAPPED_MAIN.trimEnd()}\n`);
+  source = hardenArenaTyping(source);
   return source;
 }
