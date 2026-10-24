@@ -1,0 +1,43 @@
+/**
+ * پیکربندی Cloudflare Workers برای «ایجنت مدیریت».
+ * D1 فقط با نام معرفی شده است؛ wrangler 4.45+ در اولین deploy خودش
+ * دیتابیس را می‌سازد و شناسه را همین‌جا می‌نویسد (تأمین خودکار منابع).
+ * جدول‌ها هم در اولین درخواست به‌صورت خودکار ساخته می‌شوند (ensureSchema).
+ * بنابراین هیچ دستور دستی برای ساخت دیتابیس لازم نیست.
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "windows-agent-management",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "windows-agent-management"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "windows-agent-management-db",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "NEXTJS_ENV": "production",
+    "COLLAB_OWNER": "soheylfriend-MAJIDgit",
+    "COLLAB_REPO": "Windows-Agent-hamkar",
+    "COLLAB_BRANCH": "arena/beecb74c-windows-agent-hamkar",
+    "MOTHER_OWNER": "soheylfriend-MAJIDgit",
+    "MOTHER_REPO": "Windows-Agent",
+    "MOTHER_BRANCH": "arena/025c788f-windows-agent"
+  }
+}

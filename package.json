@@ -1,0 +1,38 @@
+{
+  "name": "windows-agent-management",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ایجنت مدیریت پنل ویندوز — داشبورد نظارت، اجرای دوباره و ارسال پرامپت برای ایجنت همکار",
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0 -p 3000",
+    "build": "next build",
+    "build:worker": "opennextjs-cloudflare build",
+    "start": "next start -H 0.0.0.0 -p 3000",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
+    "db:local": "wrangler d1 execute windows-agent-management-db --local --file=migrations/0001_init.sql",
+    "db:remote": "wrangler d1 execute windows-agent-management-db --remote --file=migrations/0001_init.sql",
+    "typecheck": "tsc --noEmit",
+    "lint:job": "python3 scripts/lint_job.py"
+  },
+  "dependencies": {
+    "@fontsource-variable/vazirmatn": "5.3.0",
+    "fflate": "0.8.3",
+    "next": "16.4.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@opennextjs/cloudflare": "^1.20.13",
+    "@types/node": "^22.18.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.152.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

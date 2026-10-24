@@ -1,0 +1,21 @@
+# نمونه‌ی متغیرهای محیطی برای اجرای محلی (next dev / wrangler preview).
+# این فایل را به .dev.vars کپی کنید؛ .dev.vars در .gitignore است.
+# در Cloudflare به‌جای این فایل از «wrangler secret put» استفاده کنید.
+
+# نوشتن در مخزن ایجنت همکار (اجرای دوباره، ارسال پرامپت)
+GITHUB_TOKEN=
+
+# گوگل درایو (اختیاری) — محتوای JSON حساب سرویس
+GOOGLE_SERVICE_ACCOUNT_JSON=
+# یا همان JSON به‌صورت base64 (برای محیط‌هایی که خطوط چندخطی مشکل می‌سازد)
+GOOGLE_SERVICE_ACCOUNT_JSON_B64=
+# شناسه‌ی پوشه‌ی logs یا پوشه‌ی والد Windows-Agent-DB
+GOOGLE_DRIVE_LOGS_FOLDER_ID=
+GOOGLE_DRIVE_ROOT_FOLDER_ID=
+# اختیاری: پوشه‌ی جدا برای فایل‌های errors
+GOOGLE_DRIVE_ERRORS_FOLDER_ID=
+
+# ورود مدیر (اختیاری؛ اگر خالی باشد سایت باز است)
+MANAGER_PASSCODE=
+# کلید امضای کوکی نشست (اختیاری؛ پیش‌فرض همان کد مدیریت)
+AUTH_SECRET=

@@ -1,0 +1,268 @@
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { AppError } from "./errors";
+
+/** شکل حداقلی D1 تا بدون وابستگی به تایپ‌های Workers کامپایل شود. */
+export interface D1Result<T = unknown> {
+  success: boolean;
+  results?: T[];
+  meta?: { changes?: number; duration?: number; rows_read?: number; rows_written?: number };
+}
+
+export interface D1PreparedStatement {
+  bind(...values: unknown[]): D1PreparedStatement;
+  first<T = unknown>(colName?: string): Promise<T | null>;
+  all<T = unknown>(): Promise<D1Result<T>>;
+  run<T = unknown>(): Promise<D1Result<T>>;
+}
+
+export interface D1Database {
+  prepare(query: string): D1PreparedStatement;
+  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
+  exec(query: string): Promise<{ count: number; duration?: number }>;
+}
+
+export interface AppEnv {
+  DB?: D1Database;
+  GITHUB_TOKEN?: string;
+  GOOGLE_SERVICE_ACCOUNT_JSON?: string;
+  GOOGLE_SERVICE_ACCOUNT_JSON_B64?: string;
+  GOOGLE_DRIVE_LOGS_FOLDER_ID?: string;
+  GOOGLE_DRIVE_ERRORS_FOLDER_ID?: string;
+  GOOGLE_DRIVE_ROOT_FOLDER_ID?: string;
+  MANAGER_PASSCODE?: string;
+  AUTH_SECRET?: string;
+  COLLAB_OWNER?: string;
+  COLLAB_REPO?: string;
+  COLLAB_BRANCH?: string;
+  MOTHER_OWNER?: string;
+  MOTHER_REPO?: string;
+  MOTHER_BRANCH?: string;
+  [key: string]: unknown;
+}
+
+let cachedEnv: AppEnv | null = null;
+
+export async function getEnv(): Promise<AppEnv> {
+  if (cachedEnv) return cachedEnv;
+  try {
+    const ctx = await getCloudflareContext({ async: true });
+    const env = (ctx?.env ?? {}) as AppEnv;
+    // فقط محیط واقعی را کش می‌کنیم؛ یک نتیجه‌ی خالی/خطا نباید برای همیشه بماند
+    // (مثلاً اولین فراخوانی پیش از آماده شدن bindingها).
+    if (Object.keys(env).length > 0) cachedEnv = env;
+    return env;
+  } catch {
+    return {};
+  }
+}
+
+/** ابتدا binding کلادفلر، بعد process.env (برای اجرای محلی بدون wrangler). */
+export async function envVar(name: keyof AppEnv | string): Promise<string | undefined> {
+  const env = await getEnv();
+  const fromBinding = env[name];
+  if (typeof fromBinding === "string" && fromBinding.trim()) return fromBinding.trim();
+  const fromProcess = typeof process !== "undefined" ? process.env?.[name] : undefined;
+  if (fromProcess && fromProcess.trim()) return fromProcess.trim();
+  return undefined;
+}
+
+export async function hasEnv(name: string): Promise<boolean> {
+  return Boolean(await envVar(name));
+}
+
+/** D1؛ در صورت نبودن binding، خطای فارسی قابل‌فهم با راهنما. */
+export async function getDb(): Promise<D1Database> {
+  const env = await getEnv();
+  if (!env.DB) {
+    throw new AppError("پایگاه داده D1 به Worker وصل نیست.", {
+      status: 503,
+      code: "db_binding_missing",
+      hint:
+        "در wrangler.jsonc بخش d1_databases با binding=DB وجود دارد. با «npm run deploy» اولین deploy دیتابیس را خودکار می‌سازد. برای اجرای محلی، npm run dev (با initOpenNextCloudflareForDev) D1 محلی می‌سازد.",
+    });
+  }
+  return env.DB;
+}
+
+let schemaPromise: Promise<void> | null = null;
+
+/** ساخت خودکار جدول‌ها؛ در اولین درخواست هر isolate یک بار اجرا می‌شود. */
+export async function ensureSchema(): Promise<void> {
+  if (schemaPromise) {
+    await schemaPromise;
+    return;
+  }
+  schemaPromise = (async () => {
+    const db = await getDb();
+    const statements = SCHEMA_SQL.map((sql) => db.prepare(sql));
+    try {
+      await db.batch(statements);
+    } catch (err) {
+      schemaPromise = null;
+      throw new AppError("ساخت خودکار جدول‌های D1 ممکن نشد.", {
+        status: 503,
+        code: "db_schema_failed",
+        hint: "سطح دسترسی دیتابیس یا صحت binding را بررسی کنید.",
+        details: err instanceof Error ? err.message : String(err),
+      });
+    }
+  })();
+  await schemaPromise;
+}
+
+export async function dbAll<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> {
+  const db = await getDb();
+  await ensureSchema();
+  const stmt = params.length ? db.prepare(sql).bind(...params) : db.prepare(sql);
+  const res = await stmt.all<T>();
+  return res.results ?? [];
+}
+
+export async function dbFirst<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T | null> {
+  const db = await getDb();
+  await ensureSchema();
+  const stmt = params.length ? db.prepare(sql).bind(...params) : db.prepare(sql);
+  return (await stmt.first<T>()) ?? null;
+}
+
+export async function dbRun(sql: string, params: unknown[] = []): Promise<D1Result> {
+  const db = await getDb();
+  await ensureSchema();
+  const stmt = params.length ? db.prepare(sql).bind(...params) : db.prepare(sql);
+  return stmt.run();
+}
+
+export async function dbBatch(queries: Array<{ sql: string; params?: unknown[] }>): Promise<void> {
+  if (!queries.length) return;
+  const db = await getDb();
+  await ensureSchema();
+  const statements = queries.map((q) => (q.params?.length ? db.prepare(q.sql).bind(...q.params) : db.prepare(q.sql)));
+  for (let i = 0; i < statements.length; i += 40) {
+    await db.batch(statements.slice(i, i + 40));
+  }
+}
+
+export async function dbHealthy(): Promise<boolean> {
+  try {
+    await dbFirst<{ ok: number }>("SELECT 1 AS ok");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function dbCounts(): Promise<{ jobs: number; runs: number; errors: number; prompts: number; events: number }> {
+  const row = await dbFirst<Record<string, number>>(`
+    SELECT
+      (SELECT COUNT(*) FROM jobs) AS jobs,
+      (SELECT COUNT(*) FROM runs) AS runs,
+      (SELECT COUNT(*) FROM error_logs) AS errors,
+      (SELECT COUNT(*) FROM prompts) AS prompts,
+      (SELECT COUNT(*) FROM events) AS events
+  `);
+  return {
+    jobs: Number(row?.jobs ?? 0),
+    runs: Number(row?.runs ?? 0),
+    errors: Number(row?.errors ?? 0),
+    prompts: Number(row?.prompts ?? 0),
+    events: Number(row?.events ?? 0),
+  };
+}
+
+const SCHEMA_SQL: string[] = [
+  `CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS jobs (
+    name TEXT PRIMARY KEY,
+    size INTEGER NOT NULL DEFAULT 0,
+    lines INTEGER NOT NULL DEFAULT 0,
+    docstring TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    content_sha TEXT NOT NULL DEFAULT '',
+    commit_date TEXT,
+    commit_sha TEXT,
+    commit_message TEXT,
+    commit_checked_at TEXT,
+    archive_updated_at TEXT,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    changed_at TEXT,
+    present INTEGER NOT NULL DEFAULT 1,
+    issues TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_jobs_present ON jobs(present)`,
+  `CREATE TABLE IF NOT EXISTS runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    exit_code TEXT,
+    started_at TEXT NOT NULL,
+    started_jalali TEXT,
+    duration_s REAL,
+    output TEXT NOT NULL DEFAULT '',
+    errors TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'drive',
+    source_file TEXT,
+    source_id TEXT,
+    content_sha TEXT,
+    raw TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (job_name, started_at)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_runs_job ON runs(job_name, started_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS error_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_name TEXT NOT NULL,
+    occurred_at TEXT,
+    occurred_jalali TEXT,
+    subject TEXT NOT NULL,
+    app_version TEXT,
+    detail TEXT NOT NULL DEFAULT '',
+    raw TEXT,
+    fingerprint TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_errors_occurred ON error_logs(occurred_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS prompts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_name TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    code TEXT,
+    commit_sha TEXT,
+    commit_url TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT,
+    issues TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_prompts_created ON prompts(created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    detail TEXT,
+    job_name TEXT,
+    url TEXT,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS sync_state (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS drive_files (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    modified_at TEXT,
+    size INTEGER,
+    synced_at TEXT NOT NULL
+  )`,
+];
