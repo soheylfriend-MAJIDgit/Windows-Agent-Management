@@ -466,12 +466,12 @@ export default function PromptPage() {
             </div>
             <ol className="steps">
               <li>
-                <strong>ثبت در فایل اختصاصی</strong>
-                متن و تنظیم گزارش در job_arena.py با شناسه‌ی یکتای درخواست کامیت می‌شود.
+                <strong>ثبت نسخه اختصاصی در D1</strong>
+                متن و تنظیم گزارش داخل نسخه immutable از job_arena.py ثبت و SHA-256 آن محاسبه می‌شود.
               </li>
               <li>
-                <strong>دریافت توسط پنل ویندوز</strong>
-                حالت خودکار هر ۱۰ ثانیه، یا دستی، محتوای تازه را در Desktop\CODES می‌نویسد.
+                <strong>دریافت امن توسط پنل ویندوز</strong>
+                Windows Agent نسخه مشخص را مستقیم از API می‌گیرد، hash را کنترل می‌کند و در فضای موقت فرمان می‌نویسد.
               </li>
               <li>
                 <strong>تحویل به Arena</strong>
@@ -515,8 +515,7 @@ export default function PromptPage() {
               </h2>
             </div>
             <p className="prose" style={{ fontSize: 12.3 }}>
-              پنل ویندوز تازگی را از <strong>محتوای فایل</strong> می‌فهمد، نه از شماره نسخه. تغییر{" "}
-              <span className="mono">version.txt</span> فقط نسخه‌ی خود برنامه است و هیچ اجرایی را تحریک نمی‌کند.
+              اجرای دوباره یک نسخه واقعی تازه در D1 می‌سازد. Windows Agent فقط نسخه و SHA-256 ثبت‌شده در همان فرمان را اجرا می‌کند؛ Git یا <span className="mono">version.txt</span> در این مسیر نقشی ندارد.
             </p>
           </section>
         </aside>
@@ -539,7 +538,7 @@ export default function PromptPage() {
         {historyApi.loading && !historyApi.data ? (
           <div className="skeleton skeleton-line" />
         ) : history.length === 0 ? (
-          <EmptyState icon="send" title="هنوز پرامپتی فرستاده نشده" text="اولین پرامپت را از فرم بالا بفرستید؛ تاریخچه و لینک کامیت اینجا می‌آید." />
+          <EmptyState icon="send" title="هنوز پرامپتی فرستاده نشده" text="اولین پرامپت را از فرم بالا بفرستید؛ نسخه D1، وضعیت فرمان و نتیجه اینجا می‌آید." />
         ) : (
           <div>
             {history.map((item) => {

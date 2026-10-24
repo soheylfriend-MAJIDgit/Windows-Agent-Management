@@ -477,6 +477,30 @@ export async function updatePromptResult(
 }
 
 export async function listPrompts(limit = 20): Promise<PromptRecord[]> {
+  // نسخه‌های D1 با SHA-256 به فرمان متصل‌اند. این reconciliation علاوه بر مسیر اصلی
+  // prompt_id، رکورد تست‌های ساخته‌شده پیش از اضافه‌شدن آن اتصال را نیز اصلاح می‌کند.
+  await dbRun(`
+    UPDATE prompts AS p
+    SET status = (
+          SELECT c.status FROM commands c
+          WHERE c.job_name = p.job_name
+            AND c.payload LIKE '%"sourceSha256":"' || p.commit_sha || '"%'
+          ORDER BY c.created_at DESC LIMIT 1
+        ),
+        error = (
+          SELECT c.error FROM commands c
+          WHERE c.job_name = p.job_name
+            AND c.payload LIKE '%"sourceSha256":"' || p.commit_sha || '"%'
+          ORDER BY c.created_at DESC LIMIT 1
+        )
+    WHERE p.commit_url IS NULL
+      AND p.commit_sha IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM commands c
+        WHERE c.job_name = p.job_name
+          AND c.payload LIKE '%"sourceSha256":"' || p.commit_sha || '"%'
+      )
+  `);
   const rows = await dbAll<Row>("SELECT * FROM prompts ORDER BY created_at DESC, id DESC LIMIT ?", [
     Math.min(Math.max(limit, 1), 100),
   ]);

@@ -98,7 +98,11 @@ export async function submitAutomationPrompt(input: PromptInput): Promise<Prompt
       actor: "manager:prompt",
       activate: true,
     });
-    const run = await requestAutomationRun(saved.automation.id, "manager:prompt", commandTarget);
+    const run = await requestAutomationRun(saved.automation.id, "manager:prompt", commandTarget, {
+      promptId,
+      source: "prompt",
+      title: mode === "arena" ? "ارسال پرامپت به Arena از طریق ویندوز" : `اجرای ${saved.automation.name}`,
+    });
     await updatePromptResult(promptId, { commitSha: saved.version.sourceSha256, commitUrl: null, status: "pending" });
     await insertEvent({
       kind: "automation_prompt",

@@ -289,6 +289,7 @@ export async function requestAutomationRun(
   identifier: unknown,
   actor: string,
   targetOverride?: { keyId: string; agentId: string; agentName?: string },
+  context?: { promptId?: number; source?: string; title?: string },
 ): Promise<{ commandId: string; automation: AutomationView; version: AutomationVersionView }> {
   const detail = await getAutomation(identifier, true);
   if (!detail.automation.enabled) throw new AppError("این اتوماسیون غیرفعال است.", { status: 409, code: "automation_disabled" });
@@ -299,8 +300,9 @@ export async function requestAutomationRun(
   const target = targetOverride ?? await findOnlineCommandAgent("d1_automations");
   const command = await createManagedCommand({
     type: "run_automation",
-    title: `اجرای اتوماسیون ${detail.automation.name}`,
-    source: "automation_catalog",
+    title: context?.title ?? `اجرای اتوماسیون ${detail.automation.name}`,
+    source: context?.source ?? "automation_catalog",
+    promptId: context?.promptId ?? null,
     jobName: automationJobName(detail.automation.slug),
     target,
     requiresConfirmation: true,
