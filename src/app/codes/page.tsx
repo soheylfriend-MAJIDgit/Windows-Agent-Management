@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useApi, apiRequest, postJson, ApiRequestError } from "@/hooks/useApi";
 import { useOverview } from "@/components/OverviewProvider";
 import { CodeViewer } from "@/components/CodeViewer";
+import { CommandMonitorModal } from "@/components/CommandMonitorModal";
 import { PageHeader, Banner, ErrorBanner, EmptyState, StatusChip, LoadingState, IssueList } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/ToastProvider";
@@ -23,6 +24,7 @@ interface RerunResponse {
   commitUrl: string;
   message: string;
   fileUrl: string | null;
+  commandId: string;
 }
 
 const FILTERS: Array<{ key: Filter; label: string; cls: string }> = [
@@ -56,6 +58,7 @@ export default function CodesPage() {
   const [busyRerun, setBusyRerun] = useState<string | null>(null);
   const [hardRefreshing, setHardRefreshing] = useState(false);
   const [rerunInfo, setRerunInfo] = useState<{ name: string; url: string } | null>(null);
+  const [activeCommandId, setActiveCommandId] = useState<string | null>(null);
 
   const tokenReady = overview.data?.connections.token.configured ?? true;
   const repos = data?.repos.collab;
@@ -151,7 +154,8 @@ export default function CodesPage() {
         return next;
       });
       setRerunInfo({ name: job.name, url: res.commitUrl });
-      notify.ok("کامیت اجرای دوباره ثبت شد.");
+      setActiveCommandId(res.commandId);
+      notify.ok("فرمان اجرای دوباره ثبت شد و پایش زنده آغاز شد.");
       await reload({ silent: true });
       await overview.refresh();
     } catch (err) {
@@ -535,6 +539,7 @@ export default function CodesPage() {
           })}
         </div>
       )}
+      {activeCommandId ? <CommandMonitorModal commandId={activeCommandId} onClose={() => setActiveCommandId(null)} /> : null}
     </>
   );
 }

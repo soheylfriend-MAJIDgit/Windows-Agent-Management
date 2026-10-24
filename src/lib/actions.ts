@@ -19,6 +19,7 @@ import { formatJalaliDateTime, jalaliStamp } from "./jalali";
 import { lintPython, validateJobName } from "./lint";
 import { insertEvent, insertPrompt, saveJobsSnapshot, setJobChanged, updatePromptResult } from "./store";
 import type { Issue, PromptMode, RepoConfig } from "./types";
+import { createManagedCommand, findOnlineCommandAgent } from "./commands";
 import {
   ARENA_JOB_NAME,
   buildArenaJobFile,
@@ -238,6 +239,7 @@ export interface PromptResult {
   message: string;
   commitLink: string;
   issues: Issue[];
+  commandId?: string;
   dryRun?: boolean;
   content?: string;
 }
@@ -392,6 +394,9 @@ export async function submitPrompt(input: PromptInput): Promise<PromptResult> {
     };
   }
 
+  // اگر ایجنت آنلاین نیست، پیش از هر نوشتن واقعی روی گیت‌هاب متوقف می‌شویم.
+  const commandTarget = await findOnlineCommandAgent();
+
   const promptId = await insertPrompt({
     jobName,
     mode,
@@ -427,9 +432,32 @@ export async function submitPrompt(input: PromptInput): Promise<PromptResult> {
       url: commitLink,
     });
     await setJobChanged(jobName);
+    const command = await createManagedCommand({
+      type: mode === "arena" ? "run_arena_prompt" : "sync_and_run_job",
+      title: mode === "arena" ? "ارسال پرامپت به Arena از طریق ویندوز" : `همگام‌سازی و اجرای ${jobName}`,
+      source: "prompt",
+      promptId,
+      jobName,
+      requiresConfirmation: true,
+      autoStopOnAnomaly: true,
+      timeoutSeconds: mode === "arena" ? 600 : 900,
+      noProgressSeconds: 120,
+      target: commandTarget,
+      payload: {
+        repository: `${config.owner}/${config.repo}`,
+        branch: config.branch,
+        jobName,
+        promptMode: mode,
+        commitSha: result.commitSha,
+        commitUrl: commitLink,
+        executionPolicy: "respect_windows_agent_mode",
+        failureFeedback: mode === "arena" ? { enabled: true, maximumDeliveryAttempts: 3, useDriveEvidence: true } : undefined,
+      },
+    });
     await refreshSnapshot(config);
     return {
       promptId,
+      commandId: command.id,
       jobName,
       mode,
       commitSha: result.commitSha,

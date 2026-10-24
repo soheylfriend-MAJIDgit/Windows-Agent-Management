@@ -16,6 +16,9 @@ const EXPECTED_TABLES = [
   ["agent_keys", "کلیدهای ایجنت"],
   ["managed_agents", "ایجنت‌های متصل"],
   ["agent_connection_tests", "تست‌های اتصال"],
+  ["commands", "فرمان‌های ویندوز"],
+  ["command_events", "رخدادهای فرمان"],
+  ["command_artifacts", "فراداده تصویرها"],
 ] as const;
 
 type CountRow = Record<(typeof EXPECTED_TABLES)[number][0], number>;
@@ -48,7 +51,10 @@ export async function GET() {
         (SELECT COUNT(*) FROM drive_files) AS drive_files,
         (SELECT COUNT(*) FROM agent_keys) AS agent_keys,
         (SELECT COUNT(*) FROM managed_agents) AS managed_agents,
-        (SELECT COUNT(*) FROM agent_connection_tests) AS agent_connection_tests
+        (SELECT COUNT(*) FROM agent_connection_tests) AS agent_connection_tests,
+        (SELECT COUNT(*) FROM commands) AS commands,
+        (SELECT COUNT(*) FROM command_events) AS command_events,
+        (SELECT COUNT(*) FROM command_artifacts) AS command_artifacts
     `);
     // D1 تعداد termهای compound SELECT را محدود می‌کند؛ timestampها جداگانه خوانده
     // و چون ISO/UTC هستند به‌صورت واژه‌نامه‌ای مقایسه می‌شوند.
@@ -64,6 +70,9 @@ export async function GET() {
       "SELECT MAX(COALESCE(last_used_at, created_at)) AS value FROM agent_keys",
       "SELECT MAX(last_seen_at) AS value FROM managed_agents",
       "SELECT MAX(COALESCE(responded_at, delivered_at, created_at)) AS value FROM agent_connection_tests",
+      "SELECT MAX(COALESCE(completed_at, last_event_at, created_at)) AS value FROM commands",
+      "SELECT MAX(created_at) AS value FROM command_events",
+      "SELECT MAX(created_at) AS value FROM command_artifacts",
     ];
     const activityRows = await Promise.all(
       activityQueries.map((query) => dbFirst<{ value: string | null }>(query)),
@@ -87,7 +96,7 @@ export async function GET() {
       connected: true,
       binding: "DB",
       engine: "Cloudflare D1 / SQLite",
-      schemaVersion: 3,
+      schemaVersion: 4,
       schemaReady: tables.every((table) => table.ready),
       tables,
       tableCount: tables.filter((table) => table.ready).length,

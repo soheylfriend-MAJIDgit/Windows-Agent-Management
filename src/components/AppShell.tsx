@@ -9,6 +9,7 @@ import { ThemeToggle } from "./ThemeToggle";
 import { Icon, type IconName } from "./icons";
 import { Logo } from "./Logo";
 import { Banner } from "./ui";
+import { CommandCenterDock } from "./CommandCenterDock";
 import { faNumber, relativeFa } from "@/lib/jalali";
 import { postJson } from "@/hooks/useApi";
 
@@ -167,6 +168,7 @@ export function AppShell({
           </span>
         </footer>
       </main>
+      <CommandCenterDock />
     </>
   );
 }

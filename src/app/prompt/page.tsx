@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useApi, postJson, ApiRequestError } from "@/hooks/useApi";
 import { useOverview } from "@/components/OverviewProvider";
+import { CommandMonitorModal } from "@/components/CommandMonitorModal";
 import { PageHeader, Banner, ErrorBanner, EmptyState, StatusChip, IssueList, FieldError } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { useToast } from "@/components/ToastProvider";
@@ -21,6 +22,7 @@ interface PromptResponse {
   message: string;
   commitLink: string;
   issues: Issue[];
+  commandId: string;
 }
 
 const RULES = [
@@ -69,6 +71,7 @@ export default function PromptPage() {
   const [submitError, setSubmitError] = useState<ApiRequestError | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<PromptResponse | null>(null);
+  const [activeCommandId, setActiveCommandId] = useState<string | null>(null);
 
   const jobs = useMemo(() => (jobsApi.data?.jobs ?? []).filter((job) => job.present), [jobsApi.data]);
 
@@ -145,7 +148,8 @@ export default function PromptPage() {
         telegramMode: mode === "arena" ? telegramMode : undefined,
       });
       setResult(res);
-      notify.ok("پرامپت در مخزن همکار ثبت شد.");
+      setActiveCommandId(res.commandId);
+      notify.ok("پرامپت ثبت شد و پایش زنده‌ی اجرای ویندوز آغاز شد.");
       setPrompt("");
       setCode("");
       setLint(null);
@@ -546,7 +550,17 @@ export default function PromptPage() {
                     ? { status: "error", label: "ناموفق" }
                     : item.status === "sending"
                       ? { status: "running", label: "در حال ارسال" }
-                      : { status: "neutral", label: item.status };
+                      : item.status === "running" || item.status === "claimed" || item.status === "waiting_confirmation"
+                        ? { status: "running", label: item.status === "waiting_confirmation" ? "در انتظار تأیید ویندوز" : "در حال اجرا" }
+                        : item.status === "succeeded"
+                          ? { status: "success", label: "موفق" }
+                          : item.status === "cancelled"
+                            ? { status: "error", label: "متوقف‌شده" }
+                            : item.status === "timed_out"
+                              ? { status: "error", label: "پایان زمان مجاز" }
+                              : item.status === "rejected"
+                                ? { status: "error", label: "ردشده در ویندوز" }
+                                : { status: "neutral", label: item.status };
               return (
                 <div key={item.id} className="history-row">
                   <span className="history-mark">
@@ -586,6 +600,7 @@ export default function PromptPage() {
           {toPersianDigits(history.length)}
         </p>
       </section>
+      {activeCommandId ? <CommandMonitorModal commandId={activeCommandId} onClose={() => setActiveCommandId(null)} /> : null}
     </>
   );
 }
