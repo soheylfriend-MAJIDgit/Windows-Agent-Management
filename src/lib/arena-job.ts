@@ -3,7 +3,8 @@ import { AppError } from "./errors";
 export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
-const BRIDGE_MARKER = "# management-arena-bridge: 3";
+const BRIDGE_MARKER = "# management-arena-bridge: 4";
+const BRIDGE_3_MARKER = "# management-arena-bridge: 3";
 const BRIDGE_2_MARKER = "# management-arena-bridge: 2";
 const LEGACY_BRIDGE_MARKER = "# management-arena-bridge: 1";
 const ANY_BRIDGE_MARKER = "# management-arena-bridge:";
@@ -75,7 +76,7 @@ def save_failure_artifacts(detail):
     base_dir = os.path.dirname(SCREENSHOT_DIR)
     errors_dir = os.path.join(base_dir, "logs", "errors")
     report_path = os.path.join(errors_dir, f"arena_failure_{safe_id}_{stamp}.txt")
-    screenshot_path = os.path.join(SCREENSHOT_DIR, f"arena_failure_{safe_id}_{stamp}.png")
+    screenshot_path = os.path.join(errors_dir, f"arena_failure_{safe_id}_{stamp}.png")
     saved = []
     try:
         os.makedirs(errors_dir, exist_ok=True)
@@ -83,7 +84,7 @@ def save_failure_artifacts(detail):
             fh.write(
                 "زمان: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " تهران\\n"
                 "موضوع: شکست job_arena.py و نیاز به بررسی ایجنت همکار\\n"
-                "نسخه برنامه: Arena Bridge 3\\n"
+                "نسخه برنامه: Arena Bridge 4\\n"
                 "شناسه درخواست: " + PROMPT_REQUEST_ID + "\\n"
                 "پرامپت: " + PROMPT_TEXT + "\\n\\n"
                 "جزئیات خطا:\\n" + str(detail)
@@ -177,38 +178,223 @@ if __name__ == "__main__":
 
 const LEGACY_PASTE_LOOP_START =
   "    # حلقه تایپ: کلیک روی کادر → Paste → تأیید با خواندن متن عنصر فوکوس‌شده\n";
-const LEGACY_PASTE_LOOP_END = "\n}\n\nif ($textConfirmed)";
+const V3_PASTE_LOOP_START =
+  "    # حلقه ورود متن: هر تلاش ابتدا کادر را پاک می‌کند و یک روش Paste متفاوت دارد.\n";
+const PASTE_LOOP_END = "\n}\n\nif ($textConfirmed)";
 
-const VERIFIED_PASTE_LOOP = `    # حلقه ورود متن: هر تلاش ابتدا کادر را پاک می‌کند و یک روش Paste متفاوت دارد.
-    # چون contenteditable کروم همیشه متن را از UI Automation برنمی‌گرداند، تأیید نهایی
-    # با Select All + Copy و مقایسه‌ی دقیق محتوای کپی‌شده انجام می‌شود.
+const SEND_INPUT_CSHARP_ANCHOR = `    [DllImport("user32.dll")]
+    public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+}`;
+
+const SEND_INPUT_CSHARP_REPLACEMENT = `    [DllImport("user32.dll")]
+    public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    private const uint INPUT_MOUSE = 0;
+    private const uint INPUT_KEYBOARD = 1;
+    private const uint KEYEVENTF_KEYUP = 0x0002;
+    private const uint KEYEVENTF_UNICODE = 0x0004;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MOUSEINPUT {
+        public int dx; public int dy; public uint mouseData; public uint dwFlags;
+        public uint time; public UIntPtr dwExtraInfo;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct KEYBDINPUT {
+        public ushort wVk; public ushort wScan; public uint dwFlags;
+        public uint time; public UIntPtr dwExtraInfo;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct HARDWAREINPUT {
+        public uint uMsg; public ushort wParamL; public ushort wParamH;
+    }
+    [StructLayout(LayoutKind.Explicit)]
+    public struct INPUTUNION {
+        [FieldOffset(0)] public MOUSEINPUT mi;
+        [FieldOffset(0)] public KEYBDINPUT ki;
+        [FieldOffset(0)] public HARDWAREINPUT hi;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct INPUT { public uint type; public INPUTUNION U; }
+
+    private static INPUT VirtualKey(ushort vk, uint flags) {
+        INPUT input = new INPUT();
+        input.type = INPUT_KEYBOARD;
+        input.U.ki.wVk = vk;
+        input.U.ki.dwFlags = flags;
+        return input;
+    }
+    private static INPUT UnicodeKey(char ch, uint flags) {
+        INPUT input = new INPUT();
+        input.type = INPUT_KEYBOARD;
+        input.U.ki.wScan = ch;
+        input.U.ki.dwFlags = KEYEVENTF_UNICODE | flags;
+        return input;
+    }
+    private static bool Emit(params INPUT[] inputs) {
+        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))) == inputs.Length;
+    }
+    public static bool PressKey(ushort key) {
+        return Emit(VirtualKey(key, 0), VirtualKey(key, KEYEVENTF_KEYUP));
+    }
+    public static bool SendChord(ushort modifier, ushort key) {
+        return Emit(
+            VirtualKey(modifier, 0), VirtualKey(key, 0),
+            VirtualKey(key, KEYEVENTF_KEYUP), VirtualKey(modifier, KEYEVENTF_KEYUP)
+        );
+    }
+    public static bool SendUnicodeText(string text) {
+        if (text == null) return false;
+        foreach (char ch in text) {
+            if (ch == '\\r') continue;
+            if (ch == '\\n') {
+                if (!SendChord(0x10, 0x0D)) return false; // Shift+Enter = newline, not submit
+            } else if (!Emit(UnicodeKey(ch, 0), UnicodeKey(ch, KEYEVENTF_KEYUP))) {
+                return false;
+            }
+        }
+        return true;
+    }
+}`;
+
+const POWERSHELL_DIAGNOSTICS = `
+function Save-StepShot([string]$stage) {
+    if (-not $env:ARENA_DIAGNOSTIC_DIR -or -not $env:ARENA_TRACE_ID) { return }
+    $bitmap = $null
+    $graphics = $null
+    try {
+        New-Item -ItemType Directory -Force -Path $env:ARENA_DIAGNOSTIC_DIR | Out-Null
+        $safeStage = ($stage -replace '[^a-zA-Z0-9_-]', '_')
+        $path = Join-Path $env:ARENA_DIAGNOSTIC_DIR ("arena_step_" + $env:ARENA_TRACE_ID + "_" + $safeStage + ".png")
+        $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+        $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bitmap.Size)
+        $bitmap.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+        Write-Output ("ARENA_STEP_SCREENSHOT=" + $path)
+    } catch {
+        Write-Output ("ARENA_STEP_SCREENSHOT_FAILED=" + $_.Exception.Message)
+    } finally {
+        if ($graphics) { $graphics.Dispose() }
+        if ($bitmap) { $bitmap.Dispose() }
+    }
+}
+
+function Try-SetPromptValue($startEl) {
+    $el = $startEl
+    for ($depth = 0; $depth -lt 7 -and $el; $depth++) {
+        try {
+            $vp = $null
+            if ($el.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$vp)) {
+                if (-not $vp.Current.IsReadOnly) {
+                    $vp.SetValue($env:ARENA_PROMPT)
+                    return $true
+                }
+            }
+        } catch {}
+        try { $el = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($el) } catch { $el = $null }
+    }
+    return $false
+}
+`;
+
+const VERIFIED_SUBMIT_BLOCK = `$sent = $false
+
+if ($textConfirmed) {
+    # ارسال فقط با SendInput انجام می‌شود؛ در حالت تأییدنشده هیچ Enter خطرناکی زده نمی‌شود.
+    $enterOk = [WinApi]::PressKey(0x0D)
+    Write-Output ("ARENA_SUBMIT_SENDINPUT=" + $enterOk)
+    Start-Sleep -Milliseconds 1800
+
+    # تأیید اول: پرامپت به‌صورت یک پیام بالاتر از کادر گفتگو در صفحه ظاهر شده باشد.
+    $messageVisible = $false
+    try {
+        $probeLength = [Math]::Min(80, $env:ARENA_PROMPT.Length)
+        $promptProbe = $env:ARENA_PROMPT.Substring(0, $probeLength)
+        $afterTexts = Get-Visible ($page.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCond))
+        foreach ($t in $afterTexts) {
+            $name = [string]$t.Current.Name
+            $rect = $t.Current.BoundingRectangle
+            if ($name -and $name.Contains($promptProbe) -and $rect.Bottom -lt ($clickPoint.Y - 20)) {
+                $messageVisible = $true
+                break
+            }
+        }
+    } catch {}
+
+    # تأیید دوم: placeholder برگشته و متن پرامپت دیگر داخل composer قابل Copy نباشد.
+    $placeholderReturned = $false
+    try {
+        $afterTexts = Get-Visible ($page.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCond))
+        foreach ($t in $afterTexts) {
+            $name = [string]$t.Current.Name
+            if ($name -and ($name -match 'What would you like')) { $placeholderReturned = $true; break }
+        }
+    } catch {}
+
+    $promptStillInComposer = $false
+    try {
+        $sentinel = "__ARENA_AFTER_SEND_$([Guid]::NewGuid().ToString('N'))__"
+        Set-Clipboard -Value $sentinel
+        [void][WinApi]::SendChord(0x11, 0x41)
+        Start-Sleep -Milliseconds 120
+        [void][WinApi]::SendChord(0x11, 0x43)
+        Start-Sleep -Milliseconds 350
+        $afterCopied = [string](Get-Clipboard -Raw)
+        $afterNormalized = $afterCopied.Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
+        $promptNormalized = ([string]$env:ARENA_PROMPT).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
+        $promptStillInComposer = ($afterNormalized -eq $promptNormalized)
+        [void][WinApi]::PressKey(0x23)
+    } catch {}
+
+    Write-Output ("ARENA_SUBMIT_MESSAGE_VISIBLE=" + [bool]$messageVisible)
+    Write-Output ("ARENA_SUBMIT_PLACEHOLDER_RETURNED=" + [bool]$placeholderReturned)
+    Write-Output ("ARENA_SUBMIT_PROMPT_STILL_IN_COMPOSER=" + [bool]$promptStillInComposer)
+    $sent = $enterOk -and ($messageVisible -or ($placeholderReturned -and -not $promptStillInComposer))
+} else {
+    Write-Output 'ARENA_SUBMIT_BLOCKED_UNVERIFIED'
+}
+
+`;
+
+const VERIFIED_PASTE_LOOP = `    # Bridge 4: ورود متن بدون وابستگی به یک روش خاص یا خواندن ناقص contenteditable کروم.
+    Save-StepShot '02-composer-ready'
     for ($try = 1; $try -le 3 -and -not $textConfirmed; $try++) {
         if ($composer) { try { $composer.SetFocus() } catch {} }
-        Start-Sleep -Milliseconds 300
+        Start-Sleep -Milliseconds 250
         Left-Click $clickPoint.X $clickPoint.Y
-        Start-Sleep -Milliseconds 500
+        Start-Sleep -Milliseconds 400
+        Save-StepShot ("03-try" + $try + "-focused")
 
-        # متن باقی‌مانده از تلاش قبلی نباید باعث Paste تکراری شود.
-        try {
-            [System.Windows.Forms.SendKeys]::SendWait('^a')
-            Start-Sleep -Milliseconds 100
-            [System.Windows.Forms.SendKeys]::SendWait('{BACKSPACE}')
-        } catch {}
+        # پاک‌سازی مطمئن متن باقی‌مانده از تلاش قبلی با SendInput.
+        [void][WinApi]::SendChord(0x11, 0x41)  # Ctrl+A
+        Start-Sleep -Milliseconds 100
+        [void][WinApi]::PressKey(0x08)         # Backspace
+        Start-Sleep -Milliseconds 200
 
-        Set-Clipboard -Value $env:ARENA_PROMPT
-        Start-Sleep -Milliseconds 300
         if ($try -eq 1) {
-            Hardware-Paste
-            Write-Output 'ARENA_PASTE_HARDWARE'
+            # KEYEVENTF_UNICODE مستقیماً کاراکترهای فارسی را به عنصر فوکوس‌شده می‌فرستد.
+            $inputOk = [WinApi]::SendUnicodeText($env:ARENA_PROMPT)
+            Write-Output ("ARENA_INPUT_UNICODE=" + $inputOk)
         } elseif ($try -eq 2) {
-            [System.Windows.Forms.SendKeys]::SendWait('^v')
-            Write-Output 'ARENA_PASTE_SENDKEYS'
+            # در صورت پشتیبانی contenteditable از ValuePattern، مقدار مستقیماً تنظیم می‌شود.
+            $focusedForValue = [System.Windows.Automation.AutomationElement]::FocusedElement
+            $inputOk = Try-SetPromptValue $focusedForValue
+            if (-not $inputOk -and $composer) { $inputOk = Try-SetPromptValue $composer }
+            Write-Output ("ARENA_INPUT_VALUEPATTERN=" + $inputOk)
         } else {
-            [System.Windows.Forms.SendKeys]::SendWait('+{INSERT}')
-            Write-Output 'ARENA_PASTE_SHIFT_INSERT'
+            # آخرین مسیر: Clipboard + Ctrl+V، این بار هر دو با SendInput واقعی.
+            Set-Clipboard -Value $env:ARENA_PROMPT
+            Start-Sleep -Milliseconds 250
+            $inputOk = [WinApi]::SendChord(0x11, 0x56)
+            Write-Output ("ARENA_INPUT_SENDINPUT_PASTE=" + $inputOk)
         }
-        Start-Sleep -Milliseconds 1000
+        Start-Sleep -Milliseconds 1200
+        Save-StepShot ("03-try" + $try + "-after-input")
 
+        # تأیید اول: UI Automation (برای Edit/Documentهایی که متن را برمی‌گردانند).
         $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
         $focusedText = Get-ElText $focused
         $composerText = Get-ElText $composer
@@ -218,53 +404,148 @@ const VERIFIED_PASTE_LOOP = `    # حلقه ورود متن: هر تلاش اب�
         $okFocused = ($focusedText -and $focusedNormalized.Contains($promptNormalized))
         $okComposer = ($composerText -and $composerNormalized.Contains($promptNormalized))
 
-        # مقدار قبلی Clipboard خود پرامپت است؛ قبل از Copy یک sentinel می‌گذاریم
-        # تا موفقیت Copy واقعاً ثابت کند متن داخل کادر قرار گرفته است.
+        # تأیید دوم: Select All + Copy با SendInput و sentinel مستقل.
         $okCopied = $false
         try {
             $sentinel = "__ARENA_VERIFY_$([Guid]::NewGuid().ToString('N'))__"
             Set-Clipboard -Value $sentinel
-            [System.Windows.Forms.SendKeys]::SendWait('^a')
+            [void][WinApi]::SendChord(0x11, 0x41)
             Start-Sleep -Milliseconds 150
-            [System.Windows.Forms.SendKeys]::SendWait('^c')
-            Start-Sleep -Milliseconds 350
+            [void][WinApi]::SendChord(0x11, 0x43)
+            Start-Sleep -Milliseconds 400
             $copiedText = [string](Get-Clipboard -Raw)
             $copiedNormalized = $copiedText.Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
             $okCopied = ($copiedNormalized -eq $promptNormalized)
-            [System.Windows.Forms.SendKeys]::SendWait('{END}')
-        } catch {}
+            [void][WinApi]::PressKey(0x23) # End؛ برداشتن selection بدون تغییر متن
+        } catch {
+            Write-Output ("ARENA_COPY_VERIFY_ERROR=" + $_.Exception.Message)
+        }
 
         if ($okFocused -or $okComposer -or $okCopied) {
             $textConfirmed = $true
-            if ($okCopied) { Write-Output ("ARENA_SELECTION_COPY_VERIFIED_TRY" + $try) }
+            Write-Output ("ARENA_VERIFY_UIA_FOCUSED=" + [bool]$okFocused)
+            Write-Output ("ARENA_VERIFY_UIA_COMPOSER=" + [bool]$okComposer)
+            Write-Output ("ARENA_VERIFY_SELECTION_COPY=" + [bool]$okCopied)
             Write-Output ("ARENA_PASTE_VERIFIED_TRY" + $try)
+            Save-StepShot ("03-try" + $try + "-verified")
         } else {
             Write-Output ("ARENA_PASTE_UNVERIFIED_TRY" + $try)
+            Save-StepShot ("03-try" + $try + "-unverified")
         }
-    }`;
+    }
+    Save-StepShot '04-before-submit'`;
 
-/**
- * تایپ Bridgeهای قبلی در contenteditable کروم فقط به UI Automation تکیه داشت.
- * Chrome گاهی متن واقعی این عنصر را برنمی‌گرداند؛ حلقه را با Paste چندمسیره و
- * تأیید مستقل Select All + Copy جایگزین می‌کنیم.
- */
+/** Bridge 1/2/3 و فایل پایه را به موتور ورود متن و تصویربرداری Bridge 4 ارتقا می‌دهد. */
 function hardenArenaTyping(source: string): string {
-  if (source.includes("ARENA_SELECTION_COPY_VERIFIED_TRY")) return source;
+  if (!source.includes("public static bool SendUnicodeText(string text)")) {
+    if (!source.includes(SEND_INPUT_CSHARP_ANCHOR)) {
+      throw new AppError("کلاس WinApi فایل Arena برای ارتقای SendInput پیدا نشد.", {
+        status: 409,
+        code: "arena_sendinput_upgrade_failed",
+      });
+    }
+    source = source.replace(SEND_INPUT_CSHARP_ANCHOR, SEND_INPUT_CSHARP_REPLACEMENT);
+  }
 
-  const start = source.indexOf(LEGACY_PASTE_LOOP_START);
-  const end = source.indexOf(LEGACY_PASTE_LOOP_END, start);
-  if (start < 0 || end < 0) {
-    throw new AppError("بخش تایپ job_arena.py برای ارتقای خودکار پیدا نشد.", {
+  if (!source.includes("function Save-StepShot")) {
+    const diagnosticsAnchor = "\nfunction Get-ElText($el) {";
+    if (!source.includes(diagnosticsAnchor)) {
+      throw new AppError("محل افزودن تصویربرداری مرحله‌ای Arena پیدا نشد.", {
+        status: 409,
+        code: "arena_diagnostics_upgrade_failed",
+      });
+    }
+    source = source.replace(diagnosticsAnchor, `${POWERSHELL_DIAGNOSTICS}\nfunction Get-ElText($el) {`);
+  }
+
+  if (!source.includes("Bridge 4: ورود متن")) {
+    const starts = [LEGACY_PASTE_LOOP_START, V3_PASTE_LOOP_START];
+    const start = starts.map((anchor) => source.indexOf(anchor)).find((index) => index >= 0) ?? -1;
+    const end = source.indexOf(PASTE_LOOP_END, start);
+    if (start < 0 || end < 0) {
+      throw new AppError("بخش ورود متن job_arena.py برای ارتقای Bridge 4 پیدا نشد.", {
+        status: 409,
+        code: "arena_typing_upgrade_failed",
+        hint: "حلقه‌ی ورود متن job_arena.py را با نسخه‌ی شناخته‌شده مقایسه کنید.",
+      });
+    }
+    source = `${source.slice(0, start)}${VERIFIED_PASTE_LOOP}${source.slice(end)}`;
+  }
+
+  if (!source.includes("Save-StepShot '01-browser-foreground'")) {
+    source = source.replace(
+      "    Write-Output 'ARENA_BROWSER_FG'\n",
+      "    Write-Output 'ARENA_BROWSER_FG'\n    Save-StepShot '01-browser-foreground'\n",
+    );
+  }
+  if (!source.includes("ARENA_SUBMIT_BLOCKED_UNVERIFIED")) {
+    const submitStartAnchor = "$sent = $false\n\nif ($textConfirmed) {";
+    const submitEndAnchor = "\nif ($sent) { Write-Output 'ARENA_SENT_VERIFIED' }";
+    const submitStart = source.indexOf(submitStartAnchor);
+    const submitEnd = source.indexOf(submitEndAnchor, submitStart);
+    if (submitStart < 0 || submitEnd < 0) {
+      throw new AppError("بخش ارسال و تأیید نهایی Arena برای ارتقای Bridge 4 پیدا نشد.", {
+        status: 409,
+        code: "arena_submit_upgrade_failed",
+      });
+    }
+    source = `${source.slice(0, submitStart)}${VERIFIED_SUBMIT_BLOCK}${source.slice(submitEnd + 1)}`;
+  }
+  if (!source.includes("Save-StepShot '05-after-submit'")) {
+    source = source.replace(
+      "if ($sent) { Write-Output 'ARENA_SENT_VERIFIED' } else { Write-Output 'ARENA_SEND_UNCERTAIN' }",
+      "Save-StepShot '05-after-submit'\nif ($sent) { Write-Output 'ARENA_SENT_VERIFIED' } else { Write-Output 'ARENA_SEND_UNCERTAIN' }",
+    );
+  }
+
+  const oldRunner = `def type_and_submit():
+    output = run_hidden_powershell(
+        TYPE_PS_SCRIPT,
+        extra_env={"ARENA_PROMPT": PROMPT_TEXT, "ARENA_URL": URL},
+        timeout=120,
+    )
+    markers = [line.strip() for line in output.splitlines() if line.strip()]
+`;
+  const diagnosticRunner = `def type_and_submit():
+    safe_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in PROMPT_REQUEST_ID)
+    diagnostic_dir = os.path.join(os.path.dirname(SCREENSHOT_DIR), "logs", "errors")
+    os.makedirs(diagnostic_dir, exist_ok=True)
+    trace_id = safe_id + "_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    output = run_hidden_powershell(
+        TYPE_PS_SCRIPT,
+        extra_env={
+            "ARENA_PROMPT": PROMPT_TEXT,
+            "ARENA_URL": URL,
+            "ARENA_DIAGNOSTIC_DIR": diagnostic_dir,
+            "ARENA_TRACE_ID": trace_id,
+        },
+        timeout=180,
+    )
+    markers = [line.strip() for line in output.splitlines() if line.strip()]
+    if markers:
+        print("گزارش فنی Arena: " + " | ".join(markers))
+`;
+  if (source.includes(oldRunner)) source = source.replace(oldRunner, diagnosticRunner);
+  if (!source.includes("ARENA_DIAGNOSTIC_DIR")) {
+    throw new AppError("تابع اجرای PowerShell برای ثبت تصاویر مرحله‌ای قابل ارتقا نیست.", {
       status: 409,
-      code: "arena_typing_upgrade_failed",
-      hint: "نسخه‌ی job_arena.py با ساختار شناخته‌شده‌ی Arena سازگار نیست؛ حلقه‌ی Paste را بررسی کنید.",
+      code: "arena_runner_upgrade_failed",
     });
   }
 
-  return `${source.slice(0, start)}${VERIFIED_PASTE_LOOP}${source.slice(end)}`;
+  // گزارش فنی باید حتی پیش از raise شدن خطای تأیید در لاگ مادر دیده شود.
+  source = source.replace(
+    `
+    if markers:
+        print("گزارش فنی: " + " | ".join(markers))
+`,
+    "\n",
+  );
+  return source;
 }
 
-/** ارتقای درجا از Bridge 1 یا 2؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+
+/** ارتقای درجا از Bridge 1، 2 یا 3؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
 function upgradeLegacyBridge(source: string, oldMarker: string): string {
   const bridgeStart = source.indexOf(oldMarker);
   const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
@@ -276,7 +557,7 @@ function upgradeLegacyBridge(source: string, oldMarker: string): string {
     });
   }
 
-  // کل بلوک Bridge قدیمی با Bridge 3 جایگزین می‌شود؛ بدنه‌ی اصلی کار حفظ می‌شود.
+  // کل بلوک Bridge قدیمی با Bridge 4 جایگزین می‌شود؛ بدنه‌ی اصلی کار حفظ می‌شود.
   let upgraded = source.slice(0, bridgeStart) + TELEGRAM_BRIDGE.trimEnd() + source.slice(openSiteStart);
   const wrapperStart = upgraded.lastIndexOf("\ndef main():\n");
   if (wrapperStart < 0 || !upgraded.includes("\ndef _run_arena_task():\n")) {
@@ -306,8 +587,16 @@ export function buildArenaJobFile(options: {
     source = replaceAssignment(source, "PROMPT_REQUEST_ID", options.requestId);
     return source.endsWith("\n") ? source : `${source}\n`;
   }
-  if (source.includes(BRIDGE_2_MARKER) || source.includes(LEGACY_BRIDGE_MARKER)) {
-    const oldMarker = source.includes(BRIDGE_2_MARKER) ? BRIDGE_2_MARKER : LEGACY_BRIDGE_MARKER;
+  if (
+    source.includes(BRIDGE_3_MARKER) ||
+    source.includes(BRIDGE_2_MARKER) ||
+    source.includes(LEGACY_BRIDGE_MARKER)
+  ) {
+    const oldMarker = source.includes(BRIDGE_3_MARKER)
+      ? BRIDGE_3_MARKER
+      : source.includes(BRIDGE_2_MARKER)
+        ? BRIDGE_2_MARKER
+        : LEGACY_BRIDGE_MARKER;
     source = upgradeLegacyBridge(source, oldMarker);
     source = hardenArenaTyping(source);
     source = replaceAssignment(source, "TELEGRAM_REPORT_MODE", options.telegramMode);
@@ -318,7 +607,7 @@ export function buildArenaJobFile(options: {
     throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1، 2 و 3 به‌صورت خودکار پشتیبانی می‌شوند.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 4 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 
