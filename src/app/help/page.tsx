@@ -82,7 +82,7 @@ export default function HelpPage() {
           باید پیام دقیق <strong>«سلام ایجنت مدیریت.»</strong> را از ویندوز به سایت برگرداند.
         </p>
         <div className="callout" style={{ marginTop: 10 }}>
-          مشخصات کامل endpointها، DPAPI، thread و payloadها در <span className="mono">docs/manager-client-contract.md</span>
+          مشخصات کامل endpointها، DPAPI، thread و payloadها در <span className="mono">docs/manager-client-contract.md</span>{" "}
           ثبت شده است. نصب قلاب داخل app.py فقط توسط ایجنت مادر و با تأیید مستقیم کاربر انجام می‌شود.
         </div>
       </section>
