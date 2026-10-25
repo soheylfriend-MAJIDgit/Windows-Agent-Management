@@ -33,6 +33,13 @@ function defaults(service: ServiceDefinition): InputState {
   return Object.fromEntries(service.fields.map((field) => [field.name, field.defaultValue ?? (field.type === "checkbox" ? false : "")]));
 }
 
+function promptBlockCount(value: InputState[string]): number {
+  return String(value ?? "")
+    .split(/\r?\n[\t ]*---[\t ]*(?=\r?\n|$)/)
+    .map((item) => item.trim())
+    .filter(Boolean).length;
+}
+
 export default function ServicesPage() {
   const servicesApi = useApi<{ services: ServiceDefinition[] }>("/api/services");
   const notify = useToast();
@@ -43,6 +50,7 @@ export default function ServicesPage() {
   const [activeCommandId, setActiveCommandId] = useState<string | null>(null);
 
   const services = useMemo(() => servicesApi.data?.services ?? [], [servicesApi.data]);
+  const promptCount = useMemo(() => promptBlockCount(input.prompts), [input.prompts]);
 
   useEffect(() => {
     if (!selected) return;
@@ -160,7 +168,7 @@ export default function ServicesPage() {
                             className="textarea service-prompts"
                             value={String(input[field.name] ?? "")}
                             required={field.required}
-                            placeholder="پرامپت اول&#10;پرامپت دوم"
+                            placeholder={field.name === "prompts" ? "پرامپت اول (می‌تواند چندخطی باشد)\n---\nپرامپت دوم" : undefined}
                             onChange={(event) => setInput((current) => ({ ...current, [field.name]: event.target.value }))}
                           />
                         ) : (
@@ -181,6 +189,11 @@ export default function ServicesPage() {
                           />
                         )}
                         {field.helper ? <span className="field-helper">{field.helper}</span> : null}
+                        {field.name === "prompts" ? (
+                          <span className="field-helper" aria-live="polite">
+                            {promptCount.toLocaleString("fa-IR")} پرامپت × {Number(input.rounds || 0).toLocaleString("fa-IR")} دور = {(promptCount * Number(input.rounds || 0)).toLocaleString("fa-IR")} اجرا
+                          </span>
+                        ) : null}
                       </>
                     )}
                   </div>

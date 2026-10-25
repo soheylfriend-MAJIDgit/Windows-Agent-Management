@@ -45,10 +45,16 @@ export const SERVICE_CATALOG: ServiceDefinition[] = [
     title: "اجرای ترتیبی پرامپت‌ها",
     summary: "یک فهرست پرامپت را به‌ترتیب روی صفحه Arena اجرا و تا پایان هر پاسخ صبر می‌کند.",
     category: "Arena و مدل",
-    caution: "هر پرامپت فقط پس از مشاهده پنجره پایان مدل به مورد بعدی می‌رود. سقف مجموع اجراها در نسخه اولیه ۲۰ است.",
+    caution: "صفحه Arena یک‌بار باز می‌شود؛ پس از پایان هر پاسخ، گزینه Yes تأیید و پرامپت بعدی در همان گفت‌وگو ارسال می‌شود. سقف مجموع اجراها ۲۰ است.",
     fields: [
       { name: "url", label: "لینک صفحه مدل", type: "url", required: true, defaultValue: "https://arena.ai/", helper: "فقط لینک HTTPS" },
-      { name: "prompts", label: "فهرست پرامپت‌ها", type: "textarea", required: true, helper: "هر پرامپت در یک خط؛ حداکثر ۲۰ مورد" },
+      {
+        name: "prompts",
+        label: "فهرست پرامپت‌ها",
+        type: "textarea",
+        required: true,
+        helper: "هر پرامپت می‌تواند چندخطی باشد؛ پرامپت‌ها را با یک خط شامل --- جدا کنید. حداکثر ۲۰ مورد.",
+      },
       { name: "rounds", label: "تعداد دور", type: "number", required: true, min: 1, max: 20, defaultValue: 1 },
       { name: "delaySeconds", label: "فاصله بین دو پرامپت (ثانیه)", type: "number", required: true, min: 3, max: 300, defaultValue: 10 },
       { name: "stopOnError", label: "در اولین خطا متوقف شود", type: "checkbox", defaultValue: true },
@@ -129,6 +135,19 @@ function replacePythonAssignment(source: string, name: string, value: string): s
   return source.replace(pattern, `${name} = ${pythonString(value)}`);
 }
 
+function replacePythonExpression(source: string, name: string, expression: string): string {
+  const pattern = new RegExp(`^${name}\\s*=.*$`, "m");
+  if (!pattern.test(source)) throw new AppError(`متغیر ${name} در اتوماسیون پیدا نشد.`, { status: 409, code: "service_source_incompatible" });
+  return source.replace(pattern, `${name} = ${expression}`);
+}
+
+function parsePromptBlocks(value: string): string[] {
+  return value
+    .split(/\r?\n[\t ]*---[\t ]*(?=\r?\n|$)/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 export function closeFoldersSource(): string {
   return `# generated-management-service: close-folders\nimport subprocess\n\nSCRIPT = r'''\n$closed = 0\n$shell = New-Object -ComObject Shell.Application\n$windows = @($shell.Windows())\nforeach ($window in $windows) {\n    try {\n        $path = [string]$window.FullName\n        if ([System.IO.Path]::GetFileName($path) -ieq 'explorer.exe' -and $window.Document.Folder) {\n            $window.Quit()\n            $closed++\n        }\n    } catch {}\n}\nWrite-Output (\"SERVICE_FOLDERS_CLOSED=\" + $closed)\n'''\n\nresult = subprocess.run(\n    [\"powershell.exe\", \"-NoProfile\", \"-NonInteractive\", \"-ExecutionPolicy\", \"Bypass\", \"-Command\", SCRIPT],\n    capture_output=True, text=True, encoding=\"utf-8\", errors=\"replace\", timeout=60,\n    creationflags=getattr(subprocess, \"CREATE_NO_WINDOW\", 0),\n)\nprint(result.stdout.strip())\nif result.returncode != 0:\n    raise SystemExit(result.returncode)\nprint(\"SERVICE_COMPLETED: پنجره‌های پوشه بسته شدند\")\n`;
 }
@@ -140,9 +159,12 @@ export function directorMonitorSource(url: string, durationMinutes: number, inte
 async function arenaBatchSource(input: Record<string, unknown>): Promise<{ source: string; total: number; delay: number }> {
   const url = httpsUrl(input.url);
   if (typeof input.prompts !== "string") throw new AppError("فهرست پرامپت‌ها خالی است.", { status: 422, code: "service_prompts_empty" });
-  const prompts = input.prompts.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+  const prompts = parsePromptBlocks(input.prompts);
   if (!prompts.length || prompts.length > 20 || prompts.some((item) => item.length < 2 || item.length > 4000)) {
-    throw new AppError("بین ۱ تا ۲۰ پرامپت، هرکدام حداکثر ۴۰۰۰ نویسه وارد کنید.", { status: 422, code: "service_prompts_invalid" });
+    throw new AppError("بین ۱ تا ۲۰ بلوک پرامپت وارد کنید؛ هر بلوک حداکثر ۴۰۰۰ نویسه و جداکننده یک خط شامل --- باشد.", {
+      status: 422,
+      code: "service_prompts_invalid",
+    });
   }
   const rounds = numberField(input, "rounds", 1, 20);
   const delay = numberField(input, "delaySeconds", 3, 300);
@@ -158,8 +180,29 @@ async function arenaBatchSource(input: Record<string, unknown>): Promise<{ sourc
     requestId: `service-batch-${Date.now()}`,
   });
   source = replacePythonAssignment(source, "URL", url);
+  source = replacePythonExpression(
+    source,
+    "OCR_PYTHON",
+    'os.environ.get("WINDOWS_AGENT_OCR_PYTHON", "") or os.path.join(os.environ.get("LOCALAPPDATA", ""), "Windows-Agent", "vision", ".venv", "Scripts", "python.exe")',
+  );
+  source = replacePythonExpression(
+    source,
+    "OCR_HELPER",
+    'os.environ.get("WINDOWS_AGENT_OCR_HELPER", "") or os.path.join(os.environ.get("LOCALAPPDATA", ""), "Windows-Agent", "vision", "paddle_ocr_helper.py")',
+  );
+
+  const openEveryTime = `    # ۱) پیش از بازکردن صفحه، اتصال پایش می‌شود.\n    wait_for_network()\n    open_site()\n`;
+  const openOnce = `    # ۱) سرویس ترتیبی همان گفت‌وگوی Arena را برای همه پرامپت‌ها نگه می‌دارد.\n    global SERVICE_ARENA_SESSION_OPENED\n    wait_for_network()\n    if not SERVICE_ARENA_SESSION_OPENED:\n        open_site()\n        SERVICE_ARENA_SESSION_OPENED = True\n    else:\n        print(\"SERVICE_ARENA_SESSION_REUSED: ادامه در همان گفت‌وگوی Arena\")\n`;
+  if (!source.includes(openEveryTime)) {
+    throw new AppError("بخش بازکردن صفحه Arena برای اجرای ترتیبی سازگار نیست.", {
+      status: 409,
+      code: "service_arena_session_upgrade_failed",
+    });
+  }
+  source = source.replace(openEveryTime, openOnce);
+
   const originalEntry = `if __name__ == "__main__":\n    main()\n`;
-  const batchEntry = `PROMPT_BATCH = ${JSON.stringify(prompts)}\nBATCH_ROUNDS = ${rounds}\nBATCH_DELAY_SECONDS = ${delay}\nBATCH_STOP_ON_ERROR = ${boolField(input, "stopOnError", true) ? "True" : "False"}\nBATCH_NETWORK_ACCEPTANCE = ${boolField(input, "networkAcceptance", false) ? "True" : "False"}\n\ndef batch_main():\n    global PROMPT_TEXT, PROMPT_REQUEST_ID\n    completed = 0\n    if BATCH_NETWORK_ACCEPTANCE:\n        print(\"SERVICE_ACCEPTANCE_DISCONNECT_NOW: اینترنت را اکنون قطع کنید؛ شروع تعامل Arena سی ثانیه دیگر است\")\n        time.sleep(30)\n    for round_index in range(BATCH_ROUNDS):\n        for prompt_index, prompt_text in enumerate(PROMPT_BATCH):\n            PROMPT_TEXT = prompt_text\n            PROMPT_REQUEST_ID = f\"service-batch-r{round_index + 1}-p{prompt_index + 1}\"\n            print(f\"SERVICE_BATCH_ITEM_STARTED: {completed + 1}/{len(PROMPT_BATCH) * BATCH_ROUNDS}\")\n            try:\n                main()\n            except Exception as exc:\n                print(f\"SERVICE_BATCH_ITEM_FAILED: {exc}\")\n                if BATCH_STOP_ON_ERROR:\n                    raise\n            else:\n                completed += 1\n                print(f\"SERVICE_BATCH_ITEM_COMPLETED: {completed}\")\n            if completed < len(PROMPT_BATCH) * BATCH_ROUNDS:\n                time.sleep(BATCH_DELAY_SECONDS)\n    print(f\"SERVICE_COMPLETED: {completed} پرامپت کامل شد\")\n\nif __name__ == "__main__":\n    batch_main()\n`;
+  const batchEntry = `PROMPT_BATCH = ${JSON.stringify(prompts)}\nBATCH_ROUNDS = ${rounds}\nBATCH_DELAY_SECONDS = ${delay}\nBATCH_STOP_ON_ERROR = ${boolField(input, "stopOnError", true) ? "True" : "False"}\nBATCH_NETWORK_ACCEPTANCE = ${boolField(input, "networkAcceptance", false) ? "True" : "False"}\nSERVICE_ARENA_SESSION_OPENED = False\n\ndef service_confirm_result_yes():\n    for attempt in range(1, DIALOG_CHECK_ATTEMPTS + 1):\n        output = run_hidden_powershell(DIALOG_PS_SCRIPT, timeout=60)\n        if \"ARENA_DIALOG_CLICKED\" in output:\n            print(\"SERVICE_BATCH_RESULT_YES: نتیجه با گزینه Yes تأیید شد\")\n            time.sleep(DIALOG_CLICK_WAIT)\n            return\n        if \"ARENA_DIALOG_FOUND_BUT_NO_YES\" in output:\n            raise RuntimeError(\"پنجره پایان Arena دیده شد اما گزینه Yes قابل کلیک نبود\")\n        if attempt < DIALOG_CHECK_ATTEMPTS:\n            time.sleep(DIALOG_CHECK_GAP)\n    raise RuntimeError(\"پنجره پایان Arena برای تأیید Yes پیدا نشد\")\n\ndef batch_main():\n    global PROMPT_TEXT, PROMPT_REQUEST_ID\n    completed = 0\n    failures = 0\n    total = len(PROMPT_BATCH) * BATCH_ROUNDS\n    if not OCR_PYTHON or not OCR_HELPER or not os.path.isfile(OCR_PYTHON) or not os.path.isfile(OCR_HELPER):\n        raise RuntimeError(\"PaddleOCR محلی Windows Agent برای این سرویس آماده نیست\")\n    print(\"SERVICE_OCR_READY: مسیرهای PaddleOCR محلی تأیید شد\")\n    if BATCH_NETWORK_ACCEPTANCE:\n        print(\"SERVICE_ACCEPTANCE_DISCONNECT_NOW: اینترنت را اکنون قطع کنید؛ شروع تعامل Arena سی ثانیه دیگر است\")\n        time.sleep(30)\n    for round_index in range(BATCH_ROUNDS):\n        for prompt_index, prompt_text in enumerate(PROMPT_BATCH):\n            item_number = round_index * len(PROMPT_BATCH) + prompt_index + 1\n            PROMPT_TEXT = prompt_text\n            PROMPT_REQUEST_ID = f\"service-batch-r{round_index + 1}-p{prompt_index + 1}\"\n            print(f\"SERVICE_BATCH_ITEM_STARTED: {item_number}/{total}\")\n            try:\n                main()\n            except Exception as exc:\n                failures += 1\n                print(f\"SERVICE_BATCH_ITEM_FAILED: {item_number}/{total}: {exc}\")\n                if BATCH_STOP_ON_ERROR:\n                    raise\n            else:\n                wait_for_network()\n                service_confirm_result_yes()\n                completed += 1\n                print(f\"SERVICE_BATCH_RESULT_CONFIRMED: {item_number}/{total}\")\n                print(f\"SERVICE_BATCH_ITEM_COMPLETED: {completed}\")\n            if item_number < total:\n                time.sleep(BATCH_DELAY_SECONDS)\n    print(f\"SERVICE_BATCH_SUMMARY: موفق={completed} ناموفق={failures} مجموع={total}\")\n    if failures:\n        raise RuntimeError(f\"{failures} مورد از {total} پرامپت ناموفق بود\")\n    print(f\"SERVICE_COMPLETED: {completed} پرامپت کامل شد\")\n\nif __name__ == "__main__":\n    batch_main()\n`;
   const entryIndex = source.lastIndexOf(originalEntry);
   if (entryIndex < 0) throw new AppError("نقطه شروع Arena برای سرویس ترتیبی پیدا نشد.", { status: 409, code: "service_arena_entry_missing" });
   source = source.slice(0, entryIndex) + batchEntry + source.slice(entryIndex + originalEntry.length);
