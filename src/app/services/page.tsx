@@ -28,16 +28,25 @@ interface ServiceDefinition {
 }
 
 type InputState = Record<string, string | number | boolean>;
+type PromptInputMode = "cells" | "text";
 
 function defaults(service: ServiceDefinition): InputState {
   return Object.fromEntries(service.fields.map((field) => [field.name, field.defaultValue ?? (field.type === "checkbox" ? false : "")]));
 }
 
-function promptBlockCount(value: InputState[string]): number {
+function parsePromptBlocks(value: InputState[string]): string[] {
   return String(value ?? "")
     .split(/\r?\n[\t ]*---[\t ]*(?=\r?\n|$)/)
     .map((item) => item.trim())
-    .filter(Boolean).length;
+    .filter(Boolean);
+}
+
+function promptBlockCount(value: InputState[string]): number {
+  return parsePromptBlocks(value).length;
+}
+
+function serializePromptBlocks(blocks: string[]): string {
+  return blocks.join("\n---\n");
 }
 
 export default function ServicesPage() {
@@ -45,6 +54,8 @@ export default function ServicesPage() {
   const notify = useToast();
   const [selected, setSelected] = useState<ServiceDefinition | null>(null);
   const [input, setInput] = useState<InputState>({});
+  const [promptInputMode, setPromptInputMode] = useState<PromptInputMode>("cells");
+  const [promptCells, setPromptCells] = useState<string[]>([""]);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<ApiRequestError | null>(null);
   const [activeCommandId, setActiveCommandId] = useState<string | null>(null);
@@ -64,7 +75,37 @@ export default function ServicesPage() {
   function openService(service: ServiceDefinition) {
     setSelected(service);
     setInput(defaults(service));
+    setPromptInputMode("cells");
+    setPromptCells([""]);
     setSubmitError(null);
+  }
+
+  function changePromptMode(mode: PromptInputMode) {
+    if (mode === "cells") {
+      const parsed = parsePromptBlocks(input.prompts);
+      setPromptCells(parsed.length ? parsed : [""]);
+    }
+    setPromptInputMode(mode);
+  }
+
+  function updatePromptCell(index: number, value: string) {
+    const next = [...promptCells];
+    next[index] = value;
+    setPromptCells(next);
+    setInput((fields) => ({ ...fields, prompts: serializePromptBlocks(next) }));
+  }
+
+  function addPromptCell() {
+    if (promptCells.length >= 20) return;
+    const next = [...promptCells, ""];
+    setPromptCells(next);
+    setInput((fields) => ({ ...fields, prompts: serializePromptBlocks(next) }));
+  }
+
+  function removePromptCell(index: number) {
+    const next = promptCells.length === 1 ? [""] : promptCells.filter((_, itemIndex) => itemIndex !== index);
+    setPromptCells(next);
+    setInput((fields) => ({ ...fields, prompts: serializePromptBlocks(next) }));
   }
 
   async function runService(event: React.FormEvent) {
@@ -170,8 +211,64 @@ export default function ServicesPage() {
                       </div>
                     ) : (
                       <>
-                        <label className="field-label" htmlFor={`service-${field.name}`}>{field.label}</label>
-                        {field.type === "textarea" ? (
+                        <div className="service-field-heading">
+                          <label className="field-label" htmlFor={`service-${field.name}`}>{field.label}</label>
+                          {field.name === "prompts" ? (
+                            <div className="prompt-mode-toggle" role="group" aria-label="نحوه نمایش فهرست پرامپت‌ها">
+                              <button
+                                type="button"
+                                className={promptInputMode === "cells" ? "active" : ""}
+                                aria-pressed={promptInputMode === "cells"}
+                                onClick={() => changePromptMode("cells")}
+                              >
+                                سلولی
+                              </button>
+                              <button
+                                type="button"
+                                className={promptInputMode === "text" ? "active" : ""}
+                                aria-pressed={promptInputMode === "text"}
+                                onClick={() => changePromptMode("text")}
+                              >
+                                متنی
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                        {field.type === "textarea" && field.name === "prompts" && promptInputMode === "cells" ? (
+                          <div className="prompt-cell-list" id={`service-${field.name}`}>
+                            {promptCells.map((prompt, index) => (
+                              <article className="prompt-cell" key={index}>
+                                <div className="prompt-cell-head">
+                                  <strong>پرامپت {index + 1}</strong>
+                                  <button
+                                    type="button"
+                                    className="prompt-cell-remove"
+                                    onClick={() => removePromptCell(index)}
+                                    aria-label={`حذف پرامپت ${index + 1}`}
+                                    disabled={promptCells.length === 1 && !prompt}
+                                  >
+                                    حذف
+                                  </button>
+                                </div>
+                                <textarea
+                                  className="textarea service-prompt-cell-input"
+                                  value={prompt}
+                                  required={field.required}
+                                  placeholder={`متن پرامپت ${index + 1}`}
+                                  onChange={(event) => updatePromptCell(index, event.target.value)}
+                                />
+                              </article>
+                            ))}
+                            <button
+                              type="button"
+                              className="button secondary prompt-cell-add"
+                              onClick={addPromptCell}
+                              disabled={promptCells.length >= 20}
+                            >
+                              + افزودن پرامپت
+                            </button>
+                          </div>
+                        ) : field.type === "textarea" ? (
                           <textarea
                             id={`service-${field.name}`}
                             className="textarea service-prompts"

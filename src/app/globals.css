@@ -3521,9 +3521,101 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
   margin-top: 14px;
 }
 
+.service-field-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+
+.service-field-heading .field-label {
+  margin-bottom: 0;
+}
+
+.prompt-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.prompt-mode-toggle button {
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 10px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.prompt-mode-toggle button.active {
+  background: var(--surface);
+  color: var(--accent-strong);
+  box-shadow: var(--shadow-sm);
+  font-weight: 750;
+}
+
 .service-prompts {
   min-height: 150px;
   resize: vertical;
+}
+
+.prompt-cell-list {
+  display: grid;
+  gap: 10px;
+}
+
+.prompt-cell {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.prompt-cell:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.prompt-cell-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+  font-size: 11px;
+}
+
+.prompt-cell-remove {
+  border: 0;
+  background: transparent;
+  color: var(--danger);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.prompt-cell-remove:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.service-prompt-cell-input {
+  min-height: 92px;
+  resize: vertical;
+  background: var(--surface);
+}
+
+.prompt-cell-add {
+  width: 100%;
+  justify-content: center;
 }
 
 .service-checkbox {
@@ -3549,6 +3641,9 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
 @media (max-width: 600px) {
   .service-grid { grid-template-columns: 1fr; }
   .service-modal-body { padding: 15px 16px; }
+  .service-field-heading { align-items: flex-start; flex-direction: column; }
+  .prompt-mode-toggle { width: 100%; }
+  .prompt-mode-toggle button { flex: 1; }
 }
 
 /* --------------------------------------------------------------- تکمیلی --- */

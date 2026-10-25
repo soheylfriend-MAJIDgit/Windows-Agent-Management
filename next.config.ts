@@ -33,7 +33,7 @@ const buildBranch = process.env.BUILD_BRANCH
   || process.env.GITHUB_HEAD_REF
   || process.env.GITHUB_REF_NAME
   || gitBranch()
-  || "نامشخص";
+  || "arena/0133f1f3-windows-agent-management";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
