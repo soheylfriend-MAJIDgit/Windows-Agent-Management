@@ -36,7 +36,7 @@ interface PromptResponse {
 
 const RULES = [
   "شناسه یکتا در D1، با نام اجرایی job_ و پسوند .py",
-  "فقط کتابخانه‌ی استاندارد پایتون ۳.۹+",
+  "کد D1 فقط استاندارد پایتون ۳.۹+؛ PaddleOCR از helper محلی و ایزوله Windows Agent",
   "بدون input() و بدون کنسول تعاملی",
   "حداکثر ۶۰۰ ثانیه زمان اجرا",
   "بدون مسیر مطلق ویندوزی مثل C:\\Users\\...",
@@ -193,8 +193,8 @@ export default function PromptPage() {
         }
       />
 
-      <Banner tone="info" title="مسیر مستقیم D1 · Arena Bridge 6 آماده">
-        پرامپت و نسخه تازه کد اتوماسیون در D1 ثبت می‌شود؛ ایجنت همکار برای این مسیر به GitHub یا Push نیاز ندارد.
+      <Banner tone="info" title="مسیر مستقیم D1 · Arena Bridge 7 آماده">
+        پرامپت و نسخه تازه در D1 ثبت می‌شود؛ مکان‌یابی پشتیبان با PaddleOCR محلی و توقف امن هنگام قطعی اینترنت نیازمند Windows Agent سازگار است.
       </Banner>
 
       <div className="split-grid">

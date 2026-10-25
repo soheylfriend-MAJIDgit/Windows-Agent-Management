@@ -3,7 +3,8 @@ import { AppError } from "./errors";
 export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
-const BRIDGE_MARKER = "# management-arena-bridge: 6";
+const BRIDGE_MARKER = "# management-arena-bridge: 7";
+const BRIDGE_6_MARKER = "# management-arena-bridge: 6";
 const BRIDGE_5_MARKER = "# management-arena-bridge: 5";
 const BRIDGE_4_MARKER = "# management-arena-bridge: 4";
 const BRIDGE_3_MARKER = "# management-arena-bridge: 3";
@@ -36,9 +37,98 @@ PROMPT_REQUEST_ID = "initial"
 FAILURE_FEEDBACK_ATTEMPTS = 3
 ARENA_COMPLETION_TIMEOUT = 180
 ARENA_COMPLETION_POLL_SECONDS = 3
+NETWORK_RECHECK_SECONDS = 60
+OCR_PYTHON = os.environ.get("WINDOWS_AGENT_OCR_PYTHON", "")
+OCR_HELPER = os.environ.get("WINDOWS_AGENT_OCR_HELPER", "")
 BOT_API_CONFIG = os.path.join(
     os.environ.get("LOCALAPPDATA", ""), "Windows-Agent", "bot_api.json"
 )
+
+
+def network_reachable():
+    """دسترسی واقعی به Arena را می‌سنجد؛ پاسخ HTTP خطادار نیز یعنی شبکه برقرار است."""
+    try:
+        request = urllib.request.Request(URL, method="HEAD", headers={"User-Agent": "Windows-Agent/arena"})
+        with urllib.request.urlopen(request, timeout=12) as response:
+            response.read(1)
+        return True
+    except urllib.error.HTTPError:
+        return True
+    except Exception:
+        return False
+
+
+def wait_for_network():
+    """هنگام قطعی هیچ تعامل UI انجام نمی‌دهد و هر ۶۰ ثانیه دوباره می‌سنجد."""
+    announced = False
+    while not network_reachable():
+        if not announced:
+            print("ARENA_NETWORK_OFFLINE: اینترنت یا Arena در دسترس نیست؛ عملیات متوقف ماند")
+            announced = True
+        else:
+            print("ARENA_NETWORK_STILL_OFFLINE: پس از ۶۰ ثانیه هنوز قطع است؛ ادامه توقف")
+        time.sleep(NETWORK_RECHECK_SECONDS)
+    if announced:
+        print("ARENA_NETWORK_RESTORED: اتصال برگشت؛ ادامه عملیات")
+    return True
+
+
+def local_ocr_items(image_path):
+    """خروجی JSON helper محلی PaddleOCR متعلق به Windows Agent را می‌خواند."""
+    if not OCR_PYTHON or not OCR_HELPER:
+        raise RuntimeError("PaddleOCR محلی Windows Agent پیکربندی نشده است")
+    completed = subprocess.run(
+        [OCR_PYTHON, OCR_HELPER, "--image", image_path, "--json"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=45,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("PaddleOCR helper ناموفق بود: " + completed.stderr[-500:])
+    payload = json.loads(completed.stdout)
+    if not payload.get("ok") or not isinstance(payload.get("items"), list):
+        raise RuntimeError("پاسخ PaddleOCR helper معتبر نیست")
+    return payload["items"]
+
+
+def find_text_with_ocr(phrases, stage="scan"):
+    """متن موردنظر را از اسکرین‌شات پیدا و مرکز آن را برمی‌گرداند."""
+    safe_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in PROMPT_REQUEST_ID)
+    ocr_dir = os.path.join(os.path.dirname(SCREENSHOT_DIR), "logs", "ocr")
+    os.makedirs(ocr_dir, exist_ok=True)
+    image_path = os.path.join(ocr_dir, f"ocr_{safe_id}_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png")
+    take_screenshot(image_path)
+    wanted = [str(value).casefold().strip() for value in phrases if str(value).strip()]
+    for item in local_ocr_items(image_path):
+        text = str(item.get("text", "")).casefold().strip()
+        bounds = item.get("bounds")
+        confidence = float(item.get("confidence", 0) or 0)
+        if confidence < 0.45 or not isinstance(bounds, list) or len(bounds) != 4:
+            continue
+        if any(phrase in text or text in phrase for phrase in wanted):
+            left, top, right, bottom = [float(value) for value in bounds]
+            return {"x": (left + right) / 2, "y": (top + bottom) / 2, "text": item.get("text"), "confidence": confidence}
+    return None
+
+
+def type_and_submit_with_network_resilience():
+    """اگر شکست هم‌زمان با قطعی باشد، صبر می‌کند و فقط یک بار امن از نو تلاش می‌کند."""
+    wait_for_network()
+    try:
+        return type_and_submit()
+    except Exception:
+        if network_reachable():
+            raise
+        print("ARENA_NETWORK_INTERRUPTED: شکست هم‌زمان با قطعی؛ هیچ بازخورد یا کلیک تازه‌ای انجام نمی‌شود")
+        wait_for_network()
+        open_site()
+        time.sleep(PAGE_LOAD_WAIT)
+        maximize_browser()
+        handle_dialog_if_present()
+        return type_and_submit()
 
 
 def send_telegram_status(kind, detail):
@@ -88,7 +178,7 @@ def save_failure_artifacts(detail):
             fh.write(
                 "زمان: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " تهران\\n"
                 "موضوع: شکست job_arena.py و نیاز به بررسی ایجنت همکار\\n"
-                "نسخه برنامه: Arena Bridge 6\\n"
+                "نسخه برنامه: Arena Bridge 7\\n"
                 "شناسه درخواست: " + PROMPT_REQUEST_ID + "\\n"
                 "پرامپت: " + PROMPT_TEXT + "\\n\\n"
                 "جزئیات خطا:\\n" + str(detail)
@@ -138,6 +228,10 @@ def wait_for_arena_completion():
     deadline = time.monotonic() + ARENA_COMPLETION_TIMEOUT
     attempt = 0
     while time.monotonic() < deadline:
+        offline_started = time.monotonic()
+        wait_for_network()
+        # مدت قطعی از مهلت پاسخ کم نمی‌شود.
+        deadline += max(0, time.monotonic() - offline_started)
         attempt += 1
         print(f"پایش پایان Arena؛ انتظار برای «{DIALOG_PHRASE}» (بررسی {attempt})...")
         try:
@@ -146,7 +240,15 @@ def wait_for_arena_completion():
             print(f"هشدار: بررسی پایان Arena موقتاً ناموفق بود: {exc}")
             output = ""
         if "ARENA_COMPLETION_DIALOG_FOUND" in output:
-            print("پنجره پایان Arena دیده شد؛ اجرای ایجنت همکار کامل شده است")
+            print("پنجره پایان Arena با UI Automation دیده شد؛ اجرای ایجنت همکار کامل شده است")
+            return True
+        try:
+            ocr_match = find_text_with_ocr([DIALOG_PHRASE], stage="completion")
+        except Exception as exc:
+            print(f"هشدار: بررسی PaddleOCR پنجره پایان ممکن نشد: {exc}")
+            ocr_match = None
+        if ocr_match:
+            print("پنجره پایان Arena با PaddleOCR دیده شد؛ اجرای ایجنت همکار کامل شده است")
             return True
         remaining = deadline - time.monotonic()
         if remaining > 0:
@@ -499,6 +601,16 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پی�
 
 /** Bridgeهای قبلی و فایل پایه را به موتور امن ورود متن و تصویربرداری Bridge 5 ارتقا می‌دهد. */
 function hardenArenaTyping(source: string): string {
+  if (!source.includes("import urllib.error\n")) {
+    if (!source.includes("import urllib.request\n")) {
+      throw new AppError("import شبکه Arena برای افزودن پایش اتصال پیدا نشد.", {
+        status: 409,
+        code: "arena_network_import_upgrade_failed",
+      });
+    }
+    source = source.replace("import urllib.request\n", "import urllib.error\nimport urllib.request\n");
+  }
+
   if (!source.includes("public static bool SendUnicodeText(string text)")) {
     if (!source.includes(SEND_INPUT_CSHARP_ANCHOR)) {
       throw new AppError("کلاس WinApi فایل Arena برای ارتقای SendInput پیدا نشد.", {
@@ -518,6 +630,43 @@ function hardenArenaTyping(source: string): string {
       });
     }
     source = source.replace(diagnosticsAnchor, `${POWERSHELL_DIAGNOSTICS}\nfunction Get-ElText($el) {`);
+  }
+
+  if (!source.includes("ARENA_COMPOSER_PADDLEOCR")) {
+    const geometryFallback = `    # د) هندسی — فقط اگر هیچ اسکنی کادر را پیدا نکرد
+    if (-not $clickPoint) {
+        $cx = $winRect.X + $winRect.Width / 2
+        $cy = $winRect.Bottom - 90
+        $clickPoint = New-Object System.Windows.Point($cx, $cy)
+        Write-Output 'ARENA_COMPOSER_GEOMETRY_FALLBACK'
+    }
+`;
+    const ocrThenGeometry = `    # د) مختصات PaddleOCR محلی؛ فقط اگر UI Automation کادر را پیدا نکرد.
+    if (-not $clickPoint -and $env:ARENA_OCR_X -and $env:ARENA_OCR_Y) {
+        try {
+            $ox = [double]::Parse($env:ARENA_OCR_X, [System.Globalization.CultureInfo]::InvariantCulture)
+            $oy = [double]::Parse($env:ARENA_OCR_Y, [System.Globalization.CultureInfo]::InvariantCulture)
+            if ($ox -gt $winRect.X -and $ox -lt $winRect.Right -and $oy -gt ($winRect.Top + 120) -and $oy -lt $winRect.Bottom) {
+                $clickPoint = New-Object System.Windows.Point($ox, $oy)
+                Write-Output 'ARENA_COMPOSER_PADDLEOCR'
+            }
+        } catch { Write-Output ("ARENA_OCR_COORDINATE_ERROR=" + $_.Exception.Message) }
+    }
+    # ه) هندسی — فقط اگر UIA و PaddleOCR هیچ‌کدام کادر را پیدا نکردند.
+    if (-not $clickPoint) {
+        $cx = $winRect.X + $winRect.Width / 2
+        $cy = $winRect.Bottom - 90
+        $clickPoint = New-Object System.Windows.Point($cx, $cy)
+        Write-Output 'ARENA_COMPOSER_GEOMETRY_FALLBACK'
+    }
+`;
+    if (!source.includes(geometryFallback)) {
+      throw new AppError("fallback هندسی Arena برای افزودن PaddleOCR پیدا نشد.", {
+        status: 409,
+        code: "arena_ocr_focus_upgrade_failed",
+      });
+    }
+    source = source.replace(geometryFallback, ocrThenGeometry);
   }
 
   if (!source.includes("Bridge 5: هر مسیر ورود متن")) {
@@ -568,6 +717,43 @@ function hardenArenaTyping(source: string): string {
       "if ($sent) { Write-Output 'ARENA_SENT_VERIFIED' } else { Write-Output 'ARENA_SEND_UNCERTAIN' }",
       "Save-StepShot '05-after-submit'\nif ($sent) { Write-Output 'ARENA_SENT_VERIFIED' } else { Write-Output 'ARENA_SEND_UNCERTAIN' }",
     );
+  }
+
+  const directOpenBlock = `    # ۱) باز کردن لینک
+    open_site()
+`;
+  const networkSafeOpenBlock = `    # ۱) پیش از بازکردن صفحه، اتصال پایش می‌شود.
+    wait_for_network()
+    open_site()
+`;
+  if (source.includes(directOpenBlock)) source = source.replace(directOpenBlock, networkSafeOpenBlock);
+  if (!source.includes(networkSafeOpenBlock)) {
+    throw new AppError("بخش شروع مقاوم به قطعی Arena قابل ارتقا نیست.", {
+      status: 409,
+      code: "arena_network_start_upgrade_failed",
+    });
+  }
+
+  const directTypeBlock = `    # ۵) کلیک روی کادر چت، تایپ متن فارسی و ارسال
+    try:
+        type_and_submit()
+    except Exception as exc:
+        print(f"خطا در تایپ/ارسال متن: {exc}")
+        raise
+`;
+  const resilientTypeBlock = `    # ۵) پیش از تعامل، شبکه پایش می‌شود؛ قطعی موقت هیچ کلیک تازه‌ای ایجاد نمی‌کند.
+    try:
+        type_and_submit_with_network_resilience()
+    except Exception as exc:
+        print(f"خطا در تایپ/ارسال متن: {exc}")
+        raise
+`;
+  if (source.includes(directTypeBlock)) source = source.replace(directTypeBlock, resilientTypeBlock);
+  if (!source.includes(resilientTypeBlock)) {
+    throw new AppError("بخش اجرای مقاوم به قطعی Arena قابل ارتقا نیست.", {
+      status: 409,
+      code: "arena_network_upgrade_failed",
+    });
   }
 
   const oldDialogCandidates = `$btnCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
@@ -641,6 +827,20 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
 `;
   if (source.includes(oldRunner)) source = source.replace(oldRunner, diagnosticRunner);
   else if (source.includes(currentRunner)) source = source.replace(currentRunner, diagnosticRunner);
+
+  if (!source.includes('"ARENA_OCR_X"')) {
+    const traceAnchor = `    trace_id = safe_id + "_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")\n`;
+    const traceWithOcr = `${traceAnchor}    wait_for_network()\n    try:\n        ocr_point = find_text_with_ocr([COMPOSER_PLACEHOLDER], stage="composer")\n    except Exception as exc:\n        print(f"هشدار: مکان‌یابی اولیه PaddleOCR ممکن نشد: {exc}")\n        ocr_point = None\n`;
+    const envAnchor = `            "ARENA_TRACE_ID": trace_id,\n`;
+    const envWithOcr = `${envAnchor}            "ARENA_OCR_X": str(ocr_point["x"]) if ocr_point else "",\n            "ARENA_OCR_Y": str(ocr_point["y"]) if ocr_point else "",\n`;
+    if (!source.includes(traceAnchor) || !source.includes(envAnchor)) {
+      throw new AppError("تابع اجرای Arena برای اتصال PaddleOCR قابل ارتقا نیست.", {
+        status: 409,
+        code: "arena_ocr_runner_upgrade_failed",
+      });
+    }
+    source = source.replace(traceAnchor, traceWithOcr).replace(envAnchor, envWithOcr);
+  }
   if (!source.includes("ARENA_DIAGNOSTIC_DIR")) {
     throw new AppError("تابع اجرای PowerShell برای ثبت تصاویر مرحله‌ای قابل ارتقا نیست.", {
       status: 409,
@@ -660,7 +860,7 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
 }
 
 
-/** ارتقای درجا از Bridge 1 تا 5؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+/** ارتقای درجا از Bridge 1 تا 6؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
 function upgradeLegacyBridge(source: string, oldMarker: string): string {
   const bridgeStart = source.indexOf(oldMarker);
   const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
@@ -672,7 +872,7 @@ function upgradeLegacyBridge(source: string, oldMarker: string): string {
     });
   }
 
-  // کل بلوک Bridge قدیمی با Bridge 6 جایگزین می‌شود؛ بدنه‌ی اصلی کار حفظ می‌شود.
+  // کل بلوک Bridge قدیمی با Bridge 7 جایگزین می‌شود؛ بدنه‌ی اصلی کار حفظ می‌شود.
   let upgraded = source.slice(0, bridgeStart) + TELEGRAM_BRIDGE.trimEnd() + source.slice(openSiteStart);
   const wrapperStart = upgraded.lastIndexOf("\ndef main():\n");
   if (wrapperStart < 0 || !upgraded.includes("\ndef _run_arena_task():\n")) {
@@ -703,21 +903,24 @@ export function buildArenaJobFile(options: {
     return source.endsWith("\n") ? source : `${source}\n`;
   }
   if (
+    source.includes(BRIDGE_6_MARKER) ||
     source.includes(BRIDGE_5_MARKER) ||
     source.includes(BRIDGE_4_MARKER) ||
     source.includes(BRIDGE_3_MARKER) ||
     source.includes(BRIDGE_2_MARKER) ||
     source.includes(LEGACY_BRIDGE_MARKER)
   ) {
-    const oldMarker = source.includes(BRIDGE_5_MARKER)
-      ? BRIDGE_5_MARKER
-      : source.includes(BRIDGE_4_MARKER)
-        ? BRIDGE_4_MARKER
-        : source.includes(BRIDGE_3_MARKER)
-          ? BRIDGE_3_MARKER
-          : source.includes(BRIDGE_2_MARKER)
-            ? BRIDGE_2_MARKER
-            : LEGACY_BRIDGE_MARKER;
+    const oldMarker = source.includes(BRIDGE_6_MARKER)
+      ? BRIDGE_6_MARKER
+      : source.includes(BRIDGE_5_MARKER)
+        ? BRIDGE_5_MARKER
+        : source.includes(BRIDGE_4_MARKER)
+          ? BRIDGE_4_MARKER
+          : source.includes(BRIDGE_3_MARKER)
+            ? BRIDGE_3_MARKER
+            : source.includes(BRIDGE_2_MARKER)
+              ? BRIDGE_2_MARKER
+              : LEGACY_BRIDGE_MARKER;
     source = upgradeLegacyBridge(source, oldMarker);
     source = hardenArenaTyping(source);
     source = replaceAssignment(source, "TELEGRAM_REPORT_MODE", options.telegramMode);
@@ -728,7 +931,7 @@ export function buildArenaJobFile(options: {
     throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 6 به‌صورت خودکار پشتیبانی می‌شوند.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 7 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 

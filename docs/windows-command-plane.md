@@ -205,6 +205,18 @@ stdout/stderr به صورت chunkهای محدود و پاک‌سازی‌شده
 - اگر process قبلی واقعاً زنده نیست، رخداد crash و state=`failed` ارسال شود.
 - اگر فرایند با PID و command marker معتبر زنده است، فقط مانیتور آن از سر گرفته شود؛ هرگز PID صرف را بدون بررسی executable/start-time تصاحب نکنید.
 
+## OCR محلی و قطعی شبکه در مسیر Arena
+
+Arena Bridge 7 برای اجرای `job_arena.py` علاوه بر `command_plane` و `d1_automations` به دو capability واقعی نیاز دارد:
+
+```json
+{"arena_vision_ocr":true,"network_resilience":true}
+```
+
+Windows Agent باید PaddleOCR را در محیط ایزوله زیر LocalAppData نگه دارد و فقط مسیر Python و helper محلی را با `WINDOWS_AGENT_OCR_PYTHON` و `WINDOWS_AGENT_OCR_HELPER` به subprocess بدهد. helper ورودی تصویر local و خروجی JSON شامل `text`, `confidence` و `bounds=[left,top,right,bottom]` دارد؛ هیچ تصویر یا متن OCR نباید به سرویس ابری برود. قرارداد کامل نصب و تست در `docs/letter-to-mother-agent-paddleocr.md` است.
+
+در قطعی شبکه stageهای `network_paused` و `network_resumed` گزارش شوند. هنگام قطعی هیچ تعامل UI تازه‌ای انجام نشود، فاصله بررسی مجدد ۶۰ ثانیه باشد، no-progress در زمان pause محاسبه نشود و cancel محلی همچنان حداکثر طی دو ثانیه process tree را متوقف کند.
+
 ## معیار پذیرش
 
 1. با submit پرامپت/اجرای دوباره، modal بلافاصله با command ID باز شود.

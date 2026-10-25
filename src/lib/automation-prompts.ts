@@ -84,7 +84,11 @@ export async function submitAutomationPrompt(input: PromptInput): Promise<Prompt
 
   // پیش از ساخت نسخه فعال مطمئن می‌شویم Windows Agent سازگار آماده دریافت است؛
   // در قطع بودن ایجنت، نسخه‌ای بدون فرمان اجرا در D1 باقی نمی‌ماند.
-  const commandTarget = await findOnlineCommandAgent("d1_automations");
+  const commandTarget = await findOnlineCommandAgent(
+    mode === "arena"
+      ? ["d1_automations", "arena_vision_ocr", "network_resilience"]
+      : "d1_automations",
+  );
   const promptId = await insertPrompt({ jobName: `job_${slug}.py`, mode, prompt, code: input.code?.trim() || null, issues, status: "sending" });
   try {
     const saved = await saveAutomationVersion({
