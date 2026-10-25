@@ -52,6 +52,13 @@ export const SERVICE_CATALOG: ServiceDefinition[] = [
       { name: "rounds", label: "تعداد دور", type: "number", required: true, min: 1, max: 20, defaultValue: 1 },
       { name: "delaySeconds", label: "فاصله بین دو پرامپت (ثانیه)", type: "number", required: true, min: 3, max: 300, defaultValue: 10 },
       { name: "stopOnError", label: "در اولین خطا متوقف شود", type: "checkbox", defaultValue: true },
+      {
+        name: "networkAcceptance",
+        label: "حالت آزمون پذیرش شبکه (فقط یک پرامپت و یک دور)",
+        type: "checkbox",
+        defaultValue: false,
+        helper: "این گزینه فقط برای آزمون کنترل‌شده پیش از فعال‌شدن network_resilience است.",
+      },
     ],
   },
   {
@@ -65,6 +72,13 @@ export const SERVICE_CATALOG: ServiceDefinition[] = [
       { name: "durationMinutes", label: "مدت پایش (دقیقه)", type: "number", required: true, min: 1, max: 55, defaultValue: 30 },
       { name: "intervalSeconds", label: "فاصله بررسی (ثانیه)", type: "number", required: true, min: 10, max: 300, defaultValue: 30 },
       { name: "reopenAfterReconnect", label: "پس از برگشت اتصال، لینک دوباره باز شود", type: "checkbox", defaultValue: true },
+      {
+        name: "networkAcceptance",
+        label: "حالت آزمون پذیرش قطع و وصل شبکه",
+        type: "checkbox",
+        defaultValue: false,
+        helper: "در این حالت سرویس با وجود network_resilience=false فقط برای ثبت شواهد آزمون اجرا می‌شود.",
+      },
     ],
   },
 ];
@@ -172,6 +186,7 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
   let noProgressSeconds = 120;
   let requiredCapabilities = ["d1_automations"];
   let summary: string;
+  const acceptanceMode = boolField(input, "networkAcceptance", false);
 
   if (service.slug === "close-folders") {
     if (!boolField(input, "confirmed")) throw new AppError("تأیید بستن پوشه‌ها الزامی است.", { status: 422, code: "service_confirmation_required" });
@@ -184,15 +199,29 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
     source = directorMonitorSource(url, duration, interval, boolField(input, "reopenAfterReconnect", true));
     timeoutSeconds = Math.min(3600, duration * 60 + 180);
     noProgressSeconds = Math.min(300, Math.max(60, interval * 2 + 20));
-    requiredCapabilities = ["d1_automations", "network_resilience"];
-    summary = `پایش ${duration} دقیقه‌ای لینک کارگردان`;
+    requiredCapabilities = acceptanceMode
+      ? ["d1_automations"]
+      : ["d1_automations", "network_resilience"];
+    summary = acceptanceMode
+      ? `آزمون پذیرش شبکه با پایش ${duration} دقیقه‌ای لینک کارگردان`
+      : `پایش ${duration} دقیقه‌ای لینک کارگردان`;
   } else {
     const batch = await arenaBatchSource(input);
+    if (acceptanceMode && batch.total !== 1) {
+      throw new AppError("در حالت آزمون پذیرش شبکه دقیقاً یک پرامپت و یک دور مجاز است.", {
+        status: 422,
+        code: "service_acceptance_single_prompt_required",
+      });
+    }
     source = batch.source;
     timeoutSeconds = Math.min(3600, Math.max(900, batch.total * (210 + batch.delay)));
     noProgressSeconds = 180;
-    requiredCapabilities = ["d1_automations", "arena_vision_ocr", "network_resilience"];
-    summary = `اجرای ترتیبی ${batch.total} پرامپت Arena`;
+    requiredCapabilities = acceptanceMode
+      ? ["d1_automations", "arena_vision_ocr"]
+      : ["d1_automations", "arena_vision_ocr", "network_resilience"];
+    summary = acceptanceMode
+      ? "آزمون پذیرش شبکه با یک پرامپت Arena"
+      : `اجرای ترتیبی ${batch.total} پرامپت Arena`;
   }
 
   // پیش از ساخت نسخه immutable مطمئن می‌شویم ایجنتی با همه قابلیت‌های لازم آنلاین است.
@@ -210,8 +239,8 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
     activate: true,
   });
   const run = await requestAutomationRun(saved.automation.id, "manager:service", commandTarget, {
-    source: "service_catalog",
-    title: `سرویس · ${service.title}`,
+    source: acceptanceMode ? "service_network_acceptance" : "service_catalog",
+    title: acceptanceMode ? `آزمون پذیرش شبکه · ${service.title}` : `سرویس · ${service.title}`,
     timeoutSeconds,
     noProgressSeconds,
     requiredCapabilities,

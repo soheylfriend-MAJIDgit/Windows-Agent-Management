@@ -139,15 +139,18 @@ export default function ServicesPage() {
                 {selected.fields.map((field) => (
                   <div className="field" key={field.name}>
                     {field.type === "checkbox" ? (
-                      <label className="service-checkbox">
-                        <input
-                          type="checkbox"
-                          checked={Boolean(input[field.name])}
-                          required={field.required}
-                          onChange={(event) => setInput((current) => ({ ...current, [field.name]: event.target.checked }))}
-                        />
-                        <span>{field.label}</span>
-                      </label>
+                      <div>
+                        <label className="service-checkbox">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(input[field.name])}
+                            required={field.required}
+                            onChange={(event) => setInput((current) => ({ ...current, [field.name]: event.target.checked }))}
+                          />
+                          <span>{field.label}</span>
+                        </label>
+                        {field.helper ? <span className="field-helper">{field.helper}</span> : null}
+                      </div>
                     ) : (
                       <>
                         <label className="field-label" htmlFor={`service-${field.name}`}>{field.label}</label>
