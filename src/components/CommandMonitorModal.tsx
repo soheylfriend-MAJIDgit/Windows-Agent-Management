@@ -117,6 +117,27 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
     }
   }
 
+  function downloadEvidence() {
+    if (!detail) return;
+    const payload = {
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      command: detail.command,
+      events: detail.events,
+      artifacts: detail.artifacts,
+      anomaly: detail.anomaly,
+    };
+    const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `command_evidence_${commandId}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
+
   async function toggleAutoStop(enabled: boolean) {
     setBusy(true);
     try {
@@ -233,6 +254,7 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
               </div>
             ) : <button className="button danger" type="button" onClick={() => setConfirmStop(true)}>توقف اجرای ویندوز</button>
           ) : command?.cancelRequestedAt && !isFinal ? <span className="command-cancel-pending">درخواست توقف ثبت شد؛ منتظر تأیید Windows Agent…</span> : null}
+          <button className="button secondary" type="button" disabled={!detail} onClick={downloadEvidence}>دانلود گزارش شواهد</button>
           <button className="button secondary" type="button" onClick={onClose}>{isFinal ? "بستن" : "بستن و ادامه در پس‌زمینه"}</button>
         </footer>
       </section>
