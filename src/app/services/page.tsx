@@ -66,7 +66,7 @@ function AutoGrowPromptInput({
     const textarea = textareaRef.current;
     if (!textarea) return;
     textarea.style.height = "0px";
-    textarea.style.height = `${Math.min(360, Math.max(44, textarea.scrollHeight))}px`;
+    textarea.style.height = `${Math.max(44, textarea.scrollHeight)}px`;
   }, [value]);
 
   return (
