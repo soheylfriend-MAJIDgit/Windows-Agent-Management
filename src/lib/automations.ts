@@ -289,7 +289,14 @@ export async function requestAutomationRun(
   identifier: unknown,
   actor: string,
   targetOverride?: { keyId: string; agentId: string; agentName?: string },
-  context?: { promptId?: number; source?: string; title?: string },
+  context?: {
+    promptId?: number;
+    source?: string;
+    title?: string;
+    timeoutSeconds?: number;
+    noProgressSeconds?: number;
+    requiredCapabilities?: string[];
+  },
 ): Promise<{ commandId: string; automation: AutomationView; version: AutomationVersionView }> {
   const detail = await getAutomation(identifier, true);
   if (!detail.automation.enabled) throw new AppError("این اتوماسیون غیرفعال است.", { status: 409, code: "automation_disabled" });
@@ -297,7 +304,7 @@ export async function requestAutomationRun(
   if (detail.automation.target === "management") {
     throw new AppError("اتوماسیون مقصد مدیریت باید از APIهای عملیاتی مدیریت استفاده کند و روی ویندوز اجرا نمی‌شود.", { status: 409, code: "automation_target_management" });
   }
-  const target = targetOverride ?? await findOnlineCommandAgent("d1_automations");
+  const target = targetOverride ?? await findOnlineCommandAgent(context?.requiredCapabilities ?? "d1_automations");
   const command = await createManagedCommand({
     type: "run_automation",
     title: context?.title ?? `اجرای اتوماسیون ${detail.automation.name}`,
@@ -307,8 +314,8 @@ export async function requestAutomationRun(
     target,
     requiresConfirmation: true,
     autoStopOnAnomaly: true,
-    timeoutSeconds: 900,
-    noProgressSeconds: 120,
+    timeoutSeconds: context?.timeoutSeconds ?? 900,
+    noProgressSeconds: context?.noProgressSeconds ?? 120,
     payload: {
       automationId: detail.automation.id,
       versionId: detail.activeVersion.id,
