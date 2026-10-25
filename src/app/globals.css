@@ -379,13 +379,44 @@ html[data-theme="light"] .logo {
 }
 
 .commit-clock,
-.clock {
+.clock,
+.build-identity {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   justify-content: center;
   line-height: 1.35;
   min-width: 0;
+}
+
+.build-identity {
+  width: min(300px, 30vw);
+  gap: 2px;
+}
+
+.build-identity-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  font-size: 10px;
+}
+
+.build-identity-label {
+  color: var(--text-dim);
+  flex: none;
+}
+
+.build-identity-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 650;
 }
 
 .clock {
@@ -3007,6 +3038,21 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
 
   .commit-clock-date {
     font-size: 11px;
+  }
+
+  .build-identity {
+    width: min(160px, 42vw);
+  }
+
+  .build-identity-row {
+    align-items: flex-start;
+    font-size: 9px;
+  }
+
+  .build-identity-value {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: left;
   }
 
   .header-side {
