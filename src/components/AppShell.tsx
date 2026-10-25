@@ -9,6 +9,7 @@ import { ThemeToggle } from "./ThemeToggle";
 import { Icon, type IconName } from "./icons";
 import { Logo } from "./Logo";
 import { Banner } from "./ui";
+import { CommandCenterDock } from "./CommandCenterDock";
 import { faNumber, relativeFa } from "@/lib/jalali";
 import { postJson } from "@/hooks/useApi";
 
@@ -20,14 +21,13 @@ interface NavItem {
 
 const PRIMARY = [
   { href: "/", label: "داشبورد", icon: "dashboard" },
-  { href: "/codes", label: "فهرست کدها", icon: "code" },
-  { href: "/prompt", label: "ارسال پرامپت", icon: "send" },
-  { href: "/reports", label: "گزارش اجرا", icon: "report" },
-] satisfies NavItem[];
-
-const TOOLS = [
-  { href: "/settings", label: "تنظیمات", icon: "settings" },
+  { href: "/services", label: "سرویس‌ها", icon: "layers" },
+  { href: "/codes", label: "کدهای اتوماسیون", icon: "code" },
+  { href: "/prompt", label: "پرامپت", icon: "send" },
+  { href: "/reports", label: "گزارش‌ها", icon: "report" },
   { href: "/database", label: "دیتابیس", icon: "database" },
+  { href: "/agent-keys", label: "کلید ایجنت", icon: "lock" },
+  { href: "/settings", label: "تنظیمات", icon: "settings" },
   { href: "/help", label: "راهنما", icon: "help" },
 ] satisfies NavItem[];
 
@@ -98,7 +98,7 @@ export function AppShell({
           </header>
 
           <div className="nav-stack">
-            <nav className="tabs primary-tabs" aria-label="بخش‌های اصلی">
+            <nav className="tabs primary-tabs" aria-label="بخش‌های برنامه">
               {PRIMARY.map((item) => (
                 <Link
                   key={item.href}
@@ -106,7 +106,7 @@ export function AppShell({
                   className={`tab ${isActive(item.href) ? "active" : ""}`}
                   aria-current={isActive(item.href) ? "page" : undefined}
                 >
-                  <Icon name={item.icon} size={16} />
+                  <Icon name={item.icon} size={15} />
                   <span>{item.label}</span>
                   {item.href === "/codes" && pending > 0 ? (
                     <span className="tab-badge" title="کدهای در انتظار اجرا">
@@ -121,23 +121,6 @@ export function AppShell({
                 </Link>
               ))}
             </nav>
-
-            <div className="tools-row">
-              <span className="tabs-row-label">ابزار مدیر</span>
-              <nav className="tabs tools-tabs" aria-label="ابزارهای مدیریت">
-                {TOOLS.map((item) => (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={`tab ${isActive(item.href) ? "active" : ""}`}
-                    aria-current={isActive(item.href) ? "page" : undefined}
-                  >
-                    <Icon name={item.icon} size={14} />
-                    <span>{item.label}</span>
-                  </Link>
-                ))}
-              </nav>
-            </div>
           </div>
         </div>
       </div>
@@ -186,6 +169,7 @@ export function AppShell({
           </span>
         </footer>
       </main>
+      <CommandCenterDock />
     </>
   );
 }

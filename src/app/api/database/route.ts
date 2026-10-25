@@ -13,6 +13,15 @@ const EXPECTED_TABLES = [
   ["events", "رویدادها"],
   ["sync_state", "وضعیت همگام‌سازی"],
   ["drive_files", "فایل‌های درایو"],
+  ["agent_keys", "کلیدهای ایجنت"],
+  ["managed_agents", "ایجنت‌های متصل"],
+  ["agent_connection_tests", "تست‌های اتصال"],
+  ["commands", "فرمان‌های ویندوز"],
+  ["command_events", "رخدادهای فرمان"],
+  ["command_artifacts", "فراداده تصویرها"],
+  ["automations", "کدهای اتوماسیون"],
+  ["automation_versions", "نسخه‌های اتوماسیون"],
+  ["automation_runs", "اجرای اتوماسیون"],
 ] as const;
 
 type CountRow = Record<(typeof EXPECTED_TABLES)[number][0], number>;
@@ -42,7 +51,16 @@ export async function GET() {
         (SELECT COUNT(*) FROM prompts) AS prompts,
         (SELECT COUNT(*) FROM events) AS events,
         (SELECT COUNT(*) FROM sync_state) AS sync_state,
-        (SELECT COUNT(*) FROM drive_files) AS drive_files
+        (SELECT COUNT(*) FROM drive_files) AS drive_files,
+        (SELECT COUNT(*) FROM agent_keys) AS agent_keys,
+        (SELECT COUNT(*) FROM managed_agents) AS managed_agents,
+        (SELECT COUNT(*) FROM agent_connection_tests) AS agent_connection_tests,
+        (SELECT COUNT(*) FROM commands) AS commands,
+        (SELECT COUNT(*) FROM command_events) AS command_events,
+        (SELECT COUNT(*) FROM command_artifacts) AS command_artifacts,
+        (SELECT COUNT(*) FROM automations) AS automations,
+        (SELECT COUNT(*) FROM automation_versions) AS automation_versions,
+        (SELECT COUNT(*) FROM automation_runs) AS automation_runs
     `);
     // D1 تعداد termهای compound SELECT را محدود می‌کند؛ timestampها جداگانه خوانده
     // و چون ISO/UTC هستند به‌صورت واژه‌نامه‌ای مقایسه می‌شوند.
@@ -55,6 +73,15 @@ export async function GET() {
       "SELECT MAX(updated_at) AS value FROM settings",
       "SELECT MAX(updated_at) AS value FROM sync_state",
       "SELECT MAX(synced_at) AS value FROM drive_files",
+      "SELECT MAX(COALESCE(last_used_at, created_at)) AS value FROM agent_keys",
+      "SELECT MAX(last_seen_at) AS value FROM managed_agents",
+      "SELECT MAX(COALESCE(responded_at, delivered_at, created_at)) AS value FROM agent_connection_tests",
+      "SELECT MAX(COALESCE(completed_at, last_event_at, created_at)) AS value FROM commands",
+      "SELECT MAX(created_at) AS value FROM command_events",
+      "SELECT MAX(created_at) AS value FROM command_artifacts",
+      "SELECT MAX(updated_at) AS value FROM automations",
+      "SELECT MAX(created_at) AS value FROM automation_versions",
+      "SELECT MAX(created_at) AS value FROM automation_runs",
     ];
     const activityRows = await Promise.all(
       activityQueries.map((query) => dbFirst<{ value: string | null }>(query)),
@@ -78,7 +105,7 @@ export async function GET() {
       connected: true,
       binding: "DB",
       engine: "Cloudflare D1 / SQLite",
-      schemaVersion: 1,
+      schemaVersion: 5,
       schemaReady: tables.every((table) => table.ready),
       tables,
       tableCount: tables.filter((table) => table.ready).length,

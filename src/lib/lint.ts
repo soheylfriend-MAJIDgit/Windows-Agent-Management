@@ -280,7 +280,7 @@ export function lintPython(
   for (const str of scan.strings) {
     if (isModuleDocstringLine(str.line)) continue;
     if (pathRe.test(str.value) || /\\\\Users\\\\/i.test(str.value)) {
-      errors.push({
+      const issue: Issue = {
         code: "absolute_windows_path",
         message: "مسیر مطلق ویندوزی در کد وجود دارد.",
         line: str.line,
@@ -288,7 +288,11 @@ export function lintPython(
         hint:
           "از Path.home() یا os.environ[\"USERPROFILE\"] یا مسیر نسبی استفاده کنید؛ نام کاربر ویندوز می‌تواند عوض شود. " +
           "فایل‌های موجود مخزن این مسیر را دارند و فقط هشدار می‌گیرند؛ کد تازه باید اصلاح شود.",
-      });
+      };
+      // فایل‌های موجود (از جمله job_arena.py) با strict=false فقط هشدار می‌گیرند؛
+      // گذاشتن issue در errors حتی با severity=warning باعث ok=false می‌شد.
+      if (options.strict) errors.push(issue);
+      else warnings.push(issue);
       break;
     }
   }

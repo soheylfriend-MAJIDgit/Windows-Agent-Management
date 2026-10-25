@@ -477,6 +477,8 @@ export async function updatePromptResult(
 }
 
 export async function listPrompts(limit = 20): Promise<PromptRecord[]> {
+  // وضعیت پرامپت‌های جدید هنگام تکمیل فرمان از مسیر مستقیم commands.prompt_id
+  // به‌روزرسانی می‌شود؛ خواندن تاریخچه نباید هیچ query اصلاحی یا write جانبی اجرا کند.
   const rows = await dbAll<Row>("SELECT * FROM prompts ORDER BY created_at DESC, id DESC LIMIT ?", [
     Math.min(Math.max(limit, 1), 100),
   ]);

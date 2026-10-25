@@ -1,6 +1,6 @@
 import { api, jsonOk, readJson } from "@/lib/api";
 import { requireAuth } from "@/lib/auth";
-import { rerunJob } from "@/lib/actions";
+import { normalizeAutomationSlug, rerunAutomation } from "@/lib/automations";
 
 export const dynamic = "force-dynamic";
 
@@ -8,8 +8,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ name: s
   return api(async () => {
     await requireAuth();
     const { name } = await params;
-
-    // بدنه اختیاری است؛ dryRun فقط پیش‌نمایش فایل و پیام کامیت را برمی‌گرداند.
     let dryRun = false;
     try {
       const body = await readJson<{ dryRun?: boolean }>(req);
@@ -17,8 +15,28 @@ export async function POST(req: Request, { params }: { params: Promise<{ name: s
     } catch {
       dryRun = false;
     }
-
-    const result = await rerunJob(name, { dryRun });
-    return jsonOk(result, { status: dryRun ? 200 : 201 });
+    const result = await rerunAutomation(normalizeAutomationSlug(name), "manager:rerun", dryRun);
+    if (result.dryRun) {
+      return jsonOk({
+        jobName: `job_${result.automation.slug}.py`,
+        commitSha: result.automation.sourceSha256 ?? "",
+        commitUrl: "",
+        message: "پیش‌نمایش نسخه اجرای دوباره در D1",
+        marker: result.marker,
+        fileUrl: null,
+        dryRun: true,
+        content: result.content,
+      });
+    }
+    return jsonOk({
+      jobName: `job_${result.automation.slug}.py`,
+      commitSha: result.version?.sourceSha256 ?? "",
+      commitUrl: "",
+      message: `نسخه ${result.version?.version ?? ""} در D1 ثبت شد.`,
+      marker: result.marker,
+      fileUrl: null,
+      commandId: result.commandId,
+      storage: "d1",
+    }, { status: 201 });
   });
 }
