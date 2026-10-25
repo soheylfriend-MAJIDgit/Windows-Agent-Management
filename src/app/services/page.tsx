@@ -144,7 +144,9 @@ export default function ServicesPage() {
                 <Banner tone="warn" title="پیش از اجرا">{selected.caution}</Banner>
                 <ErrorBanner error={submitError} />
 
-                {selected.fields.map((field) => (
+                {selected.fields
+                  .filter((field) => field.name !== "unrecoverableAcceptance" || Boolean(input.networkAcceptance))
+                  .map((field) => (
                   <div className="field" key={field.name}>
                     {field.type === "checkbox" ? (
                       <div>
@@ -153,7 +155,14 @@ export default function ServicesPage() {
                             type="checkbox"
                             checked={Boolean(input[field.name])}
                             required={field.required}
-                            onChange={(event) => setInput((current) => ({ ...current, [field.name]: event.target.checked }))}
+                            onChange={(event) => {
+                              const checked = event.target.checked;
+                              setInput((current) => ({
+                                ...current,
+                                [field.name]: checked,
+                                ...(field.name === "networkAcceptance" && !checked ? { unrecoverableAcceptance: false } : {}),
+                              }));
+                            }}
                           />
                           <span>{field.label}</span>
                         </label>
