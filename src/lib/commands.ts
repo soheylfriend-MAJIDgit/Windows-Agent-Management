@@ -278,10 +278,29 @@ export async function findOnlineCommandAgent(requiredCapability: string | string
       && scopes.includes("artifacts:write");
   });
   if (!match) {
+    if (rows.length) {
+      const candidate = rows[0];
+      const capabilities = parseObject(candidate.capabilities);
+      const scopes = parseScopes(candidate.scopes);
+      const missingCapabilities = ["command_plane", ...requiredCapabilities]
+        .filter((capability, index, all) => all.indexOf(capability) === index)
+        .filter((capability) => capabilities[capability] !== true);
+      const missingScopes = ["commands:read", "events:write", "results:write", "artifacts:write"]
+        .filter((scope) => !scopes.includes(scope));
+      const reasons = [
+        missingCapabilities.length ? `قابلیت غیرفعال: ${missingCapabilities.join("، ")}` : "",
+        missingScopes.length ? `دسترسی کلید ناقص: ${missingScopes.join("، ")}` : "",
+      ].filter(Boolean).join("؛ ");
+      throw new AppError("Windows Agent آنلاین است، اما شرایط لازم این اجرا را ندارد.", {
+        status: 409,
+        code: "command_agent_incompatible",
+        hint: reasons || "وضعیت capabilityها و scopeهای کلید را در تب کلید ایجنت بررسی کنید.",
+      });
+    }
     throw new AppError("Windows Agent آنلاین و آماده‌ی دریافت فرمان پیدا نشد.", {
       status: 409,
       code: "command_agent_offline",
-      hint: `نسخه‌ی سازگار manager_client را اجرا کنید تا capabilityهای ${requiredCapabilities.join("، ")} را گزارش دهد؛ کلید نیز به commands:read، events:write، results:write و artifacts:write نیاز دارد.`,
+      hint: "Windows Agent را اجرا کنید و پس از ثبت Heartbeat دوباره تلاش کنید.",
     });
   }
   return { keyId: match.agent_key_id, agentId: match.agent_id, agentName: match.agent_name };
