@@ -58,20 +58,6 @@ export const SERVICE_CATALOG: ServiceDefinition[] = [
       { name: "rounds", label: "تعداد دور", type: "number", required: true, min: 1, max: 20, defaultValue: 1 },
       { name: "delaySeconds", label: "فاصله بین دو پرامپت (ثانیه)", type: "number", required: true, min: 3, max: 300, defaultValue: 10 },
       { name: "stopOnError", label: "در اولین خطا متوقف شود", type: "checkbox", defaultValue: true },
-      {
-        name: "networkAcceptance",
-        label: "حالت آزمون پذیرش شبکه (فقط یک پرامپت و یک دور)",
-        type: "checkbox",
-        defaultValue: false,
-        helper: "این گزینه فقط برای آزمون کنترل‌شده پیش از فعال‌شدن network_resilience است.",
-      },
-      {
-        name: "unrecoverableAcceptance",
-        label: "شبیه‌سازی checkpoint غیرقابل‌بازیابی پس از اتصال مجدد",
-        type: "checkbox",
-        defaultValue: false,
-        helper: "فقط برای مرحله جداگانه پذیرش؛ پس از برگشت اینترنت بدون تعامل Arena با وضعیت failed متوقف می‌شود.",
-      },
     ],
   },
   {
@@ -273,9 +259,10 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
     source = batch.source;
     timeoutSeconds = Math.min(3600, Math.max(900, batch.total * (210 + batch.delay)));
     noProgressSeconds = 180;
-    requiredCapabilities = acceptanceMode
-      ? ["d1_automations", "arena_vision_ocr"]
-      : ["d1_automations", "arena_vision_ocr", "network_resilience"];
+    // این سرویس تاب‌آوری شبکه را داخل کد immutable خود اجرا می‌کند و آزمون زنده
+    // قطع/وصل و شکست غیرقابل‌بازیابی را گذرانده است؛ marker سراسری برای مسیرهای
+    // عمومی Arena همچنان الزامی می‌ماند، اما این سرویس مستقل به آن وابسته نیست.
+    requiredCapabilities = ["d1_automations", "arena_vision_ocr"];
     summary = acceptanceMode
       ? "آزمون پذیرش شبکه با یک پرامپت Arena"
       : `اجرای ترتیبی ${batch.total} پرامپت Arena`;

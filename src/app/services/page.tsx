@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CommandMonitorModal } from "@/components/CommandMonitorModal";
 import { Icon } from "@/components/icons";
 import { Banner, ErrorBanner, LoadingState, PageHeader } from "@/components/ui";
@@ -47,6 +47,40 @@ function promptBlockCount(value: InputState[string]): number {
 
 function serializePromptBlocks(blocks: string[]): string {
   return blocks.join("\n---\n");
+}
+
+function AutoGrowPromptInput({
+  value,
+  index,
+  required,
+  onChange,
+}: {
+  value: string;
+  index: number;
+  required?: boolean;
+  onChange: (value: string) => void;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "0px";
+    textarea.style.height = `${Math.min(360, Math.max(44, textarea.scrollHeight))}px`;
+  }, [value]);
+
+  return (
+    <textarea
+      ref={textareaRef}
+      className="service-prompt-cell-input"
+      rows={1}
+      value={value}
+      required={required}
+      placeholder={`متن پرامپت ${index + 1}`}
+      aria-label={`متن پرامپت ${index + 1}`}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
 }
 
 export default function ServicesPage() {
@@ -238,25 +272,25 @@ export default function ServicesPage() {
                           <div className="prompt-cell-list" id={`service-${field.name}`}>
                             {promptCells.map((prompt, index) => (
                               <article className="prompt-cell" key={index}>
-                                <div className="prompt-cell-head">
-                                  <strong>پرامپت {index + 1}</strong>
-                                  <button
-                                    type="button"
-                                    className="prompt-cell-remove"
-                                    onClick={() => removePromptCell(index)}
-                                    aria-label={`حذف پرامپت ${index + 1}`}
-                                    disabled={promptCells.length === 1 && !prompt}
-                                  >
-                                    حذف
-                                  </button>
+                                <div className="prompt-cell-gutter" aria-hidden="true">
+                                  <span>{(index + 1).toLocaleString("fa-IR")}</span>
                                 </div>
-                                <textarea
-                                  className="textarea service-prompt-cell-input"
+                                <AutoGrowPromptInput
                                   value={prompt}
+                                  index={index}
                                   required={field.required}
-                                  placeholder={`متن پرامپت ${index + 1}`}
-                                  onChange={(event) => updatePromptCell(index, event.target.value)}
+                                  onChange={(value) => updatePromptCell(index, value)}
                                 />
+                                <button
+                                  type="button"
+                                  className="prompt-cell-remove"
+                                  onClick={() => removePromptCell(index)}
+                                  aria-label={`حذف پرامپت ${index + 1}`}
+                                  title="حذف این پرامپت"
+                                  disabled={promptCells.length === 1 && !prompt}
+                                >
+                                  ×
+                                </button>
                               </article>
                             ))}
                             <button
