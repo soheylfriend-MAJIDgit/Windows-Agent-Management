@@ -3,7 +3,8 @@ import { AppError } from "./errors";
 export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
-const BRIDGE_MARKER = "# management-arena-bridge: 17";
+const BRIDGE_MARKER = "# management-arena-bridge: 18";
+const BRIDGE_17_MARKER = "# management-arena-bridge: 17";
 const BRIDGE_16_MARKER = "# management-arena-bridge: 16";
 const BRIDGE_15_MARKER = "# management-arena-bridge: 15";
 const BRIDGE_14_MARKER = "# management-arena-bridge: 14";
@@ -151,6 +152,7 @@ def describe_arena_action(marker):
         "ARENA_SUBMIT_BLOCKED_SHORT_UIA_EVIDENCE": "ارسال مسدود شد چون شاهد متنی UIA کوتاه‌تر از حد امن بود.",
         "ARENA_SUBMIT_BLOCKED_MISSING_CURRENT_PROBE": "ارسال مسدود شد چون هیچ‌یک از قطعه‌های دقیق همین پرامپت در پنجره UIA دیده نشد.",
         "ARENA_SUBMIT_FALLBACK_CTRL_ENTER": "یک قطعه دقیق از همان پرامپت پس از Enter باقی ماند؛ Ctrl+Enter ایمن فقط یک‌بار اجرا شد.",
+        "ARENA_SUBMIT_SEND_BUTTON_CLICKED": "پس از باقی‌ماندن قطعی پرامپت، دکمه ارسال Arena فقط یک‌بار کلیک شد.",
     }
     if marker in exact:
         return exact[marker]
@@ -191,6 +193,18 @@ def describe_arena_action(marker):
         ("ARENA_SUBMIT_REMAINING_OFFSET_FINAL=", "موقعیت قطعه باقی‌مانده در بررسی نهایی: "),
         ("ARENA_SUBMIT_PROBE_REMAINS_FINAL=", "باقی‌ماندن یک قطعه دقیق پس از پایان تلاش ارسال: "),
         ("ARENA_SUBMIT_FOCUSED_COMPOSER_CLEARED=", "خالی‌شدن composer در فوکوس و محدوده امن پس از ارسال: "),
+        ("ARENA_SUBMIT_PROMPT_REMAINS_AFTER_KEYBOARD=", "باقی‌ماندن قطعی پرامپت پس از Enter: "),
+        ("ARENA_SUBMIT_REMAINING_OFFSET_AFTER_KEYBOARD=", "موقعیت قطعه باقی‌مانده پس از Enter: "),
+        ("ARENA_SUBMIT_BUTTON_CANDIDATE_COUNT=", "تعداد دکمه‌های ارسال احتمالی نزدیک composer: "),
+        ("ARENA_SUBMIT_BUTTON_CANDIDATE=", "مشخصات دکمه ارسال احتمالی: "),
+        ("ARENA_SUBMIT_BUTTON_SCAN_ERROR=", "خطای پیمایش دکمه‌های نزدیک composer: "),
+        ("ARENA_SUBMIT_BUTTON_SOURCE=", "روش انتخاب نقطه دکمه ارسال: "),
+        ("ARENA_SUBMIT_BUTTON_NAME=", "نام UIA دکمه ارسال منتخب: "),
+        ("ARENA_SUBMIT_BUTTON_AUTOMATION_ID=", "AutomationId دکمه ارسال منتخب: "),
+        ("ARENA_SUBMIT_BUTTON_RECT=", "محدوده دکمه ارسال منتخب: "),
+        ("ARENA_SUBMIT_BUTTON_POINT=", "مختصات کلیک دکمه ارسال: "),
+        ("ARENA_SUBMIT_SEND_BUTTON_USED=", "استفاده از کلیک کنترل‌شده دکمه ارسال: "),
+        ("ARENA_SUBMIT_ANY_ACTION_OK=", "انجام موفق حداقل یک اقدام ارسال پیش از تأیید UI: "),
         ("ARENA_VERIFY_EXPECTED_LENGTH=", "طول پرامپت مورد انتظار: "),
         ("ARENA_VERIFY_MINIMUM_LENGTH=", "حداقل شاهد متنی لازم از پنجره UIA: "),
         ("ARENA_VERIFY_FOCUSED_LENGTH=", "طول متن خوانده‌شده از کادر فعال: "),
@@ -799,7 +813,7 @@ function Try-SetPromptValue($startEl) {
 
 const VERIFIED_SUBMIT_BLOCK = `$sent = $false
 
-# Bridge 16: composer دوباره فوکوس می‌شود و یکی از probeهای دقیق همین پرامپت
+# Bridge 18: composer دوباره فوکوس می‌شود و یکی از probeهای دقیق همین پرامپت
 # در پنجره محدود UIA تأیید می‌شود. tail اولویت دارد اما تنها پنجره قابل‌خواندن نیست.
 if ($composer) { try { $composer.SetFocus() } catch {} }
 try { [WinApi]::SetForegroundWindow($browserWin.Current.NativeWindowHandle) | Out-Null } catch {}
@@ -900,16 +914,115 @@ if ($submitReady) {
     Write-Output ("ARENA_SUBMIT_REMAINING_OFFSET_AFTER_ENTER=" + $remainingOffsetAfterEnter)
     Write-Output ("ARENA_SUBMIT_PROBE_REMAINS_AFTER_ENTER=" + [bool]$probeRemainsAfterEnter)
 
+    # Bridge 18 دیگر Ctrl+Enter را امتحان نمی‌کند؛ اجرای واقعی نشان داد آن هم متن را
+    # نگه می‌دارد. تنها fallback پس از Enter، یک کلیک کنترل‌شده روی دکمه ارسال است.
     $fallbackUsed = $false
     $fallbackOk = $false
-    if ($enterOk -and $probeRemainsAfterEnter) {
-        $fallbackUsed = $true
-        Write-Output 'ARENA_SUBMIT_FALLBACK_CTRL_ENTER'
-        $fallbackOk = [WinApi]::SendChord(0x11, 0x0D)
-        Write-Output ("ARENA_SUBMIT_FALLBACK_SENDINPUT=" + $fallbackOk)
-        Start-Sleep -Milliseconds 4000
-        Save-StepShot '04-after-fallback-ctrl-enter'
+
+    # fallback مجاز: کلیک یک‌باره روی دکمه ارسال، فقط وقتی بعد از Enter
+    # یکی از probeهای دقیق هنوز در composer امن و نزدیک همان نقطه دیده می‌شود.
+    $sendClickUsed = $false
+    $sendClickSource = "none"
+    $sendCandidateCount = 0
+    $sendButtonName = ""
+    $sendButtonAutomationId = ""
+    $sendButtonRectText = "unavailable"
+    $focusedAfterKeyboard = [System.Windows.Automation.AutomationElement]::FocusedElement
+    $focusSafeAfterKeyboard = ($null -ne $focusedAfterKeyboard) -and -not (Test-Omnibox $focusedAfterKeyboard $winRect.Top)
+    $afterKeyboardCanonical = ((([string](Get-ElText $focusedAfterKeyboard)) -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\\s+', ' ').Trim()
+    $focusNearComposerAfterKeyboard = $false
+    $keyboardRect = $null
+    try {
+        $keyboardRect = $focusedAfterKeyboard.Current.BoundingRectangle
+        $focusNearComposerAfterKeyboard = (
+            $focusSafeAfterKeyboard -and
+            ($clickPoint.X -ge ($keyboardRect.Left - 80)) -and ($clickPoint.X -le ($keyboardRect.Right + 80)) -and
+            ($clickPoint.Y -ge ($keyboardRect.Top - 80)) -and ($clickPoint.Y -le ($keyboardRect.Bottom + 80))
+        )
+    } catch {}
+    $promptRemainsAfterKeyboard = $false
+    $remainingOffsetAfterKeyboard = -1
+    for ($probeIndex = 0; $probeIndex -lt $submitProbeCandidates.Count; $probeIndex++) {
+        if ($afterKeyboardCanonical.Contains($submitProbeCandidates[$probeIndex])) {
+            $promptRemainsAfterKeyboard = $focusSafeAfterKeyboard -and $focusNearComposerAfterKeyboard
+            $remainingOffsetAfterKeyboard = $submitOffsets[$probeIndex]
+            break
+        }
     }
+    Write-Output ("ARENA_SUBMIT_PROMPT_REMAINS_AFTER_KEYBOARD=" + [bool]$promptRemainsAfterKeyboard)
+    Write-Output ("ARENA_SUBMIT_REMAINING_OFFSET_AFTER_KEYBOARD=" + $remainingOffsetAfterKeyboard)
+
+    if ($promptRemainsAfterKeyboard) {
+        $sendButton = $null
+        $sendButtonScore = [double]::NegativeInfinity
+        try {
+            $sendButtonCond = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::Button
+            )
+            $nearButtons = Get-Visible ($page.FindAll([System.Windows.Automation.TreeScope]::Descendants, $sendButtonCond))
+            foreach ($button in $nearButtons) {
+                try {
+                    if (-not $button.Current.IsEnabled) { continue }
+                    $buttonRect = $button.Current.BoundingRectangle
+                    if ($buttonRect.Width -lt 12 -or $buttonRect.Width -gt 100 -or $buttonRect.Height -lt 12 -or $buttonRect.Height -gt 100) { continue }
+                    $buttonX = $buttonRect.Left + ($buttonRect.Width / 2)
+                    $buttonY = $buttonRect.Top + ($buttonRect.Height / 2)
+                    if ($buttonX -lt ($keyboardRect.Left + ($keyboardRect.Width * 0.55)) -or $buttonX -gt ($keyboardRect.Right + 45)) { continue }
+                    if ($buttonY -lt ($keyboardRect.Top - 25) -or $buttonY -gt ($keyboardRect.Bottom + 35)) { continue }
+                    $sendCandidateCount += 1
+                    $buttonName = [string]$button.Current.Name
+                    $buttonAutomationId = [string]$button.Current.AutomationId
+                    $semanticBonus = if (($buttonName + " " + $buttonAutomationId) -match '(?i)send|submit|ارسال') { 100000 } else { 0 }
+                    $buttonScore = $semanticBonus + $buttonX + ($buttonY / 1000)
+                    Write-Output ("ARENA_SUBMIT_BUTTON_CANDIDATE=" + $sendCandidateCount + ";name=" + $buttonName + ";id=" + $buttonAutomationId + ";rect=" + ([int]$buttonRect.Left) + "," + ([int]$buttonRect.Top) + "," + ([int]$buttonRect.Width) + "," + ([int]$buttonRect.Height))
+                    if ($buttonScore -gt $sendButtonScore) {
+                        $sendButtonScore = $buttonScore
+                        $sendButton = $button
+                    }
+                } catch {}
+            }
+        } catch {
+            Write-Output ("ARENA_SUBMIT_BUTTON_SCAN_ERROR=" + $_.Exception.Message)
+        }
+
+        $sendX = 0
+        $sendY = 0
+        if ($sendButton) {
+            try {
+                $chosenRect = $sendButton.Current.BoundingRectangle
+                $sendX = $chosenRect.Left + ($chosenRect.Width / 2)
+                $sendY = $chosenRect.Top + ($chosenRect.Height / 2)
+                $sendButtonName = [string]$sendButton.Current.Name
+                $sendButtonAutomationId = [string]$sendButton.Current.AutomationId
+                $sendButtonRectText = ([int]$chosenRect.Left).ToString() + "," + ([int]$chosenRect.Top).ToString() + "," + ([int]$chosenRect.Width).ToString() + "," + ([int]$chosenRect.Height).ToString()
+                $sendClickSource = "uia-button"
+            } catch {}
+        }
+        if (($sendX -le 0 -or $sendY -le 0) -and $keyboardRect) {
+            # Arena دکمه فلش ارسال را در گوشه پایین راست composer نشان می‌دهد.
+            $sendX = $keyboardRect.Right - 28
+            $sendY = $keyboardRect.Bottom - 28
+            $sendButtonRectText = "geometry-from-composer"
+            $sendClickSource = "composer-bottom-right"
+        }
+        Write-Output ("ARENA_SUBMIT_BUTTON_CANDIDATE_COUNT=" + $sendCandidateCount)
+        Write-Output ("ARENA_SUBMIT_BUTTON_SOURCE=" + $sendClickSource)
+        Write-Output ("ARENA_SUBMIT_BUTTON_NAME=" + $sendButtonName)
+        Write-Output ("ARENA_SUBMIT_BUTTON_AUTOMATION_ID=" + $sendButtonAutomationId)
+        Write-Output ("ARENA_SUBMIT_BUTTON_RECT=" + $sendButtonRectText)
+        Write-Output ("ARENA_SUBMIT_BUTTON_POINT=" + [int]$sendX + "," + [int]$sendY)
+        if ($sendX -gt 0 -and $sendY -gt 0) {
+            Save-StepShot '04-before-send-button-click'
+            Show-ClickPulse $sendX $sendY 'دکمه ارسال'
+            Left-Click $sendX $sendY
+            $sendClickUsed = $true
+            Write-Output 'ARENA_SUBMIT_SEND_BUTTON_CLICKED'
+            Start-Sleep -Milliseconds 5000
+            Save-StepShot '04-after-send-button-click'
+        }
+    }
+    Write-Output ("ARENA_SUBMIT_SEND_BUTTON_USED=" + [bool]$sendClickUsed)
 
     $focusedAfterSubmit = [System.Windows.Automation.AutomationElement]::FocusedElement
     $focusSafeAfterSubmit = ($null -ne $focusedAfterSubmit) -and -not (Test-Omnibox $focusedAfterSubmit $winRect.Top)
@@ -958,7 +1071,9 @@ if ($submitReady) {
     Write-Output ("ARENA_SUBMIT_REMAINING_OFFSET_FINAL=" + $remainingOffsetFinal)
     Write-Output ("ARENA_SUBMIT_PROBE_REMAINS_FINAL=" + [bool]$probeRemainsAfterSubmit)
     Write-Output ("ARENA_SUBMIT_FOCUSED_COMPOSER_CLEARED=" + [bool]$focusedComposerCleared)
-    $sent = $enterOk -and -not $probeRemainsAfterSubmit -and ($messageVisible -or $placeholderReturned -or $focusedComposerCleared)
+    $submissionActionOk = $enterOk -or $fallbackOk -or $sendClickUsed
+    Write-Output ("ARENA_SUBMIT_ANY_ACTION_OK=" + [bool]$submissionActionOk)
+    $sent = $submissionActionOk -and -not $probeRemainsAfterSubmit -and ($messageVisible -or $placeholderReturned -or $focusedComposerCleared)
 } else {
     if (-not $textConfirmed) { Write-Output 'ARENA_SUBMIT_BLOCKED_TYPING_UNVERIFIED' }
     if (-not $submitFocusSafe) { Write-Output 'ARENA_SUBMIT_BLOCKED_UNSAFE_FOCUS' }
@@ -1285,13 +1400,13 @@ function hardenArenaTyping(source: string): string {
       "    Write-Output 'ARENA_BROWSER_FG'\n    Save-StepShot '01-browser-foreground'\n",
     );
   }
-  // Bridge 17: بلوک ارسال در همه نسخه‌های قبلی بدون اتکا به متن comment تعویض می‌شود.
-  // این کار نسخه فعال D1 را نیز که Bridge 16 در marker و Bridge 5 در بدنه دارد واقعاً ارتقا می‌دهد.
+  // Bridge 18: بلوک ارسال در همه نسخه‌های قبلی بدون اتکا به متن comment تعویض می‌شود.
+  // این کار نسخه فعال D1 را نیز که Bridge 17 در marker و Bridge 5 در بدنه دارد واقعاً ارتقا می‌دهد.
   const submitEndAnchor = "\nif ($sent) { Write-Output 'ARENA_SENT_VERIFIED' }";
   const submitStart = source.indexOf("$sent = $false");
   const submitEnd = source.indexOf(submitEndAnchor, submitStart);
   if (submitStart < 0 || submitEnd < 0) {
-    throw new AppError("بخش ارسال و تأیید نهایی Arena برای ارتقای Bridge 17 پیدا نشد.", {
+    throw new AppError("بخش ارسال و تأیید نهایی Arena برای ارتقای Bridge 18 پیدا نشد.", {
       status: 409,
       code: "arena_submit_upgrade_failed",
     });
@@ -1543,7 +1658,7 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
 }
 
 
-/** ارتقای درجا از Bridge 1 تا 16؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+/** ارتقای درجا از Bridge 1 تا 17؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
 function upgradeLegacyBridge(source: string, oldMarker: string): string {
   const bridgeStart = source.indexOf(oldMarker);
   const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
@@ -1586,6 +1701,7 @@ export function buildArenaJobFile(options: {
     return source.endsWith("\n") ? source : `${source}\n`;
   }
   if (
+    source.includes(BRIDGE_17_MARKER) ||
     source.includes(BRIDGE_16_MARKER) ||
     source.includes(BRIDGE_15_MARKER) ||
     source.includes(BRIDGE_14_MARKER) ||
@@ -1603,9 +1719,11 @@ export function buildArenaJobFile(options: {
     source.includes(BRIDGE_2_MARKER) ||
     source.includes(LEGACY_BRIDGE_MARKER)
   ) {
-    const oldMarker = source.includes(BRIDGE_16_MARKER)
-      ? BRIDGE_16_MARKER
-      : source.includes(BRIDGE_15_MARKER)
+    const oldMarker = source.includes(BRIDGE_17_MARKER)
+      ? BRIDGE_17_MARKER
+      : source.includes(BRIDGE_16_MARKER)
+        ? BRIDGE_16_MARKER
+        : source.includes(BRIDGE_15_MARKER)
         ? BRIDGE_15_MARKER
         : source.includes(BRIDGE_14_MARKER)
         ? BRIDGE_14_MARKER
@@ -1644,7 +1762,7 @@ export function buildArenaJobFile(options: {
     throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 17 به‌صورت خودکار پشتیبانی می‌شوند.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 18 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 

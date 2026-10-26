@@ -230,6 +230,8 @@ function artifactStageMessage(stage: string | null, kind: string): string {
     "prompt-04-submit-refocused-verified": "تصویر composer پس از بازگرداندن فوکوس و تأیید مجدد پرامپت ثبت شد.",
     "prompt-04-after-enter-first": "تصویر وضعیت Arena پنج ثانیه پس از Enter اول ثبت شد.",
     "prompt-04-after-fallback-ctrl-enter": "تصویر وضعیت Arena پس از fallback کنترل‌شده Ctrl+Enter ثبت شد.",
+    "prompt-04-before-send-button-click": "تصویر شواهد باقی‌ماندن پرامپت پیش از کلیک کنترل‌شده دکمه ارسال ثبت شد.",
+    "prompt-04-after-send-button-click": "تصویر وضعیت Arena پس از کلیک کنترل‌شده دکمه ارسال ثبت شد.",
     "prompt-05-after-submit": "تصویر صفحه بلافاصله پس از ارسال پرامپت ثبت شد.",
     "prompt-05-submit-blocked": "به‌دلیل تأیید نشدن متن، ارسال انجام نشد و تصویر توقف امن ثبت شد.",
     "prompt-05-submit-unconfirmed": "Enter زده شد اما خروج متن از composer تأیید نشد؛ تصویر توقف امن ثبت شد.",
