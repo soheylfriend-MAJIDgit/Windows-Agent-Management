@@ -253,6 +253,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -268,6 +269,9 @@ MAX_COMMAND_SECONDS = ${maxCommandMinutes * 60}
 PROTOCOL_VERSION = 1
 MAX_PAYLOAD_BYTES = 1_000_000
 MAX_CAPTURE_CHARS = 2_000_000
+MAX_ARTIFACT_FILES = 250
+MAX_ARTIFACT_BYTES = 100_000_000
+MAX_ARTIFACT_FILE_BYTES = 25_000_000
 COMMAND_PATH = os.path.join(FOLDER, "COMMAND.json")
 PAYLOAD_PATH = os.path.join(FOLDER, "PAYLOAD.py")
 CONTROL_PATH = os.path.join(FOLDER, "CONTROL.txt")
@@ -412,6 +416,47 @@ def validate_command(command, payload_bytes, last_revision):
     return command_id, revision, min(requested_timeout, MAX_COMMAND_SECONDS), actual_hash
 
 
+def publish_runtime_artifacts(run_dir, safe_id):
+    source_root = os.path.join(run_dir, "artifacts")
+    destination_root = os.path.join(ARTIFACTS_DIR, safe_id)
+    manifest = []
+    if not os.path.isdir(source_root):
+        return manifest
+    os.makedirs(destination_root, exist_ok=True)
+    source_real = os.path.realpath(source_root)
+    total_bytes = 0
+    for current, directories, files in os.walk(source_root, followlinks=False):
+        directories[:] = [name for name in sorted(directories) if not os.path.islink(os.path.join(current, name))]
+        for name in sorted(files):
+            if len(manifest) >= MAX_ARTIFACT_FILES:
+                raise RuntimeError("تعداد artifactهای payload از حد مجاز بیشتر است")
+            source = os.path.join(current, name)
+            if os.path.islink(source):
+                continue
+            source_resolved = os.path.realpath(source)
+            try:
+                if os.path.commonpath([source_real, source_resolved]) != source_real:
+                    raise RuntimeError("مسیر artifact از workspace فرمان خارج شده است")
+            except ValueError as exc:
+                raise RuntimeError("مسیر artifact معتبر نیست") from exc
+            relative = os.path.relpath(source, source_root)
+            size = os.path.getsize(source)
+            if size > MAX_ARTIFACT_FILE_BYTES:
+                raise RuntimeError("یک artifact از حد ۲۵ مگابایت بزرگ‌تر است: " + relative)
+            total_bytes += size
+            if total_bytes > MAX_ARTIFACT_BYTES:
+                raise RuntimeError("مجموع artifactهای فرمان از حد ۱۰۰ مگابایت بیشتر است")
+            destination = os.path.join(destination_root, relative)
+            os.makedirs(os.path.dirname(destination), exist_ok=True)
+            shutil.copy2(source, destination)
+            digest = hashlib.sha256()
+            with open(destination, "rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            manifest.append({"path": relative.replace(os.sep, "/"), "bytes": size, "sha256": digest.hexdigest()})
+    return manifest
+
+
 def run_payload(command, payload_bytes, command_id, revision, timeout_seconds, payload_hash):
     safe_id = re.sub(r"[^A-Za-z0-9._-]", "_", command_id)
     run_dir = os.path.join(RUNTIME_ROOT, safe_id)
@@ -466,6 +511,15 @@ def run_payload(command, payload_bytes, command_id, revision, timeout_seconds, p
             exit_code = process.wait(timeout=5)
     stdout_text = safe_capture(stdout_file)
     stderr_text = safe_capture(stderr_file)
+    artifact_manifest = []
+    artifact_error = None
+    try:
+        artifact_manifest = publish_runtime_artifacts(run_dir, safe_id)
+    except Exception as exc:
+        artifact_error = f"{type(exc).__name__}: {exc}"
+        stderr_text = (stderr_text.rstrip() + "\\nDRIVE_CONTROL_ARTIFACT_ERROR: " + artifact_error + "\\n").lstrip("\\n")
+        if exit_code == 0 and not stopped and not timed_out:
+            exit_code = 74
     atomic_write(STDOUT_PATH, stdout_text or "[no stdout]\\n")
     atomic_write(STDERR_PATH, stderr_text or "[no stderr]\\n")
     final_status = "stopped" if stopped else "timeout" if timed_out else "completed" if exit_code == 0 else "failed"
@@ -482,7 +536,9 @@ def run_payload(command, payload_bytes, command_id, revision, timeout_seconds, p
         "payloadSha256": payload_hash,
         "stdoutChars": len(stdout_text),
         "stderrChars": len(stderr_text),
-        "artifactsDirectory": "artifacts",
+        "artifactsDirectory": "artifacts/" + safe_id,
+        "artifacts": artifact_manifest,
+        "artifactError": artifact_error,
     }
     write_json(RESULT_PATH, result)
     status("waiting" if not stopped else "stopped", "نتیجه فرمان ثبت شد." if not stopped else "فرمان با stop متوقف شد.", command_id, lastResult=result)
