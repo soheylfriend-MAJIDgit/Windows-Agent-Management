@@ -3,7 +3,7 @@ import { ARENA_JOB_NAME, buildArenaJobFile } from "./arena-job";
 import { getAutomation, requestAutomationRun, saveAutomationVersion } from "./automations";
 import { findOnlineCommandAgent } from "./commands";
 
-export type ServiceSlug = "close-folders" | "arena-batch" | "director-monitor";
+export type ServiceSlug = "close-folders" | "arena-batch" | "director-monitor" | "drive-control";
 
 export interface ServiceDefinition {
   slug: ServiceSlug;
@@ -34,6 +34,33 @@ export const SERVICE_CATALOG: ServiceDefinition[] = [
       {
         name: "confirmed",
         label: "تأیید می‌کنم پنجره‌های پوشه بسته شوند",
+        type: "checkbox",
+        required: true,
+        defaultValue: false,
+      },
+    ],
+  },
+  {
+    slug: "drive-control",
+    title: "پل کنترل مستقیم Google Drive",
+    summary: "فرمان‌های نسخه‌دار پوشه اختصاصی Drive را دریافت، در workspace جدا اجرا و نتیجه را دوباره در Drive و D1 ثبت می‌کند.",
+    category: "کنترل ویندوز",
+    caution: "این سرویس می‌تواند PAYLOAD.py را اجرا کند. فقط پوشه اختصاصی و فرمان‌های دارای hash، انقضا و شناسه یکتا پذیرفته می‌شوند؛ فایل پایه هیچ Agentی تغییر نمی‌کند.",
+    fields: [
+      {
+        name: "folderPath",
+        label: "مسیر mirror پوشه اختصاصی Drive در ویندوز",
+        type: "text",
+        required: true,
+        defaultValue: "C:\\Users\\alibatel\\My Drive\\Windows-Agent-DB\\Wndows-Agent-Management",
+        helper: "نسخه آنلاین Google Drive منبع فرمان است؛ این مسیر فقط mirror همگام‌شده Google Drive Desktop است.",
+      },
+      { name: "pollSeconds", label: "فاصله بررسی تغییرها (ثانیه)", type: "number", required: true, min: 3, max: 60, defaultValue: 5 },
+      { name: "maxDurationHours", label: "مدت فعال‌بودن پل (ساعت)", type: "number", required: true, min: 1, max: 168, defaultValue: 168 },
+      { name: "maxCommandMinutes", label: "حداکثر زمان هر فرمان (دقیقه)", type: "number", required: true, min: 1, max: 120, defaultValue: 20 },
+      {
+        name: "confirmed",
+        label: "می‌پذیرم PAYLOAD.py این پوشه با کنترل hash و انقضا در workspace جدا اجرا شود",
         type: "checkbox",
         required: true,
         defaultValue: false,
@@ -213,6 +240,338 @@ function withAgentOutputProtocol(prompt: string, includeNextPrompt: boolean, nex
 
 export function closeFoldersSource(): string {
   return `# generated-management-service: close-folders\nimport subprocess\n\nSCRIPT = r'''\n$closed = 0\n$shell = New-Object -ComObject Shell.Application\n$windows = @($shell.Windows())\nforeach ($window in $windows) {\n    try {\n        $path = [string]$window.FullName\n        if ([System.IO.Path]::GetFileName($path) -ieq 'explorer.exe' -and $window.Document.Folder) {\n            $window.Quit()\n            $closed++\n        }\n    } catch {}\n}\nWrite-Output (\"SERVICE_FOLDERS_CLOSED=\" + $closed)\n'''\n\nresult = subprocess.run(\n    [\"powershell.exe\", \"-NoProfile\", \"-NonInteractive\", \"-ExecutionPolicy\", \"Bypass\", \"-Command\", SCRIPT],\n    capture_output=True, text=True, encoding=\"utf-8\", errors=\"replace\", timeout=60,\n    creationflags=getattr(subprocess, \"CREATE_NO_WINDOW\", 0),\n)\nprint(result.stdout.strip())\nif result.returncode != 0:\n    raise SystemExit(result.returncode)\nprint(\"SERVICE_COMPLETED: پنجره‌های پوشه بسته شدند\")\n`;
+}
+
+export function driveControlSource(
+  folderPath: string,
+  pollSeconds: number,
+  maxDurationHours: number,
+  maxCommandMinutes: number,
+): string {
+  return `# generated-management-service: drive-control-v1
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import traceback
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+FOLDER = ${pythonString(folderPath)}
+POLL_SECONDS = ${pollSeconds}
+MAX_DURATION_SECONDS = ${maxDurationHours * 3600}
+MAX_COMMAND_SECONDS = ${maxCommandMinutes * 60}
+PROTOCOL_VERSION = 1
+MAX_PAYLOAD_BYTES = 1_000_000
+MAX_CAPTURE_CHARS = 2_000_000
+COMMAND_PATH = os.path.join(FOLDER, "COMMAND.json")
+PAYLOAD_PATH = os.path.join(FOLDER, "PAYLOAD.py")
+CONTROL_PATH = os.path.join(FOLDER, "CONTROL.txt")
+STATUS_PATH = os.path.join(FOLDER, "STATUS.json")
+RESULT_PATH = os.path.join(FOLDER, "RESULT.json")
+STDOUT_PATH = os.path.join(FOLDER, "STDOUT.txt")
+STDERR_PATH = os.path.join(FOLDER, "STDERR.txt")
+ARTIFACTS_DIR = os.path.join(FOLDER, "artifacts")
+RUNTIME_ROOT = os.path.join(os.environ.get("LOCALAPPDATA", FOLDER), "Windows-Agent", "drive-control-runtime")
+
+
+def utc_now():
+    return datetime.now(timezone.utc)
+
+
+def iso_now():
+    return utc_now().isoformat().replace("+00:00", "Z")
+
+
+def parse_time(value):
+    if not isinstance(value, str):
+        raise ValueError("timestamp must be a string")
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def atomic_write(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temp = path + ".tmp"
+    with open(temp, "w", encoding="utf-8", newline="\\n") as handle:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp, path)
+
+
+def write_json(path, payload):
+    atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\\n")
+
+
+def status(state, message, command_id=None, **extra):
+    payload = {
+        "protocolVersion": PROTOCOL_VERSION,
+        "controllerState": state,
+        "commandId": command_id,
+        "updatedAt": iso_now(),
+        "message": message,
+        **extra,
+    }
+    write_json(STATUS_PATH, payload)
+    print("DRIVE_CONTROL_STATUS: " + json.dumps(payload, ensure_ascii=False), flush=True)
+
+
+def read_stable(path, binary=False):
+    mode = "rb" if binary else "r"
+    kwargs = {} if binary else {"encoding": "utf-8-sig"}
+    first_stat = os.stat(path)
+    with open(path, mode, **kwargs) as handle:
+        first = handle.read()
+    time.sleep(1)
+    second_stat = os.stat(path)
+    with open(path, mode, **kwargs) as handle:
+        second = handle.read()
+    if first_stat.st_size != second_stat.st_size or first_stat.st_mtime_ns != second_stat.st_mtime_ns or first != second:
+        raise RuntimeError("فایل هنوز در حال همگام‌سازی است")
+    return second
+
+
+def read_control():
+    try:
+        value = read_stable(CONTROL_PATH).strip().lower()
+    except (FileNotFoundError, OSError, RuntimeError):
+        return "pause"
+    return value if value in {"play", "pause", "stop"} else "pause"
+
+
+def network_reachable():
+    try:
+        request = urllib.request.Request(
+            "https://drive.google.com/generate_204",
+            method="HEAD",
+            headers={"User-Agent": "Windows-Agent/drive-control"},
+        )
+        with urllib.request.urlopen(request, timeout=12) as response:
+            response.read(1)
+        return True
+    except urllib.error.HTTPError:
+        return True
+    except Exception:
+        return False
+
+
+def previous_result_state():
+    try:
+        payload = json.loads(read_stable(RESULT_PATH))
+        command_id = str(payload.get("commandId") or "")
+        revision = payload.get("revision")
+        return command_id, revision if isinstance(revision, int) else -1
+    except Exception:
+        return "", -1
+
+
+def safe_capture(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            value = handle.read(MAX_CAPTURE_CHARS + 1)
+        if len(value) > MAX_CAPTURE_CHARS:
+            return value[:MAX_CAPTURE_CHARS] + "\\n[output truncated by drive controller]\\n"
+        return value
+    except FileNotFoundError:
+        return ""
+
+
+def validate_command(command, payload_bytes, last_revision):
+    if command.get("protocolVersion") != PROTOCOL_VERSION:
+        raise ValueError("protocolVersion پشتیبانی نمی‌شود")
+    if command.get("state") != "ready":
+        return None
+    command_id = command.get("commandId")
+    if not isinstance(command_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{5,79}", command_id):
+        raise ValueError("commandId معتبر نیست")
+    revision = command.get("revision")
+    if not isinstance(revision, int) or revision <= last_revision:
+        raise ValueError("revision باید عدد صحیح صعودی باشد")
+    if command.get("action") != "run_python" or command.get("payloadFile") != "PAYLOAD.py":
+        raise ValueError("فقط action=run_python و PAYLOAD.py مجاز است")
+    issued = parse_time(command.get("issuedAt"))
+    expires = parse_time(command.get("expiresAt"))
+    now = utc_now()
+    if issued > now.replace(microsecond=0) and (issued - now).total_seconds() > 300:
+        raise ValueError("زمان صدور فرمان بیش از پنج دقیقه در آینده است")
+    if expires <= now:
+        raise ValueError("فرمان منقضی شده است")
+    if (expires - issued).total_seconds() > 86400:
+        raise ValueError("اعتبار هر فرمان حداکثر ۲۴ ساعت است")
+    expected_hash = command.get("payloadSha256")
+    actual_hash = hashlib.sha256(payload_bytes).hexdigest()
+    if not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_hash) or expected_hash != actual_hash:
+        raise ValueError("SHA-256 فایل PAYLOAD.py با COMMAND.json تطبیق ندارد")
+    requested_timeout = command.get("timeoutSeconds", MAX_COMMAND_SECONDS)
+    if not isinstance(requested_timeout, int) or requested_timeout < 10:
+        raise ValueError("timeoutSeconds معتبر نیست")
+    return command_id, revision, min(requested_timeout, MAX_COMMAND_SECONDS), actual_hash
+
+
+def run_payload(command, payload_bytes, command_id, revision, timeout_seconds, payload_hash):
+    safe_id = re.sub(r"[^A-Za-z0-9._-]", "_", command_id)
+    run_dir = os.path.join(RUNTIME_ROOT, safe_id)
+    os.makedirs(run_dir, exist_ok=True)
+    os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+    runtime_payload = os.path.join(run_dir, "PAYLOAD.py")
+    with open(runtime_payload, "wb") as handle:
+        handle.write(payload_bytes)
+    stdout_file = os.path.join(run_dir, "stdout.txt")
+    stderr_file = os.path.join(run_dir, "stderr.txt")
+    started_at = iso_now()
+    status("running", "فرمان در workspace جدا در حال اجرا است.", command_id, revision=revision, payloadSha256=payload_hash)
+    print(f"DRIVE_CONTROL_COMMAND_STARTED: id={command_id} revision={revision} timeout={timeout_seconds}", flush=True)
+    env = os.environ.copy()
+    env.update({
+        "DRIVE_CONTROL_FOLDER": FOLDER,
+        "DRIVE_CONTROL_COMMAND_ID": command_id,
+        "DRIVE_CONTROL_REVISION": str(revision),
+        "DRIVE_CONTROL_ARTIFACTS_DIR": ARTIFACTS_DIR,
+    })
+    timed_out = False
+    stopped = False
+    with open(stdout_file, "w", encoding="utf-8", errors="replace") as stdout_handle, open(stderr_file, "w", encoding="utf-8", errors="replace") as stderr_handle:
+        process = subprocess.Popen(
+            [sys.executable, "-u", runtime_payload],
+            cwd=run_dir,
+            env=env,
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        deadline = time.monotonic() + timeout_seconds
+        heartbeat_at = 0.0
+        while process.poll() is None:
+            now_mono = time.monotonic()
+            if read_control() == "stop":
+                stopped = True
+                process.terminate()
+                break
+            if now_mono >= deadline:
+                timed_out = True
+                process.terminate()
+                break
+            if now_mono >= heartbeat_at:
+                print(f"DRIVE_CONTROL_COMMAND_HEARTBEAT: id={command_id} pid={process.pid}", flush=True)
+                heartbeat_at = now_mono + 15
+            time.sleep(1)
+        try:
+            exit_code = process.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            exit_code = process.wait(timeout=5)
+    stdout_text = safe_capture(stdout_file)
+    stderr_text = safe_capture(stderr_file)
+    atomic_write(STDOUT_PATH, stdout_text or "[no stdout]\\n")
+    atomic_write(STDERR_PATH, stderr_text or "[no stderr]\\n")
+    final_status = "stopped" if stopped else "timeout" if timed_out else "completed" if exit_code == 0 else "failed"
+    result = {
+        "protocolVersion": PROTOCOL_VERSION,
+        "commandId": command_id,
+        "revision": revision,
+        "status": final_status,
+        "startedAt": started_at,
+        "finishedAt": iso_now(),
+        "exitCode": exit_code,
+        "timedOut": timed_out,
+        "stopped": stopped,
+        "payloadSha256": payload_hash,
+        "stdoutChars": len(stdout_text),
+        "stderrChars": len(stderr_text),
+        "artifactsDirectory": "artifacts",
+    }
+    write_json(RESULT_PATH, result)
+    status("waiting" if not stopped else "stopped", "نتیجه فرمان ثبت شد." if not stopped else "فرمان با stop متوقف شد.", command_id, lastResult=result)
+    print("DRIVE_CONTROL_COMMAND_RESULT: " + json.dumps(result, ensure_ascii=False), flush=True)
+    return stopped
+
+
+os.makedirs(FOLDER, exist_ok=True)
+os.makedirs(RUNTIME_ROOT, exist_ok=True)
+os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+last_command_id, last_revision = previous_result_state()
+processed = {last_command_id} if last_command_id else set()
+deadline = time.monotonic() + MAX_DURATION_SECONDS
+last_heartbeat = 0.0
+offline_announced = False
+status("paused", "پل آماده است؛ CONTROL.txt آنلاین را برای شروع روی play بگذارید.")
+print("DRIVE_CONTROL_READY: online Drive is authoritative; local folder is a synchronized mirror", flush=True)
+
+while time.monotonic() < deadline:
+    if not network_reachable():
+        if not offline_announced:
+            status("offline", "اینترنت یا Google Drive در دسترس نیست؛ هیچ فرمانی اجرا نمی‌شود.")
+            print("DRIVE_CONTROL_NETWORK_PAUSED", flush=True)
+            offline_announced = True
+        time.sleep(60)
+        continue
+    if offline_announced:
+        print("DRIVE_CONTROL_NETWORK_RESUMED", flush=True)
+        offline_announced = False
+    control = read_control()
+    if control == "stop":
+        status("stopped", "CONTROL.txt آنلاین روی stop قرار گرفت؛ پل خاتمه یافت.")
+        print("DRIVE_CONTROL_STOPPED", flush=True)
+        break
+    if control == "pause":
+        if time.monotonic() >= last_heartbeat:
+            status("paused", "CONTROL.txt روی pause است؛ هیچ فرمان تازه‌ای اجرا نمی‌شود.")
+            last_heartbeat = time.monotonic() + 30
+        time.sleep(POLL_SECONDS)
+        continue
+    try:
+        command_text = read_stable(COMMAND_PATH)
+        payload_bytes = read_stable(PAYLOAD_PATH, binary=True)
+        if len(payload_bytes) > MAX_PAYLOAD_BYTES:
+            raise ValueError("PAYLOAD.py بزرگ‌تر از یک مگابایت است")
+        command = json.loads(command_text)
+        if not isinstance(command, dict):
+            raise ValueError("COMMAND.json باید object باشد")
+        if command.get("state") != "ready":
+            if time.monotonic() >= last_heartbeat:
+                status("waiting", "فرمان ready آنلاین وجود ندارد.")
+                last_heartbeat = time.monotonic() + 30
+            time.sleep(POLL_SECONDS)
+            continue
+        command_id = str(command.get("commandId") or "")
+        if command_id in processed:
+            if time.monotonic() >= last_heartbeat:
+                status("waiting", "فرمان جاری قبلاً پردازش شده است.", command_id)
+                last_heartbeat = time.monotonic() + 30
+            time.sleep(POLL_SECONDS)
+            continue
+        validated = validate_command(command, payload_bytes, last_revision)
+        if validated is None:
+            time.sleep(POLL_SECONDS)
+            continue
+        command_id, revision, timeout_seconds, payload_hash = validated
+        # Receipt پیش از اجرا در Drive mirror نوشته می‌شود و هم‌زمان رویداد آن به D1 می‌رود.
+        status("accepted", "فرمان پایدار، تازه و دارای hash صحیح پذیرفته شد.", command_id, revision=revision, payloadSha256=payload_hash)
+        processed.add(command_id)
+        last_revision = revision
+        should_stop = run_payload(command, payload_bytes, command_id, revision, timeout_seconds, payload_hash)
+        if should_stop:
+            break
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError, OSError, RuntimeError, ValueError) as exc:
+        message = f"فرمان اجرا نشد: {type(exc).__name__}: {exc}"
+        status("rejected", message)
+        print("DRIVE_CONTROL_COMMAND_REJECTED: " + message, flush=True)
+        time.sleep(POLL_SECONDS)
+    except BaseException as exc:
+        message = f"خطای غیرمنتظره controller: {type(exc).__name__}: {exc}"
+        status("error", message, traceback=traceback.format_exc()[-4000:])
+        print("DRIVE_CONTROL_ERROR: " + message, flush=True)
+        time.sleep(POLL_SECONDS)
+else:
+    status("stopped", "مدت فعال‌بودن پل به پایان رسید.")
+    print("DRIVE_CONTROL_DURATION_FINISHED", flush=True)
+
+print("SERVICE_COMPLETED: پل کنترل مستقیم Drive خاتمه یافت", flush=True)
+`;
 }
 
 export function directorMonitorSource(url: string, durationMinutes: number, intervalSeconds: number, reopen: boolean): string {
@@ -413,6 +772,32 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
     if (!boolField(input, "confirmed")) throw new AppError("تأیید بستن پوشه‌ها الزامی است.", { status: 422, code: "service_confirmation_required" });
     source = closeFoldersSource();
     summary = "اجرای تعاملی بستن پنجره‌های پوشه";
+  } else if (service.slug === "drive-control") {
+    if (!boolField(input, "confirmed")) {
+      throw new AppError("تأیید اجرای payload پوشه اختصاصی Drive الزامی است.", {
+        status: 422,
+        code: "service_drive_control_confirmation_required",
+      });
+    }
+    const folderPath = typeof input.folderPath === "string" ? input.folderPath.trim() : "";
+    if (
+      folderPath.length < 10 || folderPath.length > 240 ||
+      !/^[A-Za-z]:\\/.test(folderPath) || folderPath.includes("..") ||
+      !folderPath.toLowerCase().endsWith("\\wndows-agent-management")
+    ) {
+      throw new AppError("مسیر پوشه اختصاصی Drive معتبر نیست یا به Wndows-Agent-Management ختم نمی‌شود.", {
+        status: 422,
+        code: "service_drive_control_path_invalid",
+      });
+    }
+    const pollSeconds = numberField(input, "pollSeconds", 3, 60);
+    const maxDurationHours = numberField(input, "maxDurationHours", 1, 168);
+    const maxCommandMinutes = numberField(input, "maxCommandMinutes", 1, 120);
+    source = driveControlSource(folderPath, pollSeconds, maxDurationHours, maxCommandMinutes);
+    timeoutSeconds = Math.min(604_800, maxDurationHours * 3600 + 300);
+    noProgressSeconds = 120;
+    requiredCapabilities = ["d1_automations"];
+    summary = `پل کنترل مستقیم پوشه Drive برای ${maxDurationHours} ساعت`;
   } else if (service.slug === "director-monitor") {
     const url = httpsUrl(input.url);
     const duration = numberField(input, "durationMinutes", 1, 55);
@@ -479,6 +864,13 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
       input.promptSourceMode === "next_file"
         ? "پایش تغییر پایدار NextPrompt.txt و جلوگیری از محتوای قدیمی، ناقص یا تکراری"
         : "اجرای ترتیبی فهرست دستی بدون استفاده از NextPrompt.txt",
+    ] : service.slug === "drive-control" ? [
+      "Google Drive آنلاین منبع ایجاد COMMAND.json و PAYLOAD.py است؛ مسیر محلی فقط mirror همگام‌شده است",
+      "هیچ فرمانی هنگام قطع اینترنت یا CONTROL=pause اجرا نمی‌شود",
+      "اعتبار commandId، revision، انقضا و SHA-256 پیش از هر اجرا بررسی می‌شود",
+      "هر payload در workspace جدا اجرا می‌شود و فایل پایه Agentها دست‌نخورده می‌ماند",
+      "STATUS.json، RESULT.json، STDOUT.txt و STDERR.txt پس از هر مرحله overwrite می‌شوند",
+      "رویدادهای receipt، heartbeat و نتیجه هم‌زمان در D1 ثبت می‌شوند",
     ] : undefined,
   });
   return { commandId: run.commandId, version: saved.version.version, service };
