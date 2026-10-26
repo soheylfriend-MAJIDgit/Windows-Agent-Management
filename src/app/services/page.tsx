@@ -10,7 +10,7 @@ import { ApiRequestError, postJson, useApi } from "@/hooks/useApi";
 interface ServiceField {
   name: string;
   label: string;
-  type: "url" | "number" | "textarea" | "checkbox";
+  type: "url" | "text" | "number" | "textarea" | "checkbox";
   required?: boolean;
   min?: number;
   max?: number;
@@ -37,6 +37,18 @@ interface ArenaSavedTarget {
 
 type InputState = Record<string, string | number | boolean>;
 type PromptInputMode = "cells" | "text";
+type PromptSourceMode = "manual" | "next_file";
+
+const AUTO_FIELD_NAMES = new Set([
+  "autoGoal",
+  "autoNextPromptInstruction",
+  "autoDetails",
+  "autoMaxIterations",
+  "nextPromptPath",
+  "nextPromptDriveUrl",
+]);
+
+const MANUAL_FIELD_NAMES = new Set(["prompts", "rounds"]);
 
 function defaults(service: ServiceDefinition): InputState {
   return Object.fromEntries(service.fields.map((field) => [field.name, field.defaultValue ?? (field.type === "checkbox" ? false : "")]));
@@ -97,6 +109,7 @@ export default function ServicesPage() {
   const notify = useToast();
   const [selected, setSelected] = useState<ServiceDefinition | null>(null);
   const [input, setInput] = useState<InputState>({});
+  const [promptSourceMode, setPromptSourceMode] = useState<PromptSourceMode>("manual");
   const [promptInputMode, setPromptInputMode] = useState<PromptInputMode>("cells");
   const [promptCells, setPromptCells] = useState<string[]>([""]);
   const [arenaTargetName, setArenaTargetName] = useState("");
@@ -107,8 +120,12 @@ export default function ServicesPage() {
 
   const services = useMemo(() => servicesApi.data?.services ?? [], [servicesApi.data]);
   const promptCount = useMemo(
-    () => promptInputMode === "cells" ? promptCells.filter((item) => item.trim()).length : promptBlockCount(input.prompts),
-    [input.prompts, promptCells, promptInputMode],
+    () => promptSourceMode === "next_file"
+      ? Number(input.autoMaxIterations || 0)
+      : promptInputMode === "cells"
+        ? promptCells.filter((item) => item.trim()).length
+        : promptBlockCount(input.prompts),
+    [input.autoMaxIterations, input.prompts, promptCells, promptInputMode, promptSourceMode],
   );
 
   useEffect(() => {
@@ -123,6 +140,7 @@ export default function ServicesPage() {
   function openService(service: ServiceDefinition) {
     setSelected(service);
     setInput(defaults(service));
+    setPromptSourceMode("manual");
     setPromptInputMode("cells");
     setPromptCells([""]);
     setArenaTargetName("");
@@ -209,9 +227,12 @@ export default function ServicesPage() {
       const serviceInput = selected.slug === "arena-batch"
         ? {
             ...input,
-            promptItems: (promptInputMode === "cells" ? promptCells : parsePromptBlocks(input.prompts))
-              .map((item) => item.trim())
-              .filter(Boolean),
+            promptSourceMode,
+            promptItems: promptSourceMode === "manual"
+              ? (promptInputMode === "cells" ? promptCells : parsePromptBlocks(input.prompts))
+                .map((item) => item.trim())
+                .filter(Boolean)
+              : [],
           }
         : input;
       const result = await postJson<{ commandId: string; version: number }>(
@@ -285,9 +306,45 @@ export default function ServicesPage() {
                 <Banner tone="warn" title="پیش از اجرا">{selected.caution}</Banner>
                 <ErrorBanner error={submitError} />
 
+                {selected.slug === "arena-batch" ? (
+                  <section className="prompt-source-panel" aria-labelledby="prompt-source-title">
+                    <div className="service-field-heading">
+                      <div>
+                        <span className="field-label" id="prompt-source-title">منبع پرامپت‌ها</span>
+                        <span className="field-helper">حالت دستی فعلی بدون تغییر در دسترس است.</span>
+                      </div>
+                      <div className="prompt-source-toggle" role="group" aria-label="انتخاب منبع پرامپت‌ها">
+                        <button
+                          type="button"
+                          className={promptSourceMode === "manual" ? "active" : ""}
+                          aria-pressed={promptSourceMode === "manual"}
+                          onClick={() => setPromptSourceMode("manual")}
+                        >
+                          فهرست دستی
+                        </button>
+                        <button
+                          type="button"
+                          className={promptSourceMode === "next_file" ? "active" : ""}
+                          aria-pressed={promptSourceMode === "next_file"}
+                          onClick={() => setPromptSourceMode("next_file")}
+                        >
+                          فایل خودکار NextPrompt
+                        </button>
+                      </div>
+                    </div>
+                    {promptSourceMode === "next_file" ? (
+                      <div className="prompt-source-notice">
+                        Windows Agent پیش از شروع، محتوای قدیمی فایل را حذف می‌کند؛ سپس هر تغییر را تا سه خواندن پایدار بررسی، یک‌بار مصرف و دوباره از فایل پاک می‌کند. محتوای ناقص، بدون تغییر یا تکراری ارسال نمی‌شود.
+                      </div>
+                    ) : null}
+                  </section>
+                ) : null}
+
                 {selected.fields
                   .filter((field) => field.name !== "unrecoverableAcceptance" || Boolean(input.networkAcceptance))
                   .filter((field) => selected.slug !== "arena-batch" || !["completionTimeoutMinutes", "askOnCompletionTimeout", "showClickHighlights", "stopOnError"].includes(field.name))
+                  .filter((field) => selected.slug !== "arena-batch"
+                    || (promptSourceMode === "manual" ? !AUTO_FIELD_NAMES.has(field.name) : !MANUAL_FIELD_NAMES.has(field.name)))
                   .map((field) => (
                   <div className="field" key={field.name}>
                     {field.type === "checkbox" ? (
@@ -449,7 +506,7 @@ export default function ServicesPage() {
                             min={field.min}
                             max={field.max}
                             step={field.type === "number" ? 1 : undefined}
-                            dir={field.type === "url" ? "ltr" : undefined}
+                            dir={field.type === "url" || field.name === "nextPromptPath" ? "ltr" : undefined}
                             onChange={(event) => setInput((current) => ({
                               ...current,
                               [field.name]: field.type === "number" ? Number(event.target.value) : event.target.value,
@@ -463,6 +520,11 @@ export default function ServicesPage() {
                         {field.name === "prompts" ? (
                           <span className="field-helper" aria-live="polite">
                             {promptCount.toLocaleString("fa-IR")} پرامپت × {Number(input.rounds || 0).toLocaleString("fa-IR")} دور = {(promptCount * Number(input.rounds || 0)).toLocaleString("fa-IR")} اجرا
+                          </span>
+                        ) : null}
+                        {field.name === "autoMaxIterations" ? (
+                          <span className="field-helper" aria-live="polite">
+                            حداکثر {promptCount.toLocaleString("fa-IR")} اجرا با احتساب پرامپت اول؛ نوشتن [[STOP]] در فایل می‌تواند زودتر پایان دهد.
                           </span>
                         ) : null}
                       </>

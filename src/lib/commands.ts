@@ -237,6 +237,8 @@ function artifactStageMessage(stage: string | null, kind: string): string {
     "failure-screenshot": "تصویر صفحه در لحظه خطا ثبت شد.",
   };
   if (stage && messages[stage]) return messages[stage];
+  const nextPrompt = stage?.match(/^next-prompt-(\d+)-consumed$/);
+  if (nextPrompt) return `تصویر صفحه پس از مصرف امن پرامپت خودکار شماره ${Number(nextPrompt[1]).toLocaleString("fa-IR")} ثبت شد.`;
   const attempt = stage?.match(/^prompt-03-try(\d+)-(focused|after-input|verified|unverified)$/);
   if (attempt) {
     const action = attempt[2] === "focused"
@@ -272,6 +274,22 @@ function serviceProgressMessage(message: string): string | null {
   if (match) return `خلاصه اجرا: ${Number(match[1]).toLocaleString("fa-IR")} موفق، ${Number(match[2]).toLocaleString("fa-IR")} ناموفق، از مجموع ${Number(match[3]).toLocaleString("fa-IR")} پرامپت.`;
   match = message.match(/^SERVICE_COMPLETED: (\d+) پرامپت کامل شد$/);
   if (match) return `اجرای ترتیبی تمام شد؛ هر ${Number(match[1]).toLocaleString("fa-IR")} پرامپت کامل شدند.`;
+  match = message.match(/^SERVICE_NEXT_PROMPT_WAITING: (\d+)\/(\d+)$/);
+  if (match) return `پاسخ قبلی و تأیید Yes کامل شد؛ منتظر تغییر فایل برای پرامپت ${Number(match[1]).toLocaleString("fa-IR")} از سقف ${Number(match[2]).toLocaleString("fa-IR")} هستیم.`;
+  match = message.match(/^SERVICE_NEXT_PROMPT_STILL_WAITING: (\d+)\/(\d+)$/);
+  if (match) return `فایل NextPrompt هنوز پرامپت تازه‌ای برای مرحله ${Number(match[1]).toLocaleString("fa-IR")} ندارد؛ پایش ادامه دارد.`;
+  match = message.match(/^SERVICE_NEXT_PROMPT_CHANGE_DETECTED: (\d+)\/(\d+) hash=([a-f0-9]+) chars=(\d+)$/);
+  if (match) return `تغییر واقعی فایل برای پرامپت ${Number(match[1]).toLocaleString("fa-IR")} شناسایی شد؛ ${Number(match[4]).toLocaleString("fa-IR")} نویسه در حال بررسی پایداری است.`;
+  match = message.match(/^SERVICE_NEXT_PROMPT_CONSUMED: (\d+)\/(\d+) hash=([a-f0-9]+) chars=(\d+)$/);
+  if (match) return `پرامپت تازه شماره ${Number(match[1]).toLocaleString("fa-IR")} پس از سه خواندن پایدار مصرف و از فایل پاک شد؛ اکنون برای Arena آماده است.`;
+  match = message.match(/^SERVICE_NEXT_PROMPT_STOP: (\d+)\/(\d+)$/);
+  if (match) return "Agent همکار پایان کار را با [[STOP]] اعلام کرد؛ اجرای خودکار بدون ارسال متن کنترلی پایان می‌یابد.";
+  if (message.startsWith("SERVICE_NEXT_PROMPT_MODE_READY:")) return "حالت خودکار فایل NextPrompt فعال شد؛ Windows Agent از فایل همگام‌شده محلی استفاده می‌کند.";
+  if (message.startsWith("SERVICE_NEXT_PROMPT_STALE_REMOVED:")) return "محتوای قدیمی فایل NextPrompt حذف شد تا به‌اشتباه ارسال نشود.";
+  if (message.startsWith("SERVICE_NEXT_PROMPT_FILE_CLEARED:")) return "پرامپت مصرف‌شده از فایل NextPrompt پاک شد؛ فایل فقط برای مرحله بعد آماده است.";
+  if (message.startsWith("SERVICE_NEXT_PROMPT_FILE_READY:")) return "فایل NextPrompt خالی و پایدار است؛ پرامپت اول می‌تواند ارسال شود.";
+  if (message.startsWith("SERVICE_NEXT_PROMPT_DUPLICATE_IGNORED:")) return "محتوای قدیمی یا تکراری فایل شناسایی، نادیده گرفته و حذف شد؛ چیزی به Arena ارسال نشد.";
+  if (message.startsWith("SERVICE_NEXT_PROMPT_READ_RETRY:")) return "خواندن فایل همگام‌شده موقتاً کامل نبود؛ بدون ارسال، دوباره بررسی می‌شود.";
   if (message.startsWith("SERVICE_OCR_READY:")) return "ابزار بررسی دیداری آماده است؛ اجرای پرامپت‌ها آغاز می‌شود.";
   if (message.startsWith("SERVICE_BATCH_RESULT_YES:")) return "روی گزینه Yes پنجره نتیجه کلیک شد.";
   return null;

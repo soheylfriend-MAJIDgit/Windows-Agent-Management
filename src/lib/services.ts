@@ -14,7 +14,7 @@ export interface ServiceDefinition {
   fields: Array<{
     name: string;
     label: string;
-    type: "url" | "number" | "textarea" | "checkbox";
+    type: "url" | "text" | "number" | "textarea" | "checkbox";
     required?: boolean;
     min?: number;
     max?: number;
@@ -54,6 +54,45 @@ export const SERVICE_CATALOG: ServiceDefinition[] = [
         type: "textarea",
         required: true,
         helper: "هر پرامپت می‌تواند چندخطی باشد؛ پرامپت‌ها را با یک خط شامل --- جدا کنید. حداکثر ۲۰ مورد.",
+      },
+      {
+        name: "autoGoal",
+        label: "هدف پرامپت اول",
+        type: "textarea",
+        required: true,
+        helper: "کاری که Agent همکار باید از پرامپت اول آغاز کند.",
+      },
+      {
+        name: "autoNextPromptInstruction",
+        label: "دستور ساخت پرامپت بعدی",
+        type: "textarea",
+        required: true,
+        defaultValue: "در پایان هر مرحله، پرامپت کامل مرحله بعد را بساز و فایل NextPrompt.txt را با آن جایگزین و ذخیره کن. محتوای قبلی فایل را کاملاً حذف کن؛ هرگز متن جدید را به متن قبلی اضافه نکن. فایل باید فقط متن قابل‌ارسالِ پرامپت بعدی را داشته باشد و هیچ عنوان، توضیح، تاریخ یا قالب Markdown دیگری در آن نباشد. اگر کار واقعاً تمام شده است فقط [[STOP]] را در فایل بنویس.",
+        helper: "این متن داخل پرامپت اول قرار می‌گیرد؛ قرارداد جایگزینی کامل فایل را حذف نکنید.",
+      },
+      {
+        name: "autoDetails",
+        label: "جزئیات تکمیلی",
+        type: "textarea",
+        defaultValue: "",
+        helper: "محدودیت‌ها، معیار پذیرش یا اطلاعاتی که Agent همکار برای ادامه خودکار نیاز دارد.",
+      },
+      { name: "autoMaxIterations", label: "حداکثر تعداد اجرا (با احتساب پرامپت اول)", type: "number", required: true, min: 1, max: 20, defaultValue: 10 },
+      {
+        name: "nextPromptPath",
+        label: "مسیر همگام‌شده فایل در ویندوز",
+        type: "text",
+        required: true,
+        defaultValue: "C:\\Users\\alibatel\\My Drive\\Windows-Agent-DB\\NextPrompt.txt",
+        helper: "اگر پسوند نوشته نشود، .txt افزوده می‌شود. Windows Agent فقط همین فایل محلی همگام‌شده را می‌خواند.",
+      },
+      {
+        name: "nextPromptDriveUrl",
+        label: "لینک فایل NextPrompt در Google Drive",
+        type: "url",
+        required: true,
+        defaultValue: "https://drive.google.com/file/d/1KNLgiTPqwJeKOxXDUguRPV3cHofWRzFY/view",
+        helper: "این لینک داخل پرامپت اول به Agent همکار داده می‌شود؛ کلید یا اعتبارنامه‌ای به Windows Agent ارسال نمی‌شود.",
       },
       { name: "rounds", label: "تعداد دور", type: "number", required: true, min: 1, max: 20, defaultValue: 1 },
       { name: "delaySeconds", label: "فاصله بین دو پرامپت (ثانیه)", type: "number", required: true, min: 3, max: 300, defaultValue: 10 },
@@ -158,26 +197,90 @@ async function arenaBatchSource(input: Record<string, unknown>): Promise<{
   delay: number;
   completionTimeoutSeconds: number;
   askOnCompletionTimeout: boolean;
+  sourceMode: "manual" | "next_file";
 }> {
   const url = httpsUrl(input.url);
-  const prompts = Array.isArray(input.promptItems)
-    ? input.promptItems.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)
-    : typeof input.prompts === "string"
-      ? parsePromptBlocks(input.prompts)
-      : [];
-  if (!prompts.length || prompts.length > 20 || prompts.some((item) => item.length < 2 || item.length > 4000)) {
-    throw new AppError("بین ۱ تا ۲۰ پرامپت وارد کنید؛ هر پرامپت باید بین ۲ تا ۴۰۰۰ نویسه باشد.", {
-      status: 422,
-      code: "service_prompts_invalid",
-    });
-  }
-  const rounds = numberField(input, "rounds", 1, 20);
+  const sourceMode = input.promptSourceMode === "next_file" ? "next_file" : "manual";
   const delay = numberField(input, "delaySeconds", 3, 300);
   const completionTimeoutSeconds = numberField(input, "completionTimeoutMinutes", 5, 720) * 60;
   const askOnCompletionTimeout = boolField(input, "askOnCompletionTimeout", true);
   const showClickHighlights = boolField(input, "showClickHighlights", true);
-  const total = prompts.length * rounds;
-  if (total > 20) throw new AppError("مجموع پرامپت‌ها در همه دورها نباید بیشتر از ۲۰ باشد.", { status: 422, code: "service_batch_too_large" });
+
+  let prompts: string[];
+  let rounds: number;
+  let total: number;
+  let nextPromptPath = "";
+  let initialPrompt = "";
+
+  if (sourceMode === "manual") {
+    prompts = Array.isArray(input.promptItems)
+      ? input.promptItems.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)
+      : typeof input.prompts === "string"
+        ? parsePromptBlocks(input.prompts)
+        : [];
+    if (!prompts.length || prompts.length > 20 || prompts.some((item) => item.length < 2 || item.length > 4000)) {
+      throw new AppError("بین ۱ تا ۲۰ پرامپت وارد کنید؛ هر پرامپت باید بین ۲ تا ۴۰۰۰ نویسه باشد.", {
+        status: 422,
+        code: "service_prompts_invalid",
+      });
+    }
+    rounds = numberField(input, "rounds", 1, 20);
+    total = prompts.length * rounds;
+    if (total > 20) throw new AppError("مجموع پرامپت‌ها در همه دورها نباید بیشتر از ۲۰ باشد.", { status: 422, code: "service_batch_too_large" });
+  } else {
+    const goal = typeof input.autoGoal === "string" ? input.autoGoal.trim() : "";
+    const instruction = typeof input.autoNextPromptInstruction === "string" ? input.autoNextPromptInstruction.trim() : "";
+    const details = typeof input.autoDetails === "string" ? input.autoDetails.trim() : "";
+    if (goal.length < 2 || goal.length > 4000) {
+      throw new AppError("هدف پرامپت اول باید بین ۲ تا ۴۰۰۰ نویسه باشد.", { status: 422, code: "service_auto_goal_invalid" });
+    }
+    if (instruction.length < 20 || instruction.length > 4000) {
+      throw new AppError("دستور ساخت پرامپت بعدی باید بین ۲۰ تا ۴۰۰۰ نویسه باشد.", { status: 422, code: "service_auto_instruction_invalid" });
+    }
+    if (details.length > 4000) {
+      throw new AppError("جزئیات تکمیلی نباید بیشتر از ۴۰۰۰ نویسه باشد.", { status: 422, code: "service_auto_details_invalid" });
+    }
+    const rawPath = typeof input.nextPromptPath === "string" ? input.nextPromptPath.trim() : "";
+    if (!/^[A-Za-z]:\\[^\r\n\0]+$/.test(rawPath) || rawPath.split("\\").includes("..") || rawPath.length > 500) {
+      throw new AppError("مسیر فایل باید یک مسیر مطلق و امن ویندوز باشد؛ نمونه: C:\\Users\\...\\NextPrompt.txt", {
+        status: 422,
+        code: "service_next_prompt_path_invalid",
+      });
+    }
+    nextPromptPath = /\.txt$/i.test(rawPath) ? rawPath : `${rawPath}.txt`;
+    const driveUrl = httpsUrl(input.nextPromptDriveUrl);
+    if (new URL(driveUrl).hostname !== "drive.google.com") {
+      throw new AppError("لینک فایل پرامپت بعدی باید از drive.google.com باشد.", { status: 422, code: "service_next_prompt_drive_url_invalid" });
+    }
+    total = numberField(input, "autoMaxIterations", 1, 20);
+    rounds = 1;
+    initialPrompt = [
+      "هدف اصلی:",
+      goal,
+      "",
+      "قرارداد الزامی تولید پرامپت بعدی:",
+      instruction,
+      "",
+      "فایل تعیین‌شده برای پرامپت بعدی:",
+      `- لینک Google Drive: ${driveUrl}`,
+      `- نام فایل: NextPrompt.txt`,
+      "- فایل را با عملیات جایگزینی کامل (overwrite/replace) ذخیره کن؛ append ممنوع است.",
+      "- قبل از ذخیره، محتوای قبلی را حذف کن تا فایل همیشه فقط یک پرامپت داشته باشد.",
+      "- متن فایل باید مستقیم قابل ارسال به Arena باشد؛ عنوان، تاریخ، توضیح جانبی و حصار Markdown ننویس.",
+      "- اگر هیچ مرحله بعدی لازم نیست، فایل را فقط با [[STOP]] جایگزین کن.",
+      "",
+      details ? `جزئیات تکمیلی:\n${details}` : "",
+      "",
+      `این اجرای خودکار حداکثر ${total.toLocaleString("fa-IR")} مرحله با احتساب همین پرامپت اول دارد. پاسخ این مرحله را انجام بده و پیش از پایان، فایل مرحله بعد را مطابق قرارداد بالا جایگزین کن.`,
+    ].filter((line, index, all) => line || (index > 0 && all[index - 1])).join("\n").trim();
+    if (initialPrompt.length > 8000) {
+      throw new AppError("پرامپت اول ساخته‌شده بیش از ۸۰۰۰ نویسه است؛ هدف، دستور یا جزئیات را کوتاه‌تر کنید.", {
+        status: 422,
+        code: "service_auto_initial_prompt_too_long",
+      });
+    }
+    prompts = [initialPrompt];
+  }
 
   const arena = await getAutomation(ARENA_JOB_NAME.replace(/^job_/, "").replace(/\.py$/, ""), true);
   if (!arena.activeVersion?.sourceCode) throw new AppError("نسخه فعال Arena وجود ندارد.", { status: 409, code: "arena_version_missing" });
@@ -213,11 +316,11 @@ async function arenaBatchSource(input: Record<string, unknown>): Promise<{
   source = source.replace(openEveryTime, openOnce);
 
   const originalEntry = `if __name__ == "__main__":\n    main()\n`;
-  const batchEntry = `PROMPT_BATCH = ${JSON.stringify(prompts)}\nBATCH_ROUNDS = ${rounds}\nBATCH_DELAY_SECONDS = ${delay}\nBATCH_STOP_ON_ERROR = True\nBATCH_NETWORK_ACCEPTANCE = ${boolField(input, "networkAcceptance", false) ? "True" : "False"}\nBATCH_UNRECOVERABLE_ACCEPTANCE = ${boolField(input, "unrecoverableAcceptance", false) ? "True" : "False"}\nSERVICE_ARENA_SESSION_OPENED = False\n\ndef service_confirm_result_yes():\n    for attempt in range(1, DIALOG_CHECK_ATTEMPTS + 1):\n        wait_for_network()\n        wait_for_security_verification_clear(stage=\"before-result-confirmation\")\n        capture_named_step(\"result-confirmation-before\")\n        output = run_hidden_powershell(DIALOG_PS_SCRIPT, timeout=60)\n        if \"ARENA_DIALOG_CLICKED\" in output:\n            print(\"SERVICE_BATCH_RESULT_YES: نتیجه با گزینه Yes تأیید شد\")\n            time.sleep(DIALOG_CLICK_WAIT)\n            capture_named_step(\"result-confirmation-after\")\n            return\n        if \"ARENA_DIALOG_FOUND_BUT_NO_YES\" in output:\n            raise RuntimeError(\"پنجره پایان Arena دیده شد اما گزینه Yes قابل کلیک نبود\")\n        if attempt < DIALOG_CHECK_ATTEMPTS:\n            time.sleep(DIALOG_CHECK_GAP)\n    raise RuntimeError(\"پنجره پایان Arena برای تأیید Yes پیدا نشد\")\n\ndef batch_main():\n    global PROMPT_TEXT, PROMPT_REQUEST_ID, FAILURE_INTERVENTION_REPORTED_FOR\n    completed = 0\n    failures = 0\n    total = len(PROMPT_BATCH) * BATCH_ROUNDS\n    if not OCR_PYTHON or not OCR_HELPER or not os.path.isfile(OCR_PYTHON) or not os.path.isfile(OCR_HELPER):\n        raise RuntimeError(\"PaddleOCR محلی Windows Agent برای این سرویس آماده نیست\")\n    print(\"SERVICE_OCR_READY: مسیرهای PaddleOCR محلی تأیید شد\")\n    if BATCH_NETWORK_ACCEPTANCE:\n        print(\"SERVICE_ACCEPTANCE_DISCONNECT_NOW: اینترنت را اکنون قطع کنید؛ شروع تعامل Arena سی ثانیه دیگر است\")\n        time.sleep(30)\n    if BATCH_UNRECOVERABLE_ACCEPTANCE:\n        print(\"SERVICE_ACCEPTANCE_UNRECOVERABLE_WAIT: انتظار برای بازگشت شبکه بدون تعامل Arena\")\n        wait_for_network()\n        raise RuntimeError(\"SERVICE_ACCEPTANCE_UNRECOVERABLE: checkpoint پس از اتصال مجدد قابل ادامه نیست\")\n    for round_index in range(BATCH_ROUNDS):\n        for prompt_index, prompt_text in enumerate(PROMPT_BATCH):\n            item_number = round_index * len(PROMPT_BATCH) + prompt_index + 1\n            PROMPT_TEXT = prompt_text\n            PROMPT_REQUEST_ID = f\"service-batch-r{round_index + 1}-p{prompt_index + 1}\"\n            print(f\"SERVICE_BATCH_ITEM_STARTED: {item_number}/{total}\")\n            try:\n                main()\n            except Exception as exc:\n                failures += 1\n                print(f\"SERVICE_BATCH_ITEM_FAILED: {item_number}/{total}: {exc}\")\n                if BATCH_STOP_ON_ERROR:\n                    raise\n            else:\n                try:\n                    wait_for_network()\n                    service_confirm_result_yes()\n                except Exception as exc:\n                    detail = f\"تأیید نتیجه پرامپت {item_number}/{total} ناموفق بود: {exc}\"\n                    artifacts = save_failure_artifacts(detail + \"\\n\" + traceback.format_exc())\n                    print(\"SERVICE_HUMAN_INTERVENTION_REQUIRED: \" + json.dumps({\n                        \"reason\": \"arena_result_confirmation_failure\",\n                        \"requestId\": PROMPT_REQUEST_ID,\n                        \"message\": detail,\n                        \"artifactPaths\": artifacts,\n                        \"guidance\": \"اجرای ترتیبی بدون رفتن به پرامپت بعدی متوقف شد.\",\n                    }, ensure_ascii=False))\n                    FAILURE_INTERVENTION_REPORTED_FOR = PROMPT_REQUEST_ID\n                    send_telegram_status(\"نیازمند مداخله انسانی\", detail)\n                    raise\n                completed += 1\n                print(f\"SERVICE_BATCH_RESULT_CONFIRMED: {item_number}/{total}\")\n                print(f\"SERVICE_BATCH_ITEM_COMPLETED: {completed}/{total}\")\n            if item_number < total:\n                time.sleep(BATCH_DELAY_SECONDS)\n    print(f\"SERVICE_BATCH_SUMMARY: موفق={completed} ناموفق={failures} مجموع={total}\")\n    if failures:\n        raise RuntimeError(f\"{failures} مورد از {total} پرامپت ناموفق بود\")\n    print(f\"SERVICE_COMPLETED: {completed} پرامپت کامل شد\")\n\nif __name__ == "__main__":\n    try:\n        batch_main()\n    except BaseException as exc:\n        if FAILURE_INTERVENTION_REPORTED_FOR != PROMPT_REQUEST_ID:\n            detail = f\"اجرای ترتیبی متوقف شد: {type(exc).__name__}: {exc}\"\n            artifacts = save_failure_artifacts(detail + \"\\n\" + traceback.format_exc())\n            print(\"SERVICE_HUMAN_INTERVENTION_REQUIRED: \" + json.dumps({\n                \"reason\": \"sequential_service_failure\",\n                \"requestId\": PROMPT_REQUEST_ID,\n                \"message\": detail,\n                \"artifactPaths\": artifacts,\n                \"guidance\": \"فرآیند بدون رفتن به پرامپت بعدی متوقف شد.\",\n            }, ensure_ascii=False))\n            send_telegram_status(\"نیازمند مداخله انسانی\", detail)\n        raise\n`;
+  const batchEntry = `PROMPT_BATCH = ${JSON.stringify(prompts)}\nBATCH_ROUNDS = ${rounds}\nBATCH_MAX_ITEMS = ${total}\nBATCH_SOURCE_MODE = ${pythonString(sourceMode)}\nNEXT_PROMPT_FILE = ${pythonString(nextPromptPath)}\nNEXT_PROMPT_POLL_SECONDS = 3\nNEXT_PROMPT_STABLE_READS = 3\nNEXT_PROMPT_MAX_BYTES = 65536\nNEXT_PROMPT_MAX_CHARS = 4000\nNEXT_PROMPT_STOP_TOKEN = \"[[STOP]]\"\nBATCH_DELAY_SECONDS = ${delay}\nBATCH_STOP_ON_ERROR = True\nBATCH_NETWORK_ACCEPTANCE = ${boolField(input, "networkAcceptance", false) ? "True" : "False"}\nBATCH_UNRECOVERABLE_ACCEPTANCE = ${boolField(input, "unrecoverableAcceptance", false) ? "True" : "False"}\nSERVICE_ARENA_SESSION_OPENED = False\nNEXT_PROMPT_REJECTED_HASHES = set()\n\ndef service_read_next_prompt_file():\n    try:\n        before = os.stat(NEXT_PROMPT_FILE)\n        if before.st_size > NEXT_PROMPT_MAX_BYTES:\n            return None, None, \"too_large\"\n        with open(NEXT_PROMPT_FILE, \"rb\") as handle:\n            raw = handle.read(NEXT_PROMPT_MAX_BYTES + 1)\n        after = os.stat(NEXT_PROMPT_FILE)\n    except FileNotFoundError:\n        return None, None, \"missing\"\n    except OSError as exc:\n        return None, None, \"read_error:\" + str(exc)\n    if len(raw) > NEXT_PROMPT_MAX_BYTES:\n        return None, None, \"too_large\"\n    if before.st_size != after.st_size or getattr(before, \"st_mtime_ns\", 0) != getattr(after, \"st_mtime_ns\", 0):\n        return None, None, \"changed_while_reading\"\n    if not raw:\n        return \"\", hashlib.sha256(raw).hexdigest(), \"ok\"\n    text = None\n    for encoding in (\"utf-8-sig\", \"utf-16\", \"cp1256\"):\n        try:\n            text = raw.decode(encoding)\n            break\n        except UnicodeError:\n            continue\n    if text is None:\n        return None, None, \"decode_error\"\n    text = text.replace(chr(13) + chr(10), chr(10)).replace(chr(13), chr(10)).strip()\n    digest = hashlib.sha256(text.encode(\"utf-8\")).hexdigest()\n    return text, digest, \"ok\"\n\ndef service_clear_next_prompt_file(reason):\n    parent = os.path.dirname(NEXT_PROMPT_FILE)\n    if not parent or not os.path.isdir(parent):\n        raise RuntimeError(\"پوشه فایل همگام‌شده NextPrompt در ویندوز پیدا نشد: \" + parent)\n    previous_text, previous_hash, previous_status = service_read_next_prompt_file()\n    if previous_status == \"ok\" and previous_text:\n        NEXT_PROMPT_REJECTED_HASHES.add(previous_hash)\n    temp_path = NEXT_PROMPT_FILE + f\".management-{os.getpid()}.tmp\"\n    try:\n        with open(temp_path, \"wb\"):\n            pass\n        os.replace(temp_path, NEXT_PROMPT_FILE)\n    except OSError:\n        try:\n            if os.path.exists(temp_path):\n                os.remove(temp_path)\n            with open(NEXT_PROMPT_FILE, \"wb\"):\n                pass\n        except OSError as exc:\n            raise RuntimeError(\"پاک‌کردن امن فایل NextPrompt ممکن نشد: \" + str(exc)) from exc\n    check_text, _, check_status = service_read_next_prompt_file()\n    if check_status != \"ok\" or check_text != \"\":\n        raise RuntimeError(\"فایل NextPrompt پس از پاک‌سازی خالی نماند\")\n    print(f\"SERVICE_NEXT_PROMPT_FILE_CLEARED: {reason}\")\n\ndef service_prepare_next_prompt_file():\n    text, digest, status = service_read_next_prompt_file()\n    if status == \"ok\" and text:\n        NEXT_PROMPT_REJECTED_HASHES.add(digest)\n        print(\"SERVICE_NEXT_PROMPT_STALE_REMOVED: محتوای قدیمی پیش از شروع حذف شد\")\n    service_clear_next_prompt_file(\"startup\")\n    stable_empty = 0\n    deadline = time.monotonic() + 60\n    while stable_empty < 2:\n        time.sleep(NEXT_PROMPT_POLL_SECONDS)\n        text, digest, status = service_read_next_prompt_file()\n        if status == \"ok\" and text == \"\":\n            stable_empty += 1\n            continue\n        stable_empty = 0\n        if status == \"ok\" and text:\n            NEXT_PROMPT_REJECTED_HASHES.add(digest)\n            print(\"SERVICE_NEXT_PROMPT_STALE_REMOVED: همگام‌سازی محتوای قدیمی را برگرداند؛ دوباره حذف شد\")\n            service_clear_next_prompt_file(\"stale-sync-return\")\n        elif status == \"missing\":\n            service_clear_next_prompt_file(\"recreate-missing\")\n        if time.monotonic() >= deadline:\n            raise RuntimeError(\"فایل NextPrompt طی یک دقیقه به حالت خالی و پایدار نرسید\")\n    print(\"SERVICE_NEXT_PROMPT_FILE_READY: فایل خالی و پایدار است\")\n\ndef service_wait_for_next_prompt(item_number):\n    print(f\"SERVICE_NEXT_PROMPT_WAITING: {item_number}/{BATCH_MAX_ITEMS}\")\n    candidate_hash = None\n    stable_reads = 0\n    last_status = None\n    last_wait_report = time.monotonic()\n    while True:\n        wait_for_network()\n        text, digest, status = service_read_next_prompt_file()\n        if status == \"ok\" and text:\n            if digest in NEXT_PROMPT_REJECTED_HASHES:\n                if last_status != \"duplicate\":\n                    print(\"SERVICE_NEXT_PROMPT_DUPLICATE_IGNORED: محتوای قدیمی یا تکراری حذف شد\")\n                service_clear_next_prompt_file(\"duplicate\")\n                candidate_hash = None\n                stable_reads = 0\n                last_status = \"duplicate\"\n                continue\n            if digest != candidate_hash:\n                candidate_hash = digest\n                stable_reads = 1\n                print(f\"SERVICE_NEXT_PROMPT_CHANGE_DETECTED: {item_number}/{BATCH_MAX_ITEMS} hash={digest[:12]} chars={len(text)}\")\n            else:\n                stable_reads += 1\n            last_status = \"candidate\"\n            if stable_reads >= NEXT_PROMPT_STABLE_READS:\n                if len(text) < 2 or len(text) > NEXT_PROMPT_MAX_CHARS:\n                    raise RuntimeError(f\"محتوای پایدار NextPrompt باید بین ۲ تا {NEXT_PROMPT_MAX_CHARS} نویسه باشد\")\n                NEXT_PROMPT_REJECTED_HASHES.add(digest)\n                service_clear_next_prompt_file(f\"consumed-{item_number}\")\n                if text == NEXT_PROMPT_STOP_TOKEN:\n                    print(f\"SERVICE_NEXT_PROMPT_STOP: {item_number}/{BATCH_MAX_ITEMS}\")\n                    return None\n                print(f\"SERVICE_NEXT_PROMPT_CONSUMED: {item_number}/{BATCH_MAX_ITEMS} hash={digest[:12]} chars={len(text)}\")\n                capture_named_step(f\"next-prompt-{item_number}-consumed\")\n                return text\n        else:\n            if status not in (\"ok\", \"missing\", \"changed_while_reading\") and status != last_status:\n                print(\"SERVICE_NEXT_PROMPT_READ_RETRY: \" + status)\n            candidate_hash = None\n            stable_reads = 0\n            last_status = status\n        now = time.monotonic()\n        if now - last_wait_report >= 60:\n            print(f\"SERVICE_NEXT_PROMPT_STILL_WAITING: {item_number}/{BATCH_MAX_ITEMS}\")\n            last_wait_report = now\n        time.sleep(NEXT_PROMPT_POLL_SECONDS)\n\ndef service_confirm_result_yes():\n    for attempt in range(1, DIALOG_CHECK_ATTEMPTS + 1):\n        wait_for_network()\n        wait_for_security_verification_clear(stage=\"before-result-confirmation\")\n        capture_named_step(\"result-confirmation-before\")\n        output = run_hidden_powershell(DIALOG_PS_SCRIPT, timeout=60)\n        if \"ARENA_DIALOG_CLICKED\" in output:\n            print(\"SERVICE_BATCH_RESULT_YES: نتیجه با گزینه Yes تأیید شد\")\n            time.sleep(DIALOG_CLICK_WAIT)\n            capture_named_step(\"result-confirmation-after\")\n            return\n        if \"ARENA_DIALOG_FOUND_BUT_NO_YES\" in output:\n            raise RuntimeError(\"پنجره پایان Arena دیده شد اما گزینه Yes قابل کلیک نبود\")\n        if attempt < DIALOG_CHECK_ATTEMPTS:\n            time.sleep(DIALOG_CHECK_GAP)\n    raise RuntimeError(\"پنجره پایان Arena برای تأیید Yes پیدا نشد\")\n\ndef batch_main():\n    global PROMPT_TEXT, PROMPT_REQUEST_ID, FAILURE_INTERVENTION_REPORTED_FOR\n    completed = 0\n    failures = 0\n    total = BATCH_MAX_ITEMS if BATCH_SOURCE_MODE == \"next_file\" else len(PROMPT_BATCH) * BATCH_ROUNDS\n    if not OCR_PYTHON or not OCR_HELPER or not os.path.isfile(OCR_PYTHON) or not os.path.isfile(OCR_HELPER):\n        raise RuntimeError(\"PaddleOCR محلی Windows Agent برای این سرویس آماده نیست\")\n    print(\"SERVICE_OCR_READY: مسیرهای PaddleOCR محلی تأیید شد\")\n    if BATCH_SOURCE_MODE == \"next_file\":\n        print(\"SERVICE_NEXT_PROMPT_MODE_READY: پایش فایل همگام‌شده فعال شد\")\n        service_prepare_next_prompt_file()\n    if BATCH_NETWORK_ACCEPTANCE:\n        print(\"SERVICE_ACCEPTANCE_DISCONNECT_NOW: اینترنت را اکنون قطع کنید؛ شروع تعامل Arena سی ثانیه دیگر است\")\n        time.sleep(30)\n    if BATCH_UNRECOVERABLE_ACCEPTANCE:\n        print(\"SERVICE_ACCEPTANCE_UNRECOVERABLE_WAIT: انتظار برای بازگشت شبکه بدون تعامل Arena\")\n        wait_for_network()\n        raise RuntimeError(\"SERVICE_ACCEPTANCE_UNRECOVERABLE: checkpoint پس از اتصال مجدد قابل ادامه نیست\")\n    manual_items = [item for _round in range(BATCH_ROUNDS) for item in PROMPT_BATCH]\n    next_prompt = PROMPT_BATCH[0]\n    for item_number in range(1, total + 1):\n        if BATCH_SOURCE_MODE == \"next_file\":\n            prompt_text = next_prompt\n        else:\n            prompt_text = manual_items[item_number - 1]\n        PROMPT_TEXT = prompt_text\n        PROMPT_REQUEST_ID = f\"service-batch-p{item_number}\"\n        print(f\"SERVICE_BATCH_ITEM_STARTED: {item_number}/{total}\")\n        try:\n            main()\n        except Exception as exc:\n            failures += 1\n            print(f\"SERVICE_BATCH_ITEM_FAILED: {item_number}/{total}: {exc}\")\n            if BATCH_STOP_ON_ERROR:\n                raise\n        else:\n            try:\n                wait_for_network()\n                service_confirm_result_yes()\n            except Exception as exc:\n                detail = f\"تأیید نتیجه پرامپت {item_number}/{total} ناموفق بود: {exc}\"\n                artifacts = save_failure_artifacts(detail + chr(10) + traceback.format_exc())\n                print(\"SERVICE_HUMAN_INTERVENTION_REQUIRED: \" + json.dumps({\n                    \"reason\": \"arena_result_confirmation_failure\",\n                    \"requestId\": PROMPT_REQUEST_ID,\n                    \"message\": detail,\n                    \"artifactPaths\": artifacts,\n                    \"guidance\": \"اجرای ترتیبی بدون رفتن به پرامپت بعدی متوقف شد.\",\n                }, ensure_ascii=False))\n                FAILURE_INTERVENTION_REPORTED_FOR = PROMPT_REQUEST_ID\n                send_telegram_status(\"نیازمند مداخله انسانی\", detail)\n                raise\n            completed += 1\n            print(f\"SERVICE_BATCH_RESULT_CONFIRMED: {item_number}/{total}\")\n            print(f\"SERVICE_BATCH_ITEM_COMPLETED: {completed}/{total}\")\n        if item_number < total:\n            time.sleep(BATCH_DELAY_SECONDS)\n            if BATCH_SOURCE_MODE == \"next_file\":\n                PROMPT_REQUEST_ID = f\"service-batch-p{item_number + 1}\"\n                next_prompt = service_wait_for_next_prompt(item_number + 1)\n                if next_prompt is None:\n                    break\n    print(f\"SERVICE_BATCH_SUMMARY: موفق={completed} ناموفق={failures} مجموع={total}\")\n    if failures:\n        raise RuntimeError(f\"{failures} مورد از {total} پرامپت ناموفق بود\")\n    print(f\"SERVICE_COMPLETED: {completed} پرامپت کامل شد\")\n\nif __name__ == \"__main__\":\n    try:\n        batch_main()\n    except BaseException as exc:\n        if FAILURE_INTERVENTION_REPORTED_FOR != PROMPT_REQUEST_ID:\n            detail = f\"اجرای ترتیبی متوقف شد: {type(exc).__name__}: {exc}\"\n            artifacts = save_failure_artifacts(detail + chr(10) + traceback.format_exc())\n            print(\"SERVICE_HUMAN_INTERVENTION_REQUIRED: \" + json.dumps({\n                \"reason\": \"sequential_service_failure\",\n                \"requestId\": PROMPT_REQUEST_ID,\n                \"message\": detail,\n                \"artifactPaths\": artifacts,\n                \"guidance\": \"فرآیند بدون رفتن به پرامپت بعدی متوقف شد.\",\n            }, ensure_ascii=False))\n            send_telegram_status(\"نیازمند مداخله انسانی\", detail)\n        raise\n`;
   const entryIndex = source.lastIndexOf(originalEntry);
   if (entryIndex < 0) throw new AppError("نقطه شروع Arena برای سرویس ترتیبی پیدا نشد.", { status: 409, code: "service_arena_entry_missing" });
   source = source.slice(0, entryIndex) + batchEntry + source.slice(entryIndex + originalEntry.length);
-  return { source, total, delay, completionTimeoutSeconds, askOnCompletionTimeout };
+  return { source, total, delay, completionTimeoutSeconds, askOnCompletionTimeout, sourceMode };
 }
 
 async function automationIdFor(slug: string): Promise<string | undefined> {
@@ -275,8 +378,8 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
       });
     }
     source = batch.source;
-    timeoutSeconds = batch.askOnCompletionTimeout
-      ? 604_800 // در حالت سؤال، انتظار پاسخ یک‌ساعته job را خاتمه نمی‌دهد؛ سقف ایمنی فرمان هفت روز است.
+    timeoutSeconds = batch.askOnCompletionTimeout || batch.sourceMode === "next_file"
+      ? 604_800 // انتظار پاسخ یا فایل تازه job را خاتمه نمی‌دهد؛ سقف ایمنی فرمان هفت روز است.
       : Math.min(604_800, Math.max(900, batch.total * (batch.completionTimeoutSeconds + batch.delay + 300)));
     noProgressSeconds = Math.min(900, Math.max(180, Math.floor(batch.completionTimeoutSeconds / 4)));
     // این سرویس تاب‌آوری شبکه را داخل کد immutable خود اجرا می‌کند و آزمون زنده
@@ -285,7 +388,9 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
     requiredCapabilities = ["d1_automations", "arena_vision_ocr"];
     summary = acceptanceMode
       ? "آزمون پذیرش شبکه با یک پرامپت Arena"
-      : `اجرای ترتیبی ${batch.total} پرامپت Arena`;
+      : batch.sourceMode === "next_file"
+        ? `اجرای خودکار Arena از فایل NextPrompt تا سقف ${batch.total} مرحله`
+        : `اجرای ترتیبی ${batch.total} پرامپت Arena`;
   }
 
   // پیش از ساخت نسخه immutable مطمئن می‌شویم ایجنتی با همه قابلیت‌های لازم آنلاین است.
