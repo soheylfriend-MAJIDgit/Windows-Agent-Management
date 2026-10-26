@@ -217,6 +217,16 @@ function mapCommand(row: CommandRow): CommandView {
   };
 }
 
+function displayEventMessage(row: CommandEventRow): string {
+  if (row.stage === "network_paused") {
+    return "دسترسی Windows Agent به API مدیریت موقتاً ناموفق بود. این رخداد به‌تنهایی به معنی قطع اینترنت یا قطع Arena نیست؛ تایمر بی‌پیشرفتی تا پاسخ بعدی API متوقف می‌ماند.";
+  }
+  if (row.stage === "network_resumed") {
+    return "ارتباط Windows Agent با API مدیریت دوباره پاسخ داد. این پیام بازیابی مسیر Agent→API است، نه اثبات قطع و وصل اینترنت عمومی.";
+  }
+  return row.message;
+}
+
 function mapEvent(row: CommandEventRow): CommandEventView {
   return {
     id: row.id,
@@ -224,7 +234,7 @@ function mapEvent(row: CommandEventRow): CommandEventView {
     seq: row.seq,
     stage: row.stage,
     level: row.level,
-    message: row.message,
+    message: displayEventMessage(row),
     data: parseObject(row.data),
     createdAt: row.created_at,
   };
@@ -451,6 +461,10 @@ export async function getCommandDetail(idValue: unknown, enforceOwnerKeyId?: str
     reasons.push("اتوماسیون Arena برای مداخله انسانی در checkpoint امن متوقف شده است.");
   }
   if (eventRows.some((event) => event.level === "fatal")) reasons.push("رخداد بحرانی از Windows Agent گزارش شده است.");
+  const managementApiPauses = eventRows.filter((event) => event.stage === "network_paused");
+  if (managementApiPauses.length >= 3) {
+    reasons.push(`مسیر ارتباط Windows Agent با API مدیریت در این اجرا ناپایدار بوده است (${managementApiPauses.length} وقفه کوتاه)؛ این وضعیت لزوماً قطع اینترنت عمومی نیست.`);
+  }
   const operationalStages = new Set(["network_paused", "network_resumed", "cancel_requested"]);
   const unexpectedEvents = eventRows.filter(
     (event) => (event.level === "warning" || event.level === "error") && !operationalStages.has(event.stage),

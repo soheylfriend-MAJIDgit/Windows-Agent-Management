@@ -3,7 +3,8 @@ import { AppError } from "./errors";
 export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
-const BRIDGE_MARKER = "# management-arena-bridge: 9";
+const BRIDGE_MARKER = "# management-arena-bridge: 10";
+const BRIDGE_9_MARKER = "# management-arena-bridge: 9";
 const BRIDGE_8_MARKER = "# management-arena-bridge: 8";
 const BRIDGE_7_MARKER = "# management-arena-bridge: 7";
 const BRIDGE_6_MARKER = "# management-arena-bridge: 6";
@@ -162,7 +163,11 @@ def find_text_with_ocr(phrases, stage="scan"):
         if confidence < 0.45 or not isinstance(bounds, list) or len(bounds) != 4:
             continue
         for phrase in wanted:
-            if phrase in text or text in phrase:
+            # reverse containment فقط برای یک قطعه بلند و معنادار مجاز است.
+            # قبلاً OCR تک‌حرفی مثل «D» چون داخل عبارت انگلیسی وجود داشت، به‌اشتباه
+            # Security Verification تشخیص داده می‌شد و job برای همیشه pause می‌ماند.
+            meaningful_partial = len(text) >= 8 and text in phrase
+            if phrase in text or meaningful_partial:
                 left, top, right, bottom = [float(value) for value in bounds]
                 return {
                     "x": (left + right) / 2,
@@ -269,6 +274,8 @@ def wait_for_security_verification_clear(stage="security"):
         "message": "چالش ضدربات Arena دیده شد؛ مداخله انسانی لازم است.",
         "artifactPath": match.get("imagePath"),
         "detectedText": match.get("text"),
+        "matchedPhrase": match.get("matched"),
+        "detector": match.get("detector"),
     }
     print("SERVICE_HUMAN_INTERVENTION_REQUIRED: " + json.dumps(payload, ensure_ascii=False))
     while True:
@@ -355,7 +362,7 @@ def save_failure_artifacts(detail):
             fh.write(
                 "زمان: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " تهران\\n"
                 "موضوع: توقف امن اتوماسیون Arena و نیاز به مداخله انسانی\\n"
-                "نسخه برنامه: Arena Bridge 9\\n"
+                "نسخه برنامه: Arena Bridge 10\\n"
                 "شناسه درخواست: " + PROMPT_REQUEST_ID + "\\n"
                 "پرامپت: " + PROMPT_TEXT + "\\n\\n"
                 "جزئیات خطا:\\n" + str(detail)
@@ -1066,7 +1073,7 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
 }
 
 
-/** ارتقای درجا از Bridge 1 تا 8؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+/** ارتقای درجا از Bridge 1 تا 9؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
 function upgradeLegacyBridge(source: string, oldMarker: string): string {
   const bridgeStart = source.indexOf(oldMarker);
   const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
@@ -1109,6 +1116,7 @@ export function buildArenaJobFile(options: {
     return source.endsWith("\n") ? source : `${source}\n`;
   }
   if (
+    source.includes(BRIDGE_9_MARKER) ||
     source.includes(BRIDGE_8_MARKER) ||
     source.includes(BRIDGE_7_MARKER) ||
     source.includes(BRIDGE_6_MARKER) ||
@@ -1118,9 +1126,11 @@ export function buildArenaJobFile(options: {
     source.includes(BRIDGE_2_MARKER) ||
     source.includes(LEGACY_BRIDGE_MARKER)
   ) {
-    const oldMarker = source.includes(BRIDGE_8_MARKER)
-      ? BRIDGE_8_MARKER
-      : source.includes(BRIDGE_7_MARKER)
+    const oldMarker = source.includes(BRIDGE_9_MARKER)
+      ? BRIDGE_9_MARKER
+      : source.includes(BRIDGE_8_MARKER)
+        ? BRIDGE_8_MARKER
+        : source.includes(BRIDGE_7_MARKER)
         ? BRIDGE_7_MARKER
         : source.includes(BRIDGE_6_MARKER)
         ? BRIDGE_6_MARKER
@@ -1143,7 +1153,7 @@ export function buildArenaJobFile(options: {
     throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 9 به‌صورت خودکار پشتیبانی می‌شوند.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 10 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 
