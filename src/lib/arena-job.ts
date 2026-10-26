@@ -3,7 +3,8 @@ import { AppError } from "./errors";
 export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
-const BRIDGE_MARKER = "# management-arena-bridge: 14";
+const BRIDGE_MARKER = "# management-arena-bridge: 15";
+const BRIDGE_14_MARKER = "# management-arena-bridge: 14";
 const BRIDGE_13_MARKER = "# management-arena-bridge: 13";
 const BRIDGE_12_MARKER = "# management-arena-bridge: 12";
 const BRIDGE_11_MARKER = "# management-arena-bridge: 11";
@@ -120,6 +121,7 @@ def describe_arena_action(marker):
         ("ARENA_SUBMIT_PROBE_REMAINS_FINAL=", "باقی‌ماندن قطعه یکتا پس از پایان تلاش ارسال: "),
         ("ARENA_SUBMIT_FOCUSED_COMPOSER_CLEARED=", "خالی‌شدن composer در فوکوس و محدوده امن پس از ارسال: "),
         ("ARENA_VERIFY_EXPECTED_LENGTH=", "طول پرامپت مورد انتظار: "),
+        ("ARENA_VERIFY_MINIMUM_LENGTH=", "حداقل شاهد متنی لازم از پنجره UIA: "),
         ("ARENA_VERIFY_FOCUSED_LENGTH=", "طول متن خوانده‌شده از کادر فعال: "),
         ("ARENA_VERIFY_COMPOSER_LENGTH=", "طول متن قابل‌خواندن از composer: "),
         ("ARENA_VERIFY_COPIED_LENGTH=", "طول متن مستقل خوانده‌شده از Clipboard: "),
@@ -879,13 +881,14 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پی�
             if ($focusedCanonical.Contains($probe)) { $focusedProbeHit = $true }
             if ($composerCanonical.Contains($probe)) { $composerProbeHit = $true }
         }
-        # Chrome/Arena اکنون برای contenteditable بلند فقط حدود ۱۰۰ نویسه از پنجره
-        # قابل‌مشاهده را در UIA برمی‌گرداند. وجود probe دقیق ۳۲ نویسه‌ای، ورودی موفق
-        # و فوکوس امن شواهد مستقل‌اند؛ الزام ۴۰۰ نویسه false-negative می‌ساخت.
-        $minimumEvidenceLength = [Math]::Min(96, [Math]::Max(24, [int]($promptCanonical.Length * 0.03)))
+        # Chrome/Arena ممکن است برای contenteditable بلند فقط حدود ۶۵ نویسه از پنجره
+        # قابل‌مشاهده را در UIA برگرداند. probe دقیق ۳۲ نویسه‌ای، ورودی موفق و فوکوس
+        # امن شواهد مستقل‌اند؛ آستانه باید پایین‌تر از پنجره واقعی UIA بماند.
+        $minimumEvidenceLength = [Math]::Min(64, [Math]::Max(24, [int]($promptCanonical.Length * 0.02)))
         $okFocused = $focusSafeAfterInput -and $inputOk -and $focusedProbeHit -and ($focusedCanonical.Length -ge $minimumEvidenceLength)
         $okComposer = $focusSafeAfterInput -and $inputOk -and $composerProbeHit -and ($composerCanonical.Length -ge $minimumEvidenceLength)
         Write-Output ("ARENA_VERIFY_EXPECTED_LENGTH=" + $promptCanonical.Length)
+        Write-Output ("ARENA_VERIFY_MINIMUM_LENGTH=" + $minimumEvidenceLength)
         Write-Output ("ARENA_VERIFY_FOCUSED_LENGTH=" + $focusedCanonical.Length)
         Write-Output ("ARENA_VERIFY_COMPOSER_LENGTH=" + $composerCanonical.Length)
         Write-Output ("ARENA_VERIFY_FOCUSED_PROBE=" + [bool]$focusedProbeHit)
@@ -933,10 +936,10 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پی�
 
 /** Bridgeهای قبلی و فایل پایه را به موتور امن ورود متن و تصویربرداری Bridge 5 ارتقا می‌دهد. */
 function hardenArenaTyping(source: string): string {
-  // Bridge 13: نسخه جدید Arena در UIA فقط پنجره قابل‌مشاهده‌ای حدود ۱۰۰ نویسه
-  // برمی‌گرداند. آستانه قدیمی ۴۰۰ نویسه، با وجود حضور واقعی کل متن در composer،
-  // ارسال را مسدود می‌کرد. probe دقیق + فوکوس امن + موفقیت ورودی همچنان الزامی است.
-  const boundedEvidenceThreshold = "        $minimumEvidenceLength = [Math]::Min(96, [Math]::Max(24, [int]($promptCanonical.Length * 0.03)))\n";
+  // Bridge 15: contenteditable در اجرای واقعی برای پرامپت ۲۴۵۹ نویسه‌ای فقط ۶۵ نویسه
+  // از انتهای قابل‌مشاهده را به UIA داد. probe یکتای دقیق ۳۲ نویسه‌ای، فوکوس امن و
+  // موفقیت API همچنان اجباری‌اند؛ آستانه صرفاً با پنجره محدود UIA هماهنگ می‌شود.
+  const boundedEvidenceThreshold = "        $minimumEvidenceLength = [Math]::Min(64, [Math]::Max(24, [int]($promptCanonical.Length * 0.02)))\n";
   const evidenceThresholdPattern = /^[ \t]*\$minimumEvidenceLength\s*=.*(?:\r?\n|$)/m;
   if (evidenceThresholdPattern.test(source)) {
     source = source.replace(evidenceThresholdPattern, boundedEvidenceThreshold);
@@ -1101,10 +1104,21 @@ function hardenArenaTyping(source: string): string {
     source = `${source.slice(0, start)}${VERIFIED_PASTE_LOOP}${source.slice(end)}`;
   }
   if (!source.includes(boundedEvidenceThreshold)) {
-    throw new AppError("آستانه تأیید پرامپت بلند Arena به Bridge 13 ارتقا نیافت.", {
+    throw new AppError("آستانه تأیید پرامپت بلند Arena به Bridge 15 ارتقا نیافت.", {
       status: 409,
       code: "arena_bounded_evidence_upgrade_failed",
     });
+  }
+  const expectedLengthOutput = `        Write-Output ("ARENA_VERIFY_EXPECTED_LENGTH=" + $promptCanonical.Length)\n`;
+  const minimumLengthOutput = `        Write-Output ("ARENA_VERIFY_MINIMUM_LENGTH=" + $minimumEvidenceLength)\n`;
+  if (!source.includes(minimumLengthOutput)) {
+    if (!source.includes(expectedLengthOutput)) {
+      throw new AppError("محل ثبت آستانه تأیید UIA در Arena پیدا نشد.", {
+        status: 409,
+        code: "arena_evidence_diagnostic_upgrade_failed",
+      });
+    }
+    source = source.replace(expectedLengthOutput, expectedLengthOutput + minimumLengthOutput);
   }
 
   if (!source.includes("Save-StepShot '01-browser-foreground'")) {
@@ -1113,8 +1127,8 @@ function hardenArenaTyping(source: string): string {
       "    Write-Output 'ARENA_BROWSER_FG'\n    Save-StepShot '01-browser-foreground'\n",
     );
   }
-  // Bridge 14: بلوک ارسال در همه نسخه‌های قبلی بدون اتکا به متن comment تعویض می‌شود.
-  // این کار نسخه فعال D1 را نیز که Bridge 5/13 در بدنه دارد واقعاً ارتقا می‌دهد.
+  // Bridge 15: بلوک ارسال در همه نسخه‌های قبلی بدون اتکا به متن comment تعویض می‌شود.
+  // این کار نسخه فعال D1 را نیز که Bridge 14 در marker و Bridge 5 در بدنه دارد واقعاً ارتقا می‌دهد.
   const submitEndAnchor = "\nif ($sent) { Write-Output 'ARENA_SENT_VERIFIED' }";
   const submitStart = source.indexOf("$sent = $false");
   const submitEnd = source.indexOf(submitEndAnchor, submitStart);
@@ -1357,7 +1371,7 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
 }
 
 
-/** ارتقای درجا از Bridge 1 تا 13؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+/** ارتقای درجا از Bridge 1 تا 14؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
 function upgradeLegacyBridge(source: string, oldMarker: string): string {
   const bridgeStart = source.indexOf(oldMarker);
   const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
@@ -1400,6 +1414,7 @@ export function buildArenaJobFile(options: {
     return source.endsWith("\n") ? source : `${source}\n`;
   }
   if (
+    source.includes(BRIDGE_14_MARKER) ||
     source.includes(BRIDGE_13_MARKER) ||
     source.includes(BRIDGE_12_MARKER) ||
     source.includes(BRIDGE_11_MARKER) ||
@@ -1414,9 +1429,11 @@ export function buildArenaJobFile(options: {
     source.includes(BRIDGE_2_MARKER) ||
     source.includes(LEGACY_BRIDGE_MARKER)
   ) {
-    const oldMarker = source.includes(BRIDGE_13_MARKER)
-      ? BRIDGE_13_MARKER
-      : source.includes(BRIDGE_12_MARKER)
+    const oldMarker = source.includes(BRIDGE_14_MARKER)
+      ? BRIDGE_14_MARKER
+      : source.includes(BRIDGE_13_MARKER)
+        ? BRIDGE_13_MARKER
+        : source.includes(BRIDGE_12_MARKER)
         ? BRIDGE_12_MARKER
         : source.includes(BRIDGE_11_MARKER)
         ? BRIDGE_11_MARKER
@@ -1449,7 +1466,7 @@ export function buildArenaJobFile(options: {
     throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 14 به‌صورت خودکار پشتیبانی می‌شوند.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 15 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 
