@@ -4568,6 +4568,62 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
 .command-stop-confirm { flex: 1; justify-content: flex-start; flex-wrap: wrap; color: var(--danger); font-size: .8rem; }
 .command-cancel-pending { color: var(--warn); font-size: .8rem; }
 
+.human-intervention-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: rgb(8 10 18 / 74%);
+  backdrop-filter: blur(8px);
+}
+
+.human-intervention-modal {
+  width: min(620px, 100%);
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 16px;
+  padding: 22px;
+  border: 1px solid color-mix(in srgb, var(--warn) 58%, var(--border));
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 28px 80px rgb(0 0 0 / 48%);
+}
+
+.human-intervention-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--warn) 15%, var(--surface));
+  color: var(--warn);
+  font-size: 24px;
+  font-weight: 900;
+}
+
+.human-intervention-modal h3 { margin: 4px 0 10px; font-size: 1.15rem; }
+.human-intervention-modal p { margin: 0 0 9px; line-height: 1.85; font-size: .86rem; }
+.human-intervention-guidance { color: var(--text-dim); }
+.human-intervention-modal code,
+.human-intervention-modal small {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-size: .7rem;
+  overflow-wrap: anywhere;
+}
+.human-intervention-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
 @media (max-width: 760px) {
   .command-modal-backdrop { place-items: end center; padding: 0; }
   .command-modal { width: 100%; max-height: 94dvh; border-radius: 20px 20px 0 0; }
@@ -4582,6 +4638,11 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
   .command-stop-confirm { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
   .command-stop-confirm span { grid-column: 1 / -1; }
   .command-event-meta { display: grid; justify-content: start; }
+  .human-intervention-backdrop { padding: 12px; }
+  .human-intervention-modal { grid-template-columns: 42px minmax(0, 1fr); padding: 17px; gap: 12px; }
+  .human-intervention-icon { width: 40px; height: 40px; }
+  .human-intervention-actions { display: grid; grid-template-columns: 1fr; }
+  .human-intervention-actions .button { width: 100%; }
 }
 
 .command-dock {

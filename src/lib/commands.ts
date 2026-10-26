@@ -151,6 +151,31 @@ function parseObject(value: string | null): Record<string, unknown> {
   }
 }
 
+function serviceArtifactMarker(message: string): {
+  artifactId: string;
+  kind: string;
+  stage: string | null;
+  name: string;
+  localPath: string;
+  mimeType: string | null;
+} | null {
+  const prefix = "SERVICE_ARTIFACT:";
+  if (!message.startsWith(prefix)) return null;
+  try {
+    const value = JSON.parse(message.slice(prefix.length).trim()) as Record<string, unknown>;
+    const artifactId = typeof value.artifactId === "string" ? value.artifactId : "";
+    const kind = typeof value.kind === "string" ? value.kind.trim().slice(0, 40) : "";
+    const stage = typeof value.stage === "string" ? value.stage.trim().slice(0, 80) || null : null;
+    const name = typeof value.name === "string" ? value.name.trim().slice(0, 260) : "";
+    const localPath = typeof value.localPath === "string" ? value.localPath.trim().slice(0, 1000) : "";
+    const mimeType = typeof value.mimeType === "string" ? value.mimeType.trim().slice(0, 120) || null : null;
+    if (!/^art_[A-Za-z0-9_-]{8,50}$/.test(artifactId) || !kind || !name || !localPath) return null;
+    return { artifactId, kind, stage, name, localPath, mimeType };
+  } catch {
+    return null;
+  }
+}
+
 function text(value: unknown, label: string, max: number, required = true): string | null {
   if (value === undefined || value === null) {
     if (required) throw new AppError(`${label} لازم است.`, { status: 400, code: "command_field_required" });
@@ -414,8 +439,25 @@ export async function getCommandDetail(idValue: unknown, enforceOwnerKeyId?: str
     ? Math.max(0, Math.floor((now - Date.parse(row.last_event_at ?? row.created_at)) / 1000))
     : null;
   const reasons: string[] = [];
+  const interventionRequired = eventRows
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => event.message.startsWith("SERVICE_HUMAN_INTERVENTION_REQUIRED:"))
+    .at(-1);
+  const interventionCleared = eventRows
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => event.message.startsWith("SERVICE_HUMAN_INTERVENTION_CLEARED:"))
+    .at(-1);
+  if (interventionRequired && (!interventionCleared || interventionCleared.index < interventionRequired.index)) {
+    reasons.push("اتوماسیون Arena برای مداخله انسانی در checkpoint امن متوقف شده است.");
+  }
   if (eventRows.some((event) => event.level === "fatal")) reasons.push("رخداد بحرانی از Windows Agent گزارش شده است.");
-  if (eventRows.some((event) => event.level === "warning" || event.level === "error")) reasons.push("هشدار یا خطای غیرعادی در timeline وجود دارد.");
+  const operationalStages = new Set(["network_paused", "network_resumed", "cancel_requested"]);
+  const unexpectedEvents = eventRows.filter(
+    (event) => (event.level === "warning" || event.level === "error") && !operationalStages.has(event.stage),
+  );
+  if (unexpectedEvents.length) {
+    for (const event of unexpectedEvents.slice(-3)) reasons.push(`${event.stage}: ${event.message}`);
+  }
   if (row.cancel_requested_at) reasons.push(row.cancel_reason ?? "درخواست توقف ثبت شده است.");
   if (staleSeconds !== null && staleSeconds > row.no_progress_seconds) reasons.push("گزارش پیشرفت متوقف شده است.");
   return {
@@ -590,6 +632,27 @@ export async function appendCommandEvent(
     },
     { sql: "UPDATE commands SET last_event_at = ? WHERE id = ?", params: [now, id] },
   ];
+  const artifactMarker = serviceArtifactMarker(message);
+  if (artifactMarker) {
+    queries.push({
+      sql: `INSERT INTO command_artifacts
+        (id, command_id, kind, stage, name, local_path, drive_file_id, drive_url, mime_type, size, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          kind = excluded.kind, stage = excluded.stage, name = excluded.name,
+          local_path = excluded.local_path, mime_type = excluded.mime_type`,
+      params: [
+        artifactMarker.artifactId,
+        id,
+        artifactMarker.kind,
+        artifactMarker.stage ?? "arena-step",
+        artifactMarker.name,
+        artifactMarker.localPath,
+        artifactMarker.mimeType ?? "application/octet-stream",
+        now,
+      ],
+    });
+  }
   if (autoTrigger && !row.cancel_requested_at) {
     queries.push({
       sql: "UPDATE commands SET cancel_requested_at = ?, cancel_reason = ? WHERE id = ?",

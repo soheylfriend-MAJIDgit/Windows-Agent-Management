@@ -3,7 +3,8 @@ import { AppError } from "./errors";
 export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
-const BRIDGE_MARKER = "# management-arena-bridge: 7";
+const BRIDGE_MARKER = "# management-arena-bridge: 8";
+const BRIDGE_7_MARKER = "# management-arena-bridge: 7";
 const BRIDGE_6_MARKER = "# management-arena-bridge: 6";
 const BRIDGE_5_MARKER = "# management-arena-bridge: 5";
 const BRIDGE_4_MARKER = "# management-arena-bridge: 4";
@@ -30,11 +31,12 @@ function replaceAssignment(source: string, name: string, value: string): string 
 }
 
 const TELEGRAM_BRIDGE = `${BRIDGE_MARKER}
+import hashlib
+
 # گزارش نتیجه از راه صف محلی رباتِ خود Windows Agent ارسال می‌شود؛
 # هیچ توکن تلگرامی داخل این فایل یا گیت‌هاب قرار نمی‌گیرد.
 TELEGRAM_REPORT_MODE = "final"
 PROMPT_REQUEST_ID = "initial"
-FAILURE_FEEDBACK_ATTEMPTS = 3
 ARENA_COMPLETION_TIMEOUT = 180
 ARENA_COMPLETION_POLL_SECONDS = 3
 NETWORK_RECHECK_SECONDS = 60
@@ -43,6 +45,23 @@ OCR_HELPER = os.environ.get("WINDOWS_AGENT_OCR_HELPER", "")
 BOT_API_CONFIG = os.path.join(
     os.environ.get("LOCALAPPDATA", ""), "Windows-Agent", "bot_api.json"
 )
+
+
+def register_step_artifact(path, stage, kind="screenshot", mime_type="image/png"):
+    """فقط metadata قطعی را می‌فرستد؛ بایت تصویر همچنان بیرون D1 و در Drive می‌ماند."""
+    if not path:
+        return
+    normalized = os.path.abspath(path)
+    digest = hashlib.sha256((PROMPT_REQUEST_ID + "|" + normalized).encode("utf-8")).hexdigest()[:28]
+    payload = {
+        "artifactId": "art_" + digest,
+        "kind": kind,
+        "stage": str(stage or "arena-step")[:80],
+        "name": os.path.basename(normalized),
+        "localPath": normalized,
+        "mimeType": mime_type,
+    }
+    print("SERVICE_ARTIFACT: " + json.dumps(payload, ensure_ascii=False))
 
 
 def network_reachable():
@@ -101,6 +120,7 @@ def find_text_with_ocr(phrases, stage="scan"):
     os.makedirs(ocr_dir, exist_ok=True)
     image_path = os.path.join(ocr_dir, f"ocr_{safe_id}_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png")
     take_screenshot(image_path)
+    register_step_artifact(image_path, "ocr-" + str(stage))
     wanted = [str(value).casefold().strip() for value in phrases if str(value).strip()]
     for item in local_ocr_items(image_path):
         text = str(item.get("text", "")).casefold().strip()
@@ -108,15 +128,129 @@ def find_text_with_ocr(phrases, stage="scan"):
         confidence = float(item.get("confidence", 0) or 0)
         if confidence < 0.45 or not isinstance(bounds, list) or len(bounds) != 4:
             continue
-        if any(phrase in text or text in phrase for phrase in wanted):
-            left, top, right, bottom = [float(value) for value in bounds]
-            return {"x": (left + right) / 2, "y": (top + bottom) / 2, "text": item.get("text"), "confidence": confidence}
+        for phrase in wanted:
+            if phrase in text or text in phrase:
+                left, top, right, bottom = [float(value) for value in bounds]
+                return {
+                    "x": (left + right) / 2,
+                    "y": (top + bottom) / 2,
+                    "text": item.get("text"),
+                    "confidence": confidence,
+                    "matched": phrase,
+                    "imagePath": image_path,
+                }
     return None
 
 
+SECURITY_VERIFICATION_PHRASES = [
+    "security verification",
+    "verify you are human",
+    "verification required",
+    "checking your browser",
+    "performing security verification",
+    "تأیید امنیتی",
+    "بررسی امنیتی",
+]
+SECURITY_UIA_PS_SCRIPT = r'''
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class ForegroundSecurityWindow {
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+}
+"@
+$handle = [ForegroundSecurityWindow]::GetForegroundWindow()
+if ($handle -eq [IntPtr]::Zero) { Write-Output 'ARENA_SECURITY_UIA_NOT_FOUND'; exit 0 }
+$root = [System.Windows.Automation.AutomationElement]::FromHandle($handle)
+if (-not $root -or ([string]$root.Current.Name).ToLowerInvariant() -notmatch 'arena') {
+    Write-Output 'ARENA_SECURITY_UIA_NOT_FOUND'
+    exit 0
+}
+$phrases = @('security verification', 'verify you are human', 'verification required', 'checking your browser', 'performing security verification')
+$all = $root.FindAll(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.Condition]::TrueCondition
+)
+foreach ($el in $all) {
+    try {
+        if ($el.Current.IsOffscreen) { continue }
+        $name = [string]$el.Current.Name
+        if (-not $name) { continue }
+        $lower = $name.ToLowerInvariant()
+        foreach ($phrase in $phrases) {
+            if ($lower.Contains($phrase)) {
+                Write-Output ('ARENA_SECURITY_UIA_FOUND=' + $name)
+                exit 0
+            }
+        }
+    } catch { }
+}
+Write-Output 'ARENA_SECURITY_UIA_NOT_FOUND'
+'''
+
+
+def security_verification_match(stage="security", ocr_fallback=True):
+    """چالش قابل مشاهده را با UIA و در صورت نیاز PaddleOCR محلی تشخیص می‌دهد."""
+    try:
+        output = run_hidden_powershell(SECURITY_UIA_PS_SCRIPT, timeout=30)
+    except Exception as exc:
+        print(f"هشدار: بررسی UIA چالش امنیتی ممکن نشد: {exc}")
+        output = ""
+    marker = "ARENA_SECURITY_UIA_FOUND="
+    if marker in output:
+        detected = output.split(marker, 1)[1].splitlines()[0].strip()
+        safe_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in PROMPT_REQUEST_ID)
+        target_dir = os.path.join(os.path.dirname(SCREENSHOT_DIR), "logs", "security")
+        os.makedirs(target_dir, exist_ok=True)
+        image_path = os.path.join(target_dir, f"security_{safe_id}_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png")
+        take_screenshot(image_path)
+        register_step_artifact(image_path, "security-" + str(stage))
+        return {"text": detected, "matched": "security verification", "imagePath": image_path, "detector": "uia"}
+    if not ocr_fallback:
+        return None
+    match = find_text_with_ocr(SECURITY_VERIFICATION_PHRASES, stage=stage)
+    if match:
+        match["detector"] = "paddleocr"
+    return match
+
+
+def wait_for_security_verification_clear(stage="security"):
+    """در چالش امنیتی هیچ کلیک/کلیدی نمی‌زند و تا مداخله انسان متوقف می‌ماند."""
+    match = security_verification_match(stage=stage)
+    if not match:
+        return False
+    payload = {
+        "reason": "security_verification",
+        "requestId": PROMPT_REQUEST_ID,
+        "message": "چالش ضدربات Arena دیده شد؛ مداخله انسانی لازم است.",
+        "artifactPath": match.get("imagePath"),
+        "detectedText": match.get("text"),
+    }
+    print("SERVICE_HUMAN_INTERVENTION_REQUIRED: " + json.dumps(payload, ensure_ascii=False))
+    while True:
+        time.sleep(8)
+        wait_for_network()
+        match = security_verification_match(stage=stage + "-recheck")
+        if not match:
+            print("SERVICE_HUMAN_INTERVENTION_CLEARED: " + json.dumps({
+                "reason": "security_verification",
+                "requestId": PROMPT_REQUEST_ID,
+                "message": "چالش امنیتی رفع شد؛ ادامه از checkpoint امن.",
+            }, ensure_ascii=False))
+            return True
+        print("SERVICE_HUMAN_INTERVENTION_WAITING: " + json.dumps({
+            "reason": "security_verification",
+            "requestId": PROMPT_REQUEST_ID,
+            "artifactPath": match.get("imagePath"),
+        }, ensure_ascii=False))
+
+
 def type_and_submit_with_network_resilience():
-    """اگر شکست هم‌زمان با قطعی باشد، صبر می‌کند و فقط یک بار امن از نو تلاش می‌کند."""
+    """شبکه و Security Verification را پیش از هر تعامل تازه بررسی می‌کند."""
     wait_for_network()
+    wait_for_security_verification_clear(stage="before-input")
     try:
         return type_and_submit()
     except Exception:
@@ -127,6 +261,7 @@ def type_and_submit_with_network_resilience():
         open_site()
         time.sleep(PAGE_LOAD_WAIT)
         maximize_browser()
+        wait_for_security_verification_clear(stage="after-reconnect")
         handle_dialog_if_present()
         return type_and_submit()
 
@@ -164,7 +299,7 @@ def send_telegram_status(kind, detail):
 
 
 def save_failure_artifacts(detail):
-    """پیش از بازخورد، لاگ و اسکرین‌شات شکست را در Google Drive می‌گذارد."""
+    """پیش از توقف، لاگ و اسکرین‌شات شکست را برای Drive آماده و metadata را ثبت می‌کند."""
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in PROMPT_REQUEST_ID)
     base_dir = os.path.dirname(SCREENSHOT_DIR)
@@ -177,38 +312,24 @@ def save_failure_artifacts(detail):
         with open(report_path, "w", encoding="utf-8") as fh:
             fh.write(
                 "زمان: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " تهران\\n"
-                "موضوع: شکست job_arena.py و نیاز به بررسی ایجنت همکار\\n"
-                "نسخه برنامه: Arena Bridge 7\\n"
+                "موضوع: توقف امن اتوماسیون Arena و نیاز به مداخله انسانی\\n"
+                "نسخه برنامه: Arena Bridge 8\\n"
                 "شناسه درخواست: " + PROMPT_REQUEST_ID + "\\n"
                 "پرامپت: " + PROMPT_TEXT + "\\n\\n"
                 "جزئیات خطا:\\n" + str(detail)
             )
         saved.append(report_path)
+        register_step_artifact(report_path, "failure-report", kind="log", mime_type="text/plain")
     except Exception as exc:
         print(f"هشدار: ذخیره گزارش شکست ممکن نشد: {exc}")
     try:
         os.makedirs(SCREENSHOT_DIR, exist_ok=True)
         take_screenshot(screenshot_path)
         saved.append(screenshot_path)
+        register_step_artifact(screenshot_path, "failure-screenshot")
     except Exception as exc:
         print(f"هشدار: گرفتن اسکرین‌شات شکست ممکن نشد: {exc}")
     return saved
-
-
-def handle_failure_dialog_if_present():
-    """اگر پرسش نتیجه باز است، برای اجرای ناموفق گزینه No را انتخاب می‌کند."""
-    try:
-        failure_script = DIALOG_PS_SCRIPT.replace(
-            "$el.Current.Name -eq 'Yes'", "$el.Current.Name -eq 'No'"
-        )
-        output = run_hidden_powershell(failure_script, timeout=60)
-        if "ARENA_DIALOG_CLICKED" in output:
-            print("پنجره نتیجه پیدا شد؛ گزینه No برای اجرای ناموفق کلیک شد")
-            time.sleep(DIALOG_CLICK_WAIT)
-            return True
-    except Exception as exc:
-        print(f"هشدار: انتخاب No در پنجره نتیجه ممکن نشد: {exc}")
-    return False
 
 
 def wait_for_arena_completion():
@@ -234,21 +355,32 @@ def wait_for_arena_completion():
         deadline += max(0, time.monotonic() - offline_started)
         attempt += 1
         print(f"پایش پایان Arena؛ انتظار برای «{DIALOG_PHRASE}» (بررسی {attempt})...")
+        security_match = security_verification_match(stage="completion-uia", ocr_fallback=False)
+        if security_match:
+            intervention_started = time.monotonic()
+            wait_for_security_verification_clear(stage="completion-security")
+            deadline += max(0, time.monotonic() - intervention_started)
+            continue
         try:
             output = run_hidden_powershell(detector_script, timeout=60)
         except Exception as exc:
             print(f"هشدار: بررسی پایان Arena موقتاً ناموفق بود: {exc}")
             output = ""
         if "ARENA_COMPLETION_DIALOG_FOUND" in output:
-            print("پنجره پایان Arena با UI Automation دیده شد؛ اجرای ایجنت همکار کامل شده است")
+            print("پنجره پایان Arena با UI Automation دیده شد؛ اجرای مقصد کامل شده است")
             return True
         try:
-            ocr_match = find_text_with_ocr([DIALOG_PHRASE], stage="completion")
+            ocr_match = find_text_with_ocr([DIALOG_PHRASE] + SECURITY_VERIFICATION_PHRASES, stage="completion")
         except Exception as exc:
             print(f"هشدار: بررسی PaddleOCR پنجره پایان ممکن نشد: {exc}")
             ocr_match = None
+        if ocr_match and ocr_match.get("matched") in [value.casefold() for value in SECURITY_VERIFICATION_PHRASES]:
+            intervention_started = time.monotonic()
+            wait_for_security_verification_clear(stage="completion-security")
+            deadline += max(0, time.monotonic() - intervention_started)
+            continue
         if ocr_match:
-            print("پنجره پایان Arena با PaddleOCR دیده شد؛ اجرای ایجنت همکار کامل شده است")
+            print("پنجره پایان Arena با PaddleOCR دیده شد؛ اجرای مقصد کامل شده است")
             return True
         remaining = deadline - time.monotonic()
         if remaining > 0:
@@ -256,41 +388,6 @@ def wait_for_arena_completion():
     raise TimeoutError(
         f"تا {ARENA_COMPLETION_TIMEOUT} ثانیه پنجره «{DIALOG_PHRASE}» ظاهر نشد"
     )
-
-
-def send_failure_feedback(detail, artifact_paths):
-    """حداکثر سه بار تلاش می‌کند شکست را به گفت‌وگوی ایجنت همکار برگرداند."""
-    global PROMPT_TEXT
-    original_prompt = PROMPT_TEXT
-    paths_text = "، ".join(artifact_paths) if artifact_paths else "پوشه‌های logs و ScreenShots"
-    feedback = (
-        "اجرای درخواست ناموفق بود. لطفاً گزارش‌ها و در صورت نیاز اسکرین‌شات‌ها را "
-        "در Google Drive بررسی کن، علت را پیدا کن و یک نسخه اصلاح‌شده یا بازنویسی‌شده در کاتالوگ D1 ثبت کن. "
-        f"شناسه درخواست: {PROMPT_REQUEST_ID}. مسیرهای مرتبط: {paths_text}"
-    )
-    last_error = None
-    try:
-        for attempt in range(1, FAILURE_FEEDBACK_ATTEMPTS + 1):
-            try:
-                print(f"تلاش {attempt} از {FAILURE_FEEDBACK_ATTEMPTS} برای ارسال بازخورد شکست...")
-                PROMPT_TEXT = feedback
-                open_site()
-                time.sleep(PAGE_LOAD_WAIT)
-                maximize_browser()
-                handle_failure_dialog_if_present()
-                type_and_submit()
-                wait_for_arena_completion()
-                print("بازخورد اجرای ناموفق به ایجنت همکار ارسال و پایان آن تأیید شد")
-                return True
-            except Exception as exc:
-                last_error = exc
-                print(f"ارسال بازخورد در تلاش {attempt} ناموفق بود: {exc}")
-                if attempt < FAILURE_FEEDBACK_ATTEMPTS:
-                    time.sleep(4)
-    finally:
-        PROMPT_TEXT = original_prompt
-    print(f"بازخورد شکست پس از سه تلاش ارسال نشد: {last_error}")
-    return False
 `;
 
 const WRAPPED_MAIN = `def main():
@@ -305,9 +402,15 @@ const WRAPPED_MAIN = `def main():
         summary = f"پس از {elapsed:.1f} ثانیه ناموفق شد: {type(exc).__name__}: {exc}"
         print(summary)
         artifacts = save_failure_artifacts(summary + "\\n" + trace)
-        feedback_sent = send_failure_feedback(summary, artifacts)
-        feedback_note = "بازخورد به ایجنت همکار ارسال شد." if feedback_sent else "ارسال بازخورد پس از سه تلاش ناموفق بود."
-        send_telegram_status("ناموفق", summary + "\\n" + feedback_note + "\\n" + trace[-1200:])
+        intervention = {
+            "reason": "arena_automation_failure",
+            "requestId": PROMPT_REQUEST_ID,
+            "message": summary,
+            "artifactPaths": artifacts,
+            "guidance": "اجرای خودکار متوقف شد؛ وضعیت Arena و تصاویر مرحله‌ای را بررسی کنید.",
+        }
+        print("SERVICE_HUMAN_INTERVENTION_REQUIRED: " + json.dumps(intervention, ensure_ascii=False))
+        send_telegram_status("نیازمند مداخله انسانی", summary + "\\n" + trace[-1200:])
         raise
     else:
         elapsed = (datetime.now() - started_at).total_seconds()
@@ -560,10 +663,15 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پی�
         $focusedText = Get-ElText $focused
         $composerText = Get-ElText $composer
         $promptNormalized = ([string]$env:ARENA_PROMPT).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
+        # UIA TextPattern عمداً حداکثر ۱۰۰۰ نویسه می‌خواند؛ مقایسه کل پرامپت بلند
+        # false-negative می‌ساخت. یک probe آغازینِ معنادار، همراه با فوکوس امن و
+        # موفقیت واقعی SendInput/ValuePattern/Paste، برای اثبات حضور متن کافی است.
+        $probeLength = [Math]::Min(240, $promptNormalized.Length)
+        $promptProbe = if ($probeLength -gt 0) { $promptNormalized.Substring(0, $probeLength) } else { "" }
         $focusedNormalized = ([string]$focusedText).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
         $composerNormalized = ([string]$composerText).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
-        $okFocused = $focusSafeAfterInput -and $focusedText -and $focusedNormalized.Contains($promptNormalized)
-        $okComposer = $focusSafeAfterInput -and $composerText -and $composerNormalized.Contains($promptNormalized)
+        $okFocused = $focusSafeAfterInput -and $inputOk -and $focusedText -and $promptProbe -and $focusedNormalized.Contains($promptProbe)
+        $okComposer = $focusSafeAfterInput -and $inputOk -and $composerText -and $promptProbe -and $composerNormalized.Contains($promptProbe)
 
         # تأیید دوم: Select All + Copy فقط با فوکوس امن و sentinel مستقل.
         $okCopied = $false
@@ -577,7 +685,7 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پی�
                 Start-Sleep -Milliseconds 400
                 $copiedText = [string](Get-Clipboard -Raw)
                 $copiedNormalized = $copiedText.Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
-                $okCopied = ($copiedNormalized -eq $promptNormalized)
+                $okCopied = $inputOk -and $promptProbe -and $copiedNormalized.Contains($promptProbe)
                 [void][WinApi]::PressKey(0x23) # End؛ برداشتن selection بدون تغییر متن
             } catch {
                 Write-Output ("ARENA_COPY_VERIFY_ERROR=" + $_.Exception.Message)
@@ -601,6 +709,30 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پی�
 
 /** Bridgeهای قبلی و فایل پایه را به موتور امن ورود متن و تصویربرداری Bridge 5 ارتقا می‌دهد. */
 function hardenArenaTyping(source: string): string {
+  // Bridge 7 پرامپت‌های بلند را با متن UIA محدودشده به ۱۰۰۰ نویسه به‌طور کامل
+  // مقایسه می‌کرد و با وجود حضور واقعی متن false-negative می‌ساخت.
+  if (!source.includes("$promptProbe =")) {
+    const normalizedAnchor = `        $promptNormalized = ([string]$env:ARENA_PROMPT).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")\n`;
+    const probeBlock = `${normalizedAnchor}        $probeLength = [Math]::Min(240, $promptNormalized.Length)\n        $promptProbe = if ($probeLength -gt 0) { $promptNormalized.Substring(0, $probeLength) } else { "" }\n`;
+    const oldFocused = `        $okFocused = $focusSafeAfterInput -and $focusedText -and $focusedNormalized.Contains($promptNormalized)\n`;
+    const newFocused = `        $okFocused = $focusSafeAfterInput -and $inputOk -and $focusedText -and $promptProbe -and $focusedNormalized.Contains($promptProbe)\n`;
+    const oldComposer = `        $okComposer = $focusSafeAfterInput -and $composerText -and $composerNormalized.Contains($promptNormalized)\n`;
+    const newComposer = `        $okComposer = $focusSafeAfterInput -and $inputOk -and $composerText -and $promptProbe -and $composerNormalized.Contains($promptProbe)\n`;
+    const oldCopied = `                $okCopied = ($copiedNormalized -eq $promptNormalized)\n`;
+    const newCopied = `                $okCopied = $inputOk -and $promptProbe -and $copiedNormalized.Contains($promptProbe)\n`;
+    if (!source.includes(normalizedAnchor) || !source.includes(oldFocused) || !source.includes(oldComposer) || !source.includes(oldCopied)) {
+      throw new AppError("بخش تأیید پرامپت بلند Arena برای ارتقای Bridge 8 پیدا نشد.", {
+        status: 409,
+        code: "arena_long_prompt_verifier_upgrade_failed",
+      });
+    }
+    source = source
+      .replace(normalizedAnchor, probeBlock)
+      .replace(oldFocused, newFocused)
+      .replace(oldComposer, newComposer)
+      .replace(oldCopied, newCopied);
+  }
+
   if (!source.includes("import urllib.error\n")) {
     if (!source.includes("import urllib.request\n")) {
       throw new AppError("import شبکه Arena برای افزودن پایش اتصال پیدا نشد.", {
@@ -777,7 +909,7 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
     time.sleep(AFTER_ENTER_WAIT)
 `;
     const completionWaitBlock = `    # ۶) پایان واقعی فقط با ظهور پنجره نتیجه Arena تأیید می‌شود.
-    print("ارسال انجام شد؛ منتظر پایان کار ایجنت همکار و پنجره نتیجه Arena هستیم...")
+    print("ارسال انجام شد؛ منتظر پایان کار مقصد و پنجره نتیجه Arena هستیم...")
     wait_for_arena_completion()
 `;
     if (!source.includes(fixedWaitBlock)) {
@@ -822,11 +954,28 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
         timeout=180,
     )
     markers = [line.strip() for line in output.splitlines() if line.strip()]
+    for marker in markers:
+        if marker.startswith("ARENA_STEP_SCREENSHOT="):
+            step_path = marker.split("=", 1)[1]
+            step_name = os.path.splitext(os.path.basename(step_path))[0].rsplit("_", 1)[-1]
+            register_step_artifact(step_path, "prompt-" + step_name)
     if markers:
         print("گزارش فنی Arena: " + " | ".join(markers))
 `;
   if (source.includes(oldRunner)) source = source.replace(oldRunner, diagnosticRunner);
   else if (source.includes(currentRunner)) source = source.replace(currentRunner, diagnosticRunner);
+
+  if (!source.includes('register_step_artifact(step_path, "prompt-" + step_name)')) {
+    const markersAnchor = `    markers = [line.strip() for line in output.splitlines() if line.strip()]\n`;
+    const artifactMarkers = `${markersAnchor}    for marker in markers:\n        if marker.startswith("ARENA_STEP_SCREENSHOT="):\n            step_path = marker.split("=", 1)[1]\n            step_name = os.path.splitext(os.path.basename(step_path))[0].rsplit("_", 1)[-1]\n            register_step_artifact(step_path, "prompt-" + step_name)\n`;
+    if (!source.includes(markersAnchor)) {
+      throw new AppError("خروجی اسکرین‌شات‌های مرحله‌ای Arena برای ثبت artifact پیدا نشد.", {
+        status: 409,
+        code: "arena_artifact_marker_upgrade_failed",
+      });
+    }
+    source = source.replace(markersAnchor, artifactMarkers);
+  }
 
   if (!source.includes('"ARENA_OCR_X"')) {
     const traceAnchor = `    trace_id = safe_id + "_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")\n`;
@@ -860,7 +1009,7 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
 }
 
 
-/** ارتقای درجا از Bridge 1 تا 6؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+/** ارتقای درجا از Bridge 1 تا 7؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
 function upgradeLegacyBridge(source: string, oldMarker: string): string {
   const bridgeStart = source.indexOf(oldMarker);
   const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
@@ -903,6 +1052,7 @@ export function buildArenaJobFile(options: {
     return source.endsWith("\n") ? source : `${source}\n`;
   }
   if (
+    source.includes(BRIDGE_7_MARKER) ||
     source.includes(BRIDGE_6_MARKER) ||
     source.includes(BRIDGE_5_MARKER) ||
     source.includes(BRIDGE_4_MARKER) ||
@@ -910,9 +1060,11 @@ export function buildArenaJobFile(options: {
     source.includes(BRIDGE_2_MARKER) ||
     source.includes(LEGACY_BRIDGE_MARKER)
   ) {
-    const oldMarker = source.includes(BRIDGE_6_MARKER)
-      ? BRIDGE_6_MARKER
-      : source.includes(BRIDGE_5_MARKER)
+    const oldMarker = source.includes(BRIDGE_7_MARKER)
+      ? BRIDGE_7_MARKER
+      : source.includes(BRIDGE_6_MARKER)
+        ? BRIDGE_6_MARKER
+        : source.includes(BRIDGE_5_MARKER)
         ? BRIDGE_5_MARKER
         : source.includes(BRIDGE_4_MARKER)
           ? BRIDGE_4_MARKER
@@ -931,7 +1083,7 @@ export function buildArenaJobFile(options: {
     throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 7 به‌صورت خودکار پشتیبانی می‌شوند.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 8 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 

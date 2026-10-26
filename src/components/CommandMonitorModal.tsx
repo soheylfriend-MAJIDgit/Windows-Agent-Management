@@ -6,6 +6,16 @@ import { faNumber, formatJalaliDateTime } from "@/lib/jalali";
 type CommandStatus = "pending" | "claimed" | "waiting_confirmation" | "running" | "succeeded" | "failed" | "cancelled" | "timed_out" | "rejected";
 type EventLevel = "debug" | "info" | "warning" | "error" | "fatal";
 
+interface HumanIntervention {
+  eventId: number;
+  reason: string;
+  message: string;
+  guidance?: string;
+  artifactPath?: string;
+  artifactPaths?: string[];
+  requestId?: string;
+}
+
 interface Detail {
   command: {
     id: string;
@@ -63,13 +73,51 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return body;
 }
 
+const INTERVENTION_REQUIRED_PREFIX = "SERVICE_HUMAN_INTERVENTION_REQUIRED:";
+const INTERVENTION_CLEARED_PREFIX = "SERVICE_HUMAN_INTERVENTION_CLEARED:";
+
+function currentHumanIntervention(detail: Detail | null): HumanIntervention | null {
+  if (!detail) return null;
+  let active: HumanIntervention | null = null;
+  for (const event of detail.events) {
+    if (event.message.startsWith(INTERVENTION_CLEARED_PREFIX)) {
+      active = null;
+      continue;
+    }
+    if (!event.message.startsWith(INTERVENTION_REQUIRED_PREFIX)) continue;
+    const raw = event.message.slice(INTERVENTION_REQUIRED_PREFIX.length).trim();
+    try {
+      const parsed = JSON.parse(raw) as Partial<HumanIntervention>;
+      active = {
+        eventId: event.id,
+        reason: String(parsed.reason || "arena_automation_failure"),
+        message: String(parsed.message || "اجرای Arena به مداخله انسانی نیاز دارد."),
+        guidance: parsed.guidance ? String(parsed.guidance) : undefined,
+        artifactPath: parsed.artifactPath ? String(parsed.artifactPath) : undefined,
+        artifactPaths: Array.isArray(parsed.artifactPaths) ? parsed.artifactPaths.map(String) : undefined,
+        requestId: parsed.requestId ? String(parsed.requestId) : undefined,
+      };
+    } catch {
+      active = {
+        eventId: event.id,
+        reason: "arena_automation_failure",
+        message: raw || "اجرای Arena به مداخله انسانی نیاز دارد.",
+      };
+    }
+  }
+  return active;
+}
+
 export function CommandMonitorModal({ commandId, onClose }: { commandId: string; onClose: () => void }) {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
+  const [dismissedInterventionId, setDismissedInterventionId] = useState<number | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const eventCount = detail?.events.length ?? 0;
+  const humanIntervention = currentHumanIntervention(detail);
+  const showHumanIntervention = humanIntervention && humanIntervention.eventId !== dismissedInterventionId;
 
   const load = useCallback(async () => {
     try {
@@ -79,6 +127,10 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "خطای ناشناخته در پایش فرمان");
     }
+  }, [commandId]);
+
+  useEffect(() => {
+    setDismissedInterventionId(null);
   }, [commandId]);
 
   useEffect(() => {
@@ -170,6 +222,46 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
           </div>
           <button className="command-close" type="button" onClick={onClose} aria-label="بستن پنجره پایش">×</button>
         </header>
+
+        {showHumanIntervention ? (
+          <div className="human-intervention-backdrop" role="presentation">
+            <section className="human-intervention-modal" role="alertdialog" aria-modal="true" aria-labelledby="human-intervention-title">
+              <span className="human-intervention-icon" aria-hidden="true">!</span>
+              <div>
+                <span className="eyebrow">توقف امن اتوماسیون</span>
+                <h3 id="human-intervention-title">نیاز به مداخله انسانی</h3>
+                <p>{humanIntervention.message}</p>
+                <p className="human-intervention-guidance">
+                  {humanIntervention.reason === "security_verification"
+                    ? "به پنجره Arena بروید و چالش ضدربات را دستی کامل کنید. اتوماسیون در این فاصله هیچ کلیک، کلید یا Enter نمی‌فرستد و پس از رفع چالش از checkpoint امن ادامه می‌دهد."
+                    : humanIntervention.guidance || "اجرای خودکار متوقف شده است. تصاویر مرحله‌ای و گزارش خطا را بررسی کنید و پس از رفع مشکل فرمان تازه‌ای بسازید."}
+                </p>
+                {humanIntervention.requestId ? <code dir="ltr">{humanIntervention.requestId}</code> : null}
+                {humanIntervention.artifactPath ? <small dir="ltr">{humanIntervention.artifactPath}</small> : null}
+                {humanIntervention.artifactPaths?.map((path) => <small dir="ltr" key={path}>{path}</small>)}
+              </div>
+              <div className="human-intervention-actions">
+                {humanIntervention.reason === "security_verification" && !isFinal ? (
+                  <button
+                    type="button"
+                    className="button primary"
+                    onClick={() => {
+                      setDismissedInterventionId(humanIntervention.eventId);
+                      void load();
+                    }}
+                  >
+                    چالش را حل کردم؛ ادامه پایش
+                  </button>
+                ) : null}
+                <button type="button" className="button secondary" disabled={!detail} onClick={downloadEvidence}>دانلود گزارش شواهد</button>
+                {!isFinal ? <button type="button" className="button danger" disabled={busy} onClick={() => void cancel()}>توقف امن اجرا</button> : null}
+                <button type="button" className="button secondary" onClick={() => setDismissedInterventionId(humanIntervention.eventId)}>
+                  {isFinal ? "بستن پیام" : "ادامه پایش در پس‌زمینه"}
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : null}
 
         {error ? <div className="command-alert command-alert-error" role="alert">{error}</div> : null}
         {detail?.anomaly.detected ? (
