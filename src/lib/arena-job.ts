@@ -3,7 +3,8 @@ import { AppError } from "./errors";
 export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
-const BRIDGE_MARKER = "# management-arena-bridge: 8";
+const BRIDGE_MARKER = "# management-arena-bridge: 9";
+const BRIDGE_8_MARKER = "# management-arena-bridge: 8";
 const BRIDGE_7_MARKER = "# management-arena-bridge: 7";
 const BRIDGE_6_MARKER = "# management-arena-bridge: 6";
 const BRIDGE_5_MARKER = "# management-arena-bridge: 5";
@@ -32,6 +33,7 @@ function replaceAssignment(source: string, name: string, value: string): string 
 
 const TELEGRAM_BRIDGE = `${BRIDGE_MARKER}
 import hashlib
+import shutil
 
 # گزارش نتیجه از راه صف محلی رباتِ خود Windows Agent ارسال می‌شود؛
 # هیچ توکن تلگرامی داخل این فایل یا گیت‌هاب قرار نمی‌گیرد.
@@ -41,6 +43,7 @@ FAILURE_INTERVENTION_REPORTED_FOR = None
 ARENA_COMPLETION_TIMEOUT = 180
 ARENA_COMPLETION_POLL_SECONDS = 3
 NETWORK_RECHECK_SECONDS = 60
+OCR_TIMEOUT_SECONDS = max(20, int(os.environ.get("WINDOWS_AGENT_OCR_TIMEOUT_SECONDS", "45")))
 OCR_PYTHON = os.environ.get("WINDOWS_AGENT_OCR_PYTHON", "")
 OCR_HELPER = os.environ.get("WINDOWS_AGENT_OCR_HELPER", "")
 BOT_API_CONFIG = os.path.join(
@@ -114,7 +117,7 @@ def local_ocr_items(image_path):
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=45,
+        timeout=OCR_TIMEOUT_SECONDS,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if completed.returncode != 0:
@@ -126,15 +129,33 @@ def local_ocr_items(image_path):
 
 
 def find_text_with_ocr(phrases, stage="scan"):
-    """متن موردنظر را از اسکرین‌شات پیدا و مرکز آن را برمی‌گرداند."""
+    """OCR را روی فایل runtime محلی اجرا و نسخه شواهد را جداگانه در Drive نگه می‌دارد."""
     safe_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in PROMPT_REQUEST_ID)
-    ocr_dir = os.path.join(os.path.dirname(SCREENSHOT_DIR), "logs", "ocr")
-    os.makedirs(ocr_dir, exist_ok=True)
-    image_path = os.path.join(ocr_dir, f"ocr_{safe_id}_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png")
-    take_screenshot(image_path)
-    register_step_artifact(image_path, "ocr-" + str(stage))
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    file_name = f"ocr_{safe_id}_{stage}_{stamp}.png"
+    runtime_dir = os.path.join(os.environ.get("LOCALAPPDATA", os.path.dirname(SCREENSHOT_DIR)), "Windows-Agent", "ocr-runtime")
+    evidence_dir = os.path.join(os.path.dirname(SCREENSHOT_DIR), "logs", "ocr")
+    os.makedirs(runtime_dir, exist_ok=True)
+    os.makedirs(evidence_dir, exist_ok=True)
+    runtime_path = os.path.join(runtime_dir, file_name)
+    image_path = os.path.join(evidence_dir, file_name)
+    take_screenshot(runtime_path)
+    try:
+        shutil.copyfile(runtime_path, image_path)
+        register_step_artifact(image_path, "ocr-" + str(stage))
+    except Exception as exc:
+        image_path = runtime_path
+        print(f"هشدار: کپی اسکرین‌شات OCR در Drive ممکن نشد: {exc}")
     wanted = [str(value).casefold().strip() for value in phrases if str(value).strip()]
-    for item in local_ocr_items(image_path):
+    try:
+        ocr_items = local_ocr_items(runtime_path)
+    finally:
+        if image_path != runtime_path:
+            try:
+                os.remove(runtime_path)
+            except OSError:
+                pass
+    for item in ocr_items:
         text = str(item.get("text", "")).casefold().strip()
         bounds = item.get("bounds")
         confidence = float(item.get("confidence", 0) or 0)
@@ -222,7 +243,16 @@ def security_verification_match(stage="security", ocr_fallback=True):
         return {"text": detected, "matched": "security verification", "imagePath": image_path, "detector": "uia"}
     if not ocr_fallback:
         return None
-    match = find_text_with_ocr(SECURITY_VERIFICATION_PHRASES, stage=stage)
+    try:
+        match = find_text_with_ocr(SECURITY_VERIFICATION_PHRASES, stage=stage)
+    except subprocess.TimeoutExpired:
+        # کندی/گیرکردن OCR نباید مسیر امن UIA و بررسی composer را از کار بیندازد.
+        # PowerShell فقط روی editable composer با فوکوس امن اجازه تایپ/Enter می‌دهد.
+        print(f"ARENA_SECURITY_OCR_TIMEOUT: PaddleOCR پس از {OCR_TIMEOUT_SECONDS} ثانیه پاسخ نداد؛ ادامه با UIA و محافظ فوکوس composer")
+        return None
+    except Exception as exc:
+        print(f"ARENA_SECURITY_OCR_UNAVAILABLE: بررسی PaddleOCR ممکن نشد؛ ادامه با UIA و محافظ فوکوس composer: {exc}")
+        return None
     if match:
         match["detector"] = "paddleocr"
     return match
@@ -325,7 +355,7 @@ def save_failure_artifacts(detail):
             fh.write(
                 "زمان: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " تهران\\n"
                 "موضوع: توقف امن اتوماسیون Arena و نیاز به مداخله انسانی\\n"
-                "نسخه برنامه: Arena Bridge 8\\n"
+                "نسخه برنامه: Arena Bridge 9\\n"
                 "شناسه درخواست: " + PROMPT_REQUEST_ID + "\\n"
                 "پرامپت: " + PROMPT_TEXT + "\\n\\n"
                 "جزئیات خطا:\\n" + str(detail)
@@ -957,6 +987,9 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
     diagnostic_dir = os.path.join(os.path.dirname(SCREENSHOT_DIR), "logs", "errors")
     os.makedirs(diagnostic_dir, exist_ok=True)
     trace_id = safe_id + "_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    # UIA داخل PowerShell مسیر اصلی یافتن composer است؛ OCR امنیتی پیش‌تر یک‌بار اجرا شده
+    # و نباید با اجرای تکراری helper تایپ را ده‌ها ثانیه دیگر معطل کند.
+    ocr_point = None
     output = run_hidden_powershell(
         TYPE_PS_SCRIPT,
         extra_env={
@@ -964,6 +997,8 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
             "ARENA_URL": URL,
             "ARENA_DIAGNOSTIC_DIR": diagnostic_dir,
             "ARENA_TRACE_ID": trace_id,
+            "ARENA_OCR_X": str(ocr_point["x"]) if ocr_point else "",
+            "ARENA_OCR_Y": str(ocr_point["y"]) if ocr_point else "",
         },
         timeout=180,
     )
@@ -989,6 +1024,14 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
       });
     }
     source = source.replace(markersAnchor, artifactMarkers);
+  }
+
+  const redundantComposerOcr = `    wait_for_network()\n    try:\n        ocr_point = find_text_with_ocr([COMPOSER_PLACEHOLDER], stage="composer")\n    except Exception as exc:\n        print(f"هشدار: مکان‌یابی اولیه PaddleOCR ممکن نشد: {exc}")\n        ocr_point = None\n`;
+  if (source.includes(redundantComposerOcr)) {
+    source = source.replace(
+      redundantComposerOcr,
+      `    # OCR امنیتی پیش‌تر اجرا شده؛ UIA و focus guard مسیر اصلی composer هستند.\n    ocr_point = None\n`,
+    );
   }
 
   if (!source.includes('"ARENA_OCR_X"')) {
@@ -1023,7 +1066,7 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
 }
 
 
-/** ارتقای درجا از Bridge 1 تا 7؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+/** ارتقای درجا از Bridge 1 تا 8؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
 function upgradeLegacyBridge(source: string, oldMarker: string): string {
   const bridgeStart = source.indexOf(oldMarker);
   const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
@@ -1066,6 +1109,7 @@ export function buildArenaJobFile(options: {
     return source.endsWith("\n") ? source : `${source}\n`;
   }
   if (
+    source.includes(BRIDGE_8_MARKER) ||
     source.includes(BRIDGE_7_MARKER) ||
     source.includes(BRIDGE_6_MARKER) ||
     source.includes(BRIDGE_5_MARKER) ||
@@ -1074,9 +1118,11 @@ export function buildArenaJobFile(options: {
     source.includes(BRIDGE_2_MARKER) ||
     source.includes(LEGACY_BRIDGE_MARKER)
   ) {
-    const oldMarker = source.includes(BRIDGE_7_MARKER)
-      ? BRIDGE_7_MARKER
-      : source.includes(BRIDGE_6_MARKER)
+    const oldMarker = source.includes(BRIDGE_8_MARKER)
+      ? BRIDGE_8_MARKER
+      : source.includes(BRIDGE_7_MARKER)
+        ? BRIDGE_7_MARKER
+        : source.includes(BRIDGE_6_MARKER)
         ? BRIDGE_6_MARKER
         : source.includes(BRIDGE_5_MARKER)
         ? BRIDGE_5_MARKER
@@ -1097,7 +1143,7 @@ export function buildArenaJobFile(options: {
     throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 8 به‌صورت خودکار پشتیبانی می‌شوند.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 9 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 
