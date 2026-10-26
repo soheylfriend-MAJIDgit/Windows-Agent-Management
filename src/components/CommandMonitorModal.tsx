@@ -21,6 +21,7 @@ interface Detail {
     id: string;
     title: string;
     type: string;
+    payload: Record<string, unknown>;
     status: CommandStatus;
     requiresConfirmation: boolean;
     autoStopOnAnomaly: boolean;
@@ -47,6 +48,7 @@ interface Detail {
     name: string;
     driveFileId: string | null;
     driveUrl: string | null;
+    mimeType: string | null;
     createdAt: string;
   }>;
   anomaly: { detected: boolean; shouldStop: boolean; reasons: string[]; staleSeconds: number | null };
@@ -114,12 +116,22 @@ function artifactStageLabel(stage: string | null, kind: string): string {
           : "متن تأیید نشد";
     return `تلاش ${attempt[1]} ـ ${action}`;
   }
+  if (stage?.startsWith("agent-report-")) return "گزارش Markdown ایجنت";
   if (stage?.startsWith("ocr-")) return "بررسی دیداری OCR";
   if (stage?.startsWith("prompt-")) return "مرحله ورود یا ارسال پرامپت";
-  return kind === "log" ? "گزارش مرحله‌ای" : "تصویر مرحله‌ای";
+  return kind === "log" || kind === "agent-report" ? "گزارش مرحله‌ای" : "تصویر مرحله‌ای";
 }
 
 function timelineMessage(message: string): string {
+  if (message.startsWith("SERVICE_AGENT_REPORT_BEGIN:")) {
+    try {
+      const report = JSON.parse(message.slice("SERVICE_AGENT_REPORT_BEGIN:".length).trim()) as { index?: number; item?: number; chars?: number };
+      return `گزارش Markdown شماره ${faNumber(report.index ?? 0)} برای مرحله ${faNumber(report.item ?? 0)} دریافت شد و در حال بایگانی مستقل است (${faNumber(report.chars ?? 0)} نویسه).`;
+    } catch {
+      return "یک گزارش Markdown تازه از Agent همکار دریافت شد.";
+    }
+  }
+  if (message.startsWith("SERVICE_AGENT_REPORT_END:")) return "دریافت و ثبت کامل نسخه گزارش Markdown پایان یافت.";
   for (const prefix of [INTERVENTION_REQUIRED_PREFIX, "SERVICE_HUMAN_INTERVENTION_WAITING:", INTERVENTION_CLEARED_PREFIX]) {
     if (!message.startsWith(prefix)) continue;
     try {
@@ -173,7 +185,13 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
   const [confirmStop, setConfirmStop] = useState(false);
   const [dismissedInterventionId, setDismissedInterventionId] = useState<number | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
-  const eventCount = detail?.events.length ?? 0;
+  const visibleEvents = (detail?.events ?? []).filter((event) => !event.message.startsWith("SERVICE_AGENT_REPORT_CHUNK:"));
+  const eventCount = visibleEvents.length;
+  const imageArtifacts = (detail?.artifacts ?? []).filter((artifact) => artifact.kind === "screenshot" || artifact.mimeType?.startsWith("image/"));
+  const reportCount = (detail?.events ?? []).filter((event) => event.message.startsWith("SERVICE_AGENT_REPORT_BEGIN:")).length;
+  const monitoringPlan = Array.isArray(detail?.command.payload?.monitoringPlan)
+    ? detail.command.payload.monitoringPlan.filter((item): item is string => typeof item === "string")
+    : [];
   const humanIntervention = currentHumanIntervention(detail);
   const showHumanIntervention = humanIntervention && humanIntervention.eventId !== dismissedInterventionId;
 
@@ -281,7 +299,16 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
             <h2 id="command-monitor-title">{command?.title ?? "در حال دریافت فرمان…"}</h2>
             <code dir="ltr">{commandId}</code>
           </div>
-          <button className="command-close" type="button" onClick={onClose} aria-label="بستن پنجره پایش">×</button>
+          <div className="command-head-actions">
+            <button
+              className="button secondary command-report-button"
+              type="button"
+              onClick={() => window.open(`/commands/${encodeURIComponent(commandId)}/agent-reports`, "_blank", "noopener,noreferrer")}
+            >
+              گزارشات ایجنت{reportCount ? ` (${faNumber(reportCount)})` : ""}
+            </button>
+            <button className="command-close" type="button" onClick={onClose} aria-label="بستن پنجره پایش">×</button>
+          </div>
         </header>
 
         {showHumanIntervention ? (
@@ -357,15 +384,25 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
           </div>
         </div>
 
+        <section className="command-monitoring-plan" aria-labelledby="command-monitoring-plan-title">
+          <div className="command-panel-title">
+            <h3 id="command-monitoring-plan-title">دستوراتی که برای پایش داده شده</h3>
+            <span>{faNumber(monitoringPlan.length)} مورد</span>
+          </div>
+          {monitoringPlan.length ? (
+            <ul>{monitoringPlan.map((item) => <li key={item}>{item}</li>)}</ul>
+          ) : <p className="command-empty">برای این فرمان برنامه پایش جداگانه‌ای ثبت نشده است.</p>}
+        </section>
+
         <div className="command-monitor-grid">
           <section className="command-panel" aria-labelledby="command-events-title">
             <div className="command-panel-title">
               <h3 id="command-events-title">گزارش زنده مرحله‌ها</h3>
-              <span>{faNumber(detail?.events.length ?? 0)} رخداد</span>
+              <span>{faNumber(visibleEvents.length)} رخداد</span>
             </div>
             <div className="command-timeline" ref={timelineRef} aria-live="polite">
-              {!detail?.events.length ? <p className="command-empty">در انتظار نخستین گزارش Windows Agent…</p> : null}
-              {detail?.events.map((event) => (
+              {!visibleEvents.length ? <p className="command-empty">در انتظار نخستین گزارش Windows Agent…</p> : null}
+              {visibleEvents.map((event) => (
                 <article className={`command-event level-${event.level}`} key={event.id}>
                   <div className="command-event-marker" aria-hidden="true" />
                   <div>
@@ -382,13 +419,13 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
 
           <section className="command-panel command-artifacts" aria-labelledby="command-artifacts-title">
             <div className="command-panel-title">
-              <h3 id="command-artifacts-title">تصویرهای مرحله‌ای</h3>
-              <span>{faNumber(detail?.artifacts.length ?? 0)} مورد</span>
+              <h3 id="command-artifacts-title">لینک تصویرهای مرحله‌ای</h3>
+              <span>{faNumber(imageArtifacts.length)} مورد</span>
             </div>
-            <p className="command-storage-note">فقط نام و شناسه/لینک در D1 است؛ بایت تصویر منحصراً در Google Drive می‌ماند.</p>
+            <p className="command-storage-note">فقط metadata و لینک در D1 است؛ بایت تصویر منحصراً در Google Drive می‌ماند.</p>
             <div className="command-artifact-list">
-              {!detail?.artifacts.length ? <p className="command-empty">هنوز تصویری گزارش نشده است.</p> : null}
-              {detail?.artifacts.map((artifact) => (
+              {!imageArtifacts.length ? <p className="command-empty">هنوز لینک تصویری گزارش نشده است.</p> : null}
+              {imageArtifacts.map((artifact) => (
                 <article className="command-artifact" key={artifact.id}>
                   <div><strong>{artifact.name}</strong><span>{artifactStageLabel(artifact.stage, artifact.kind)}</span></div>
                   {artifact.driveUrl ? <a href={artifact.driveUrl} target="_blank" rel="noreferrer">بازکردن در Drive</a> : <span className="artifact-pending">در انتظار Drive</span>}

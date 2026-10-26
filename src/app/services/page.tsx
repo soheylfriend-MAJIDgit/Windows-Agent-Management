@@ -311,7 +311,7 @@ export default function ServicesPage() {
                     <div className="service-field-heading">
                       <div>
                         <span className="field-label" id="prompt-source-title">منبع پرامپت‌ها</span>
-                        <span className="field-helper">حالت دستی فعلی بدون تغییر در دسترس است.</span>
+                        <span className="field-helper">در هر دو حالت، کنترل، پیام زنده و گزارش Markdown پایش می‌شوند.</span>
                       </div>
                       <div className="prompt-source-toggle" role="group" aria-label="انتخاب منبع پرامپت‌ها">
                         <button
@@ -332,11 +332,11 @@ export default function ServicesPage() {
                         </button>
                       </div>
                     </div>
-                    {promptSourceMode === "next_file" ? (
-                      <div className="prompt-source-notice">
-                        Windows Agent پیش از شروع، محتوای قدیمی فایل را حذف می‌کند؛ سپس هر تغییر را تا سه خواندن پایدار بررسی، یک‌بار مصرف و دوباره از فایل پاک می‌کند. محتوای ناقص، بدون تغییر یا تکراری ارسال نمی‌شود.
-                      </div>
-                    ) : null}
+                    <div className="prompt-source-notice">
+                      {promptSourceMode === "next_file"
+                        ? "Windows Agent پیش از شروع، محتوای قدیمی NextPrompt را حذف می‌کند؛ سپس هر تغییر را تا سه خواندن پایدار بررسی، یک‌بار مصرف و دوباره از فایل پاک می‌کند. محتوای ناقص، بدون تغییر یا تکراری ارسال نمی‌شود."
+                        : "متن اصلی هر پرامپت دستی حفظ می‌شود و قرارداد کنترل play/pause/stop، پیام کوتاه و گزارش Markdown به انتهای آن افزوده می‌شود؛ NextPrompt در این حالت استفاده نمی‌شود."}
+                    </div>
                   </section>
                 ) : null}
 
@@ -524,7 +524,7 @@ export default function ServicesPage() {
                         ) : null}
                         {field.name === "autoMaxIterations" ? (
                           <span className="field-helper" aria-live="polite">
-                            حداکثر {promptCount.toLocaleString("fa-IR")} اجرا با احتساب پرامپت اول؛ نوشتن [[STOP]] در فایل می‌تواند زودتر پایان دهد.
+                            حداکثر {promptCount.toLocaleString("fa-IR")} اجرا با احتساب پرامپت اول؛ قرار دادن فایل کنترل روی stop می‌تواند زودتر پایان دهد.
                           </span>
                         ) : null}
                       </>

@@ -250,9 +250,10 @@ function artifactStageMessage(stage: string | null, kind: string): string {
           : "تأیید نشدن متن";
     return `تصویر تلاش ${attempt[1]} ـ ${action} ثبت شد.`;
   }
+  if (stage?.startsWith("agent-report-")) return "نسخه مستقل گزارش Markdown ایجنت برای این اجرا ثبت شد.";
   if (stage?.startsWith("ocr-")) return "تصویر مرحله بررسی دیداری با OCR ثبت شد.";
   if (stage?.startsWith("prompt-")) return "تصویر یکی از مراحل ورود و ارسال پرامپت ثبت شد.";
-  return kind === "log" ? "گزارش مرحله‌ای برای بررسی بعدی ثبت شد." : "تصویر مرحله‌ای برای بررسی بعدی ثبت شد.";
+  return kind === "log" || kind === "agent-report" ? "گزارش مرحله‌ای برای بررسی بعدی ثبت شد." : "تصویر مرحله‌ای برای بررسی بعدی ثبت شد.";
 }
 
 function serviceProgressMessage(message: string): string | null {
@@ -290,6 +291,18 @@ function serviceProgressMessage(message: string): string | null {
   if (message.startsWith("SERVICE_NEXT_PROMPT_FILE_READY:")) return "فایل NextPrompt خالی و پایدار است؛ پرامپت اول می‌تواند ارسال شود.";
   if (message.startsWith("SERVICE_NEXT_PROMPT_DUPLICATE_IGNORED:")) return "محتوای قدیمی یا تکراری فایل شناسایی، نادیده گرفته و حذف شد؛ چیزی به Arena ارسال نشد.";
   if (message.startsWith("SERVICE_NEXT_PROMPT_READ_RETRY:")) return "خواندن فایل همگام‌شده موقتاً کامل نبود؛ بدون ارسال، دوباره بررسی می‌شود.";
+  if (message.startsWith("SERVICE_AGENT_DIRECT_MESSAGE:")) {
+    return `(پیام مستقیم ایجنت همکار: ${message.slice("SERVICE_AGENT_DIRECT_MESSAGE:".length).trim()})`;
+  }
+  if (message === "SERVICE_CONTROL_CHANGED: play") return "فایل کنترل روی play قرار گرفت؛ ادامه کار از checkpoint امن مجاز است.";
+  if (message === "SERVICE_CONTROL_CHANGED: pause") return "Agent همکار فایل کنترل را روی pause گذاشت؛ تعامل خودکار تا مداخله انسانی معلق شد.";
+  if (message === "SERVICE_CONTROL_CHANGED: stop") return "Agent همکار فایل کنترل را روی stop گذاشت؛ سرویس به‌صورت امن و کامل پایان می‌یابد.";
+  if (message.startsWith("SERVICE_CONTROL_STOPPED:")) return "درخواست stop فایل کنترل اعمال شد و ادامه سرویس متوقف شد.";
+  if (message.startsWith("SERVICE_CONTROL_INVALID:")) return "مقدار فایل کنترل معتبر نیست؛ فقط play، pause یا stop پذیرفته می‌شود و هیچ تعامل تازه‌ای بر اساس مقدار نامعتبر انجام نشد.";
+  if (message.startsWith("SERVICE_COMPANION_FILES_READY:")) return "فایل‌های کنترل، پیام زنده و گزارش برای این اجرای تازه آماده شدند.";
+  if (message.startsWith("SERVICE_MONITORING_PLAN_ACTIVE:")) return "پایش کنترل، پیام مستقیم، گزارش Markdown، تصاویر و مراحل Arena فعال است.";
+  if (message.startsWith("SERVICE_AGENT_REPORT_MISSING:")) return message.slice("SERVICE_AGENT_REPORT_MISSING:".length).trim();
+  if (message.startsWith("SERVICE_COMPANION_MONITOR_RETRY:")) return "خواندن یکی از فایل‌های همگام‌شده موقتاً ممکن نبود؛ پایش بدون تعامل با Arena دوباره تلاش می‌کند.";
   if (message.startsWith("SERVICE_OCR_READY:")) return "ابزار بررسی دیداری آماده است؛ اجرای پرامپت‌ها آغاز می‌شود.";
   if (message.startsWith("SERVICE_BATCH_RESULT_YES:")) return "روی گزینه Yes پنجره نتیجه کلیک شد.";
   return null;

@@ -4561,8 +4561,8 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
 }
 
 .command-modal {
-  width: min(1080px, 100%);
-  max-height: min(880px, calc(100dvh - 40px));
+  width: min(1380px, 96vw);
+  max-height: min(940px, calc(100dvh - 28px));
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: 22px;
@@ -4594,6 +4594,8 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
 
 .command-modal-head h2 { margin: 4px 0 7px; font-size: 1.15rem; }
 .command-modal-head code { color: var(--text-dim); font-size: .75rem; }
+.command-head-actions { display: flex; align-items: center; gap: 8px; }
+.command-report-button { min-height: 38px; white-space: nowrap; }
 .command-close {
   flex: 0 0 auto;
   width: 38px;
@@ -4665,9 +4667,28 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
 .command-alert-warning { border-color: color-mix(in srgb, var(--warn) 50%, transparent); background: color-mix(in srgb, var(--warn) 10%, transparent); }
 .command-alert-error { border-color: color-mix(in srgb, var(--danger) 52%, transparent); background: color-mix(in srgb, var(--danger) 10%, transparent); }
 
+.command-monitoring-plan {
+  margin: 14px 22px 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: var(--surface-2);
+}
+.command-monitoring-plan ul {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 22px;
+  margin: 0;
+  padding: 12px 34px 14px 16px;
+  color: var(--text);
+  font-size: .78rem;
+  line-height: 1.8;
+}
+.command-monitoring-plan li::marker { color: var(--accent); }
+
 .command-monitor-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(270px, .75fr);
+  grid-template-columns: minmax(0, 1.65fr) minmax(330px, .8fr);
   gap: 14px;
   padding: 14px 22px 20px;
 }
@@ -4799,8 +4820,12 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
   .command-modal { width: 100%; max-height: 94dvh; border-radius: 20px 20px 0 0; }
   .command-modal-head { padding: 16px; }
   .command-modal-head h2 { font-size: 1rem; }
+  .command-head-actions { align-self: flex-start; }
+  .command-report-button { padding-inline: 10px; font-size: .72rem; }
   .command-summary { padding-inline: 16px; }
   .command-alert { margin-inline: 16px; }
+  .command-monitoring-plan { margin-inline: 16px; }
+  .command-monitoring-plan ul { grid-template-columns: 1fr; }
   .command-monitor-grid { grid-template-columns: 1fr; padding: 12px 16px 16px; }
   .command-timeline { max-height: 315px; }
   .command-modal-actions { padding: 12px 16px; flex-wrap: wrap; }
@@ -4911,4 +4936,62 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
   .automation-grid { grid-template-columns: 1fr; }
   .automation-source { min-height: 330px; }
   .automation-versions > div { grid-template-columns: 1fr; gap: 4px; }
+}
+
+/* ------------------------------------------- گزارش‌های مستقل Agent --- */
+.agent-reports-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface);
+}
+.agent-reports-toolbar code { color: var(--text-dim); font-size: .75rem; overflow-wrap: anywhere; }
+.agent-report-list { display: grid; gap: 16px; }
+.agent-report-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 17px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.agent-report-card > header,
+.agent-report-card > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 17px;
+}
+.agent-report-card > header { border-bottom: 1px solid var(--border); }
+.agent-report-card > footer { border-top: 1px solid var(--border); color: var(--text-dim); font-size: .75rem; flex-wrap: wrap; }
+.agent-report-card h2 { margin: 4px 0; font-size: .98rem; direction: ltr; text-align: right; overflow-wrap: anywhere; }
+.agent-report-card time { color: var(--text-dim); font-size: .72rem; }
+.agent-report-markdown {
+  max-height: 620px;
+  margin: 0;
+  padding: 20px;
+  overflow: auto;
+  border: 0;
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: .86rem;
+  line-height: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 720px) {
+  .agent-reports-toolbar,
+  .agent-report-card > header,
+  .agent-report-card > footer { align-items: stretch; flex-direction: column; }
+  .agent-reports-toolbar .button,
+  .agent-report-card .actions-inline,
+  .agent-report-card .actions-inline .button { width: 100%; justify-content: center; }
+  .agent-report-markdown { padding: 15px; font-size: .8rem; }
 }
