@@ -967,6 +967,23 @@ function hardenArenaTyping(source: string): string {
       + source.slice(legacyCopyEnd);
   }
 
+  // فایل فعال D1 ممکن است markerهای Bridge 11/12 را داشته باشد اما بلوک verifier آن
+  // با فاصله‌گذاری یا آستانه‌ای متفاوت ذخیره شده باشد. به‌جای اتکا به تطبیق یک خط،
+  // کل بلوک canonical/probe را بین دو anchor پایدار با نسخه Bridge 13 جایگزین می‌کنیم.
+  const latestVerifierStart = VERIFIED_PASTE_LOOP.indexOf("        # contenteditable ممکن است");
+  const latestVerifierEnd = VERIFIED_PASTE_LOOP.indexOf("\n\n        # تأیید دوم:", latestVerifierStart);
+  const sourceVerifierStart = source.indexOf("        # contenteditable ممکن است");
+  const sourceVerifierEnd = source.indexOf("\n\n        # تأیید دوم:", sourceVerifierStart);
+  if (latestVerifierStart < 0 || latestVerifierEnd < 0 || sourceVerifierStart < 0 || sourceVerifierEnd < 0) {
+    throw new AppError("بلوک کامل تأیید پرامپت Arena برای ارتقای Bridge 13 پیدا نشد.", {
+      status: 409,
+      code: "arena_bridge13_verifier_upgrade_failed",
+    });
+  }
+  source = source.slice(0, sourceVerifierStart)
+    + VERIFIED_PASTE_LOOP.slice(latestVerifierStart, latestVerifierEnd)
+    + source.slice(sourceVerifierEnd);
+
   if (!source.includes("import urllib.error\n")) {
     if (!source.includes("import urllib.request\n")) {
       throw new AppError("import شبکه Arena برای افزودن پایش اتصال پیدا نشد.", {
