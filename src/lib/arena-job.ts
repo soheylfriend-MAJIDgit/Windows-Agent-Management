@@ -37,6 +37,7 @@ import hashlib
 # هیچ توکن تلگرامی داخل این فایل یا گیت‌هاب قرار نمی‌گیرد.
 TELEGRAM_REPORT_MODE = "final"
 PROMPT_REQUEST_ID = "initial"
+FAILURE_INTERVENTION_REPORTED_FOR = None
 ARENA_COMPLETION_TIMEOUT = 180
 ARENA_COMPLETION_POLL_SECONDS = 3
 NETWORK_RECHECK_SECONDS = 60
@@ -62,6 +63,17 @@ def register_step_artifact(path, stage, kind="screenshot", mime_type="image/png"
         "mimeType": mime_type,
     }
     print("SERVICE_ARTIFACT: " + json.dumps(payload, ensure_ascii=False))
+
+
+def capture_named_step(stage):
+    safe_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in PROMPT_REQUEST_ID)
+    safe_stage = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(stage))
+    step_dir = os.path.join(os.path.dirname(SCREENSHOT_DIR), "logs", "steps")
+    os.makedirs(step_dir, exist_ok=True)
+    path = os.path.join(step_dir, f"arena_step_{safe_id}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{safe_stage}.png")
+    take_screenshot(path)
+    register_step_artifact(path, safe_stage)
+    return path
 
 
 def network_reachable():
@@ -391,6 +403,7 @@ def wait_for_arena_completion():
 `;
 
 const WRAPPED_MAIN = `def main():
+    global FAILURE_INTERVENTION_REPORTED_FOR
     started_at = datetime.now()
     if TELEGRAM_REPORT_MODE == "start_final":
         send_telegram_status("شروع", "اجرای پرامپت در ویندوز آغاز شد.")
@@ -410,6 +423,7 @@ const WRAPPED_MAIN = `def main():
             "guidance": "اجرای خودکار متوقف شد؛ وضعیت Arena و تصاویر مرحله‌ای را بررسی کنید.",
         }
         print("SERVICE_HUMAN_INTERVENTION_REQUIRED: " + json.dumps(intervention, ensure_ascii=False))
+        FAILURE_INTERVENTION_REPORTED_FOR = PROMPT_REQUEST_ID
         send_telegram_status("نیازمند مداخله انسانی", summary + "\\n" + trace[-1200:])
         raise
     else:
