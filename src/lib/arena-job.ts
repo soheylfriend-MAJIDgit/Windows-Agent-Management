@@ -3,7 +3,8 @@ import { AppError } from "./errors";
 export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
-const BRIDGE_MARKER = "# management-arena-bridge: 16";
+const BRIDGE_MARKER = "# management-arena-bridge: 17";
+const BRIDGE_16_MARKER = "# management-arena-bridge: 16";
 const BRIDGE_15_MARKER = "# management-arena-bridge: 15";
 const BRIDGE_14_MARKER = "# management-arena-bridge: 14";
 const BRIDGE_13_MARKER = "# management-arena-bridge: 13";
@@ -41,6 +42,7 @@ function replaceAssignment(source: string, name: string, value: string): string 
 const TELEGRAM_BRIDGE = `${BRIDGE_MARKER}
 import hashlib
 import shutil
+import tempfile
 
 # گزارش نتیجه از راه صف محلی رباتِ خود Windows Agent ارسال می‌شود؛
 # هیچ توکن تلگرامی داخل این فایل یا گیت‌هاب قرار نمی‌گیرد.
@@ -58,6 +60,51 @@ OCR_HELPER = os.environ.get("WINDOWS_AGENT_OCR_HELPER", "")
 BOT_API_CONFIG = os.path.join(
     os.environ.get("LOCALAPPDATA", ""), "Windows-Agent", "bot_api.json"
 )
+
+
+def run_hidden_powershell_file(script_text, *, extra_env=None, timeout=180, work_dir=None):
+    """PowerShell بلند را با -File اجرا می‌کند تا محدودیت ۳۲هزار نویسه‌ای CreateProcess دور زده شود."""
+    target_dir = work_dir or os.path.join(tempfile.gettempdir(), "windows-agent-ps")
+    os.makedirs(target_dir, exist_ok=True)
+    digest = hashlib.sha256(script_text.encode("utf-8")).hexdigest()[:16]
+    script_path = os.path.join(target_dir, "arena_" + digest + ".ps1")
+    env = os.environ.copy()
+    if extra_env:
+        env.update({str(key): str(value) for key, value in extra_env.items()})
+    payload = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\\n" + script_text
+    print(f"ARENA_POWERSHELL_FILE_TRANSPORT: chars={len(script_text)} pathLength={len(script_path)}")
+    try:
+        with open(script_path, "w", encoding="utf-8-sig", newline="\\n") as handle:
+            handle.write(payload)
+        completed = subprocess.run(
+            [
+                "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass", "-File", script_path,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            env=env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        stdout = completed.stdout or ""
+        stderr = completed.stderr or ""
+        print(f"ARENA_POWERSHELL_FILE_RESULT: exit={completed.returncode} stdoutChars={len(stdout)} stderrChars={len(stderr)}")
+        if completed.returncode != 0:
+            raise RuntimeError(
+                "اجرای فایل PowerShell Arena ناموفق شد؛ کد خروج: "
+                + str(completed.returncode) + "؛ stderr: " + stderr[-2000:]
+            )
+        return stdout
+    finally:
+        try:
+            os.remove(script_path)
+        except FileNotFoundError:
+            pass
+        except OSError as cleanup_error:
+            print("ARENA_POWERSHELL_FILE_CLEANUP_WARNING: " + str(cleanup_error))
 
 
 def register_step_artifact(path, stage, kind="screenshot", mime_type="image/png"):
@@ -1238,13 +1285,13 @@ function hardenArenaTyping(source: string): string {
       "    Write-Output 'ARENA_BROWSER_FG'\n    Save-StepShot '01-browser-foreground'\n",
     );
   }
-  // Bridge 16: بلوک ارسال در همه نسخه‌های قبلی بدون اتکا به متن comment تعویض می‌شود.
-  // این کار نسخه فعال D1 را نیز که Bridge 15 در marker و Bridge 5 در بدنه دارد واقعاً ارتقا می‌دهد.
+  // Bridge 17: بلوک ارسال در همه نسخه‌های قبلی بدون اتکا به متن comment تعویض می‌شود.
+  // این کار نسخه فعال D1 را نیز که Bridge 16 در marker و Bridge 5 در بدنه دارد واقعاً ارتقا می‌دهد.
   const submitEndAnchor = "\nif ($sent) { Write-Output 'ARENA_SENT_VERIFIED' }";
   const submitStart = source.indexOf("$sent = $false");
   const submitEnd = source.indexOf(submitEndAnchor, submitStart);
   if (submitStart < 0 || submitEnd < 0) {
-    throw new AppError("بخش ارسال و تأیید نهایی Arena برای ارتقای Bridge 16 پیدا نشد.", {
+    throw new AppError("بخش ارسال و تأیید نهایی Arena برای ارتقای Bridge 17 پیدا نشد.", {
       status: 409,
       code: "arena_submit_upgrade_failed",
     });
@@ -1359,7 +1406,7 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
     # UIA داخل PowerShell مسیر اصلی یافتن composer است؛ OCR امنیتی پیش‌تر یک‌بار اجرا شده
     # و نباید با اجرای تکراری helper تایپ را ده‌ها ثانیه دیگر معطل کند.
     ocr_point = None
-    output = run_hidden_powershell(
+    output = run_hidden_powershell_file(
         TYPE_PS_SCRIPT,
         extra_env={
             "ARENA_PROMPT": PROMPT_TEXT,
@@ -1389,6 +1436,20 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
 `;
   if (source.includes(oldRunner)) source = source.replace(oldRunner, diagnosticRunner);
   else if (source.includes(currentRunner)) source = source.replace(currentRunner, diagnosticRunner);
+
+  // Bridge 17: TYPE_PS_SCRIPT دیگر نباید به‌عنوان آرگومان -Command وارد CreateProcess شود؛
+  // طول Bridge 16 از سقف command line ویندوز عبور کرد و WinError 206 ساخت.
+  const commandLineTypeTransport = `    output = run_hidden_powershell(\n        TYPE_PS_SCRIPT,\n        extra_env={`;
+  const fileTypeTransport = `    output = run_hidden_powershell_file(\n        TYPE_PS_SCRIPT,\n        extra_env={`;
+  if (source.includes(commandLineTypeTransport)) {
+    source = source.replace(commandLineTypeTransport, fileTypeTransport);
+  }
+  if (!source.includes(fileTypeTransport)) {
+    throw new AppError("مسیر اجرای فایل PowerShell برای عبور از محدودیت طول Windows فعال نشد.", {
+      status: 409,
+      code: "arena_powershell_file_transport_upgrade_failed",
+    });
+  }
 
   if (!source.includes('register_step_artifact(step_path, "prompt-" + step_name)')) {
     const markersAnchor = `    markers = [line.strip() for line in output.splitlines() if line.strip()]\n`;
@@ -1482,7 +1543,7 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
 }
 
 
-/** ارتقای درجا از Bridge 1 تا 15؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+/** ارتقای درجا از Bridge 1 تا 16؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
 function upgradeLegacyBridge(source: string, oldMarker: string): string {
   const bridgeStart = source.indexOf(oldMarker);
   const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
@@ -1525,6 +1586,7 @@ export function buildArenaJobFile(options: {
     return source.endsWith("\n") ? source : `${source}\n`;
   }
   if (
+    source.includes(BRIDGE_16_MARKER) ||
     source.includes(BRIDGE_15_MARKER) ||
     source.includes(BRIDGE_14_MARKER) ||
     source.includes(BRIDGE_13_MARKER) ||
@@ -1541,9 +1603,11 @@ export function buildArenaJobFile(options: {
     source.includes(BRIDGE_2_MARKER) ||
     source.includes(LEGACY_BRIDGE_MARKER)
   ) {
-    const oldMarker = source.includes(BRIDGE_15_MARKER)
-      ? BRIDGE_15_MARKER
-      : source.includes(BRIDGE_14_MARKER)
+    const oldMarker = source.includes(BRIDGE_16_MARKER)
+      ? BRIDGE_16_MARKER
+      : source.includes(BRIDGE_15_MARKER)
+        ? BRIDGE_15_MARKER
+        : source.includes(BRIDGE_14_MARKER)
         ? BRIDGE_14_MARKER
         : source.includes(BRIDGE_13_MARKER)
         ? BRIDGE_13_MARKER
@@ -1580,7 +1644,7 @@ export function buildArenaJobFile(options: {
     throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 16 به‌صورت خودکار پشتیبانی می‌شوند.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 17 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 
