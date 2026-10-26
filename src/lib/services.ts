@@ -151,10 +151,13 @@ export function directorMonitorSource(url: string, durationMinutes: number, inte
 
 async function arenaBatchSource(input: Record<string, unknown>): Promise<{ source: string; total: number; delay: number }> {
   const url = httpsUrl(input.url);
-  if (typeof input.prompts !== "string") throw new AppError("فهرست پرامپت‌ها خالی است.", { status: 422, code: "service_prompts_empty" });
-  const prompts = parsePromptBlocks(input.prompts);
+  const prompts = Array.isArray(input.promptItems)
+    ? input.promptItems.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)
+    : typeof input.prompts === "string"
+      ? parsePromptBlocks(input.prompts)
+      : [];
   if (!prompts.length || prompts.length > 20 || prompts.some((item) => item.length < 2 || item.length > 4000)) {
-    throw new AppError("بین ۱ تا ۲۰ بلوک پرامپت وارد کنید؛ هر بلوک حداکثر ۴۰۰۰ نویسه و جداکننده یک خط شامل --- باشد.", {
+    throw new AppError("بین ۱ تا ۲۰ پرامپت وارد کنید؛ هر پرامپت باید بین ۲ تا ۴۰۰۰ نویسه باشد.", {
       status: 422,
       code: "service_prompts_invalid",
     });

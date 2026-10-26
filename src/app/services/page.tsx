@@ -106,7 +106,10 @@ export default function ServicesPage() {
   const [activeCommandId, setActiveCommandId] = useState<string | null>(null);
 
   const services = useMemo(() => servicesApi.data?.services ?? [], [servicesApi.data]);
-  const promptCount = useMemo(() => promptBlockCount(input.prompts), [input.prompts]);
+  const promptCount = useMemo(
+    () => promptInputMode === "cells" ? promptCells.filter((item) => item.trim()).length : promptBlockCount(input.prompts),
+    [input.prompts, promptCells, promptInputMode],
+  );
 
   useEffect(() => {
     if (!selected) return;
@@ -203,9 +206,17 @@ export default function ServicesPage() {
     setSubmitting(true);
     setSubmitError(null);
     try {
+      const serviceInput = selected.slug === "arena-batch"
+        ? {
+            ...input,
+            promptItems: (promptInputMode === "cells" ? promptCells : parsePromptBlocks(input.prompts))
+              .map((item) => item.trim())
+              .filter(Boolean),
+          }
+        : input;
       const result = await postJson<{ commandId: string; version: number }>(
         `/api/services/${encodeURIComponent(selected.slug)}/run`,
-        { input },
+        { input: serviceInput },
       );
       setSelected(null);
       setActiveCommandId(result.commandId);

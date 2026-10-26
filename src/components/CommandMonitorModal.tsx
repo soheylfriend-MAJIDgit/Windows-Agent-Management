@@ -87,6 +87,7 @@ function artifactStageLabel(stage: string | null, kind: string): string {
     "prompt-03-try1-verified": "تأیید حضور متن",
     "prompt-04-before-submit": "پیش از ارسال پرامپت",
     "prompt-05-after-submit": "پس از ارسال پرامپت",
+    "prompt-05-submit-blocked": "توقف امن پیش از ارسال",
     "ocr-completion": "بررسی پایان پاسخ",
     "ocr-before-result-confirmation": "بررسی پیش از تأیید نتیجه",
     "result-confirmation-before": "پیش از انتخاب Yes",
@@ -95,6 +96,17 @@ function artifactStageLabel(stage: string | null, kind: string): string {
     "failure-screenshot": "تصویر لحظه خطا",
   };
   if (stage && labels[stage]) return labels[stage];
+  const attempt = stage?.match(/^prompt-03-try(\d+)-(focused|after-input|verified|unverified)$/);
+  if (attempt) {
+    const action = attempt[2] === "focused"
+      ? "فوکوس کادر"
+      : attempt[2] === "after-input"
+        ? "پس از ورود متن"
+        : attempt[2] === "verified"
+          ? "تأیید موفق متن"
+          : "متن تأیید نشد";
+    return `تلاش ${attempt[1]} ـ ${action}`;
+  }
   if (stage?.startsWith("ocr-")) return "بررسی دیداری OCR";
   if (stage?.startsWith("prompt-")) return "مرحله ورود یا ارسال پرامپت";
   return kind === "log" ? "گزارش مرحله‌ای" : "تصویر مرحله‌ای";

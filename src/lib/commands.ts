@@ -228,6 +228,7 @@ function artifactStageMessage(stage: string | null, kind: string): string {
     "prompt-03-try1-verified": "تصویر تأیید حضور صحیح متن در کادر پرامپت ثبت شد.",
     "prompt-04-before-submit": "تصویر نهایی پیش از ارسال پرامپت ثبت شد.",
     "prompt-05-after-submit": "تصویر صفحه بلافاصله پس از ارسال پرامپت ثبت شد.",
+    "prompt-05-submit-blocked": "به‌دلیل تأیید نشدن متن، ارسال انجام نشد و تصویر توقف امن ثبت شد.",
     "ocr-completion": "تصویر بررسی پایان پاسخ Arena ثبت شد.",
     "ocr-before-result-confirmation": "تصویر بررسی صفحه پیش از تأیید نتیجه ثبت شد.",
     "result-confirmation-before": "تصویر مرحله‌ای پیش از تأیید نتیجه با گزینه Yes ثبت شد.",
@@ -236,6 +237,17 @@ function artifactStageMessage(stage: string | null, kind: string): string {
     "failure-screenshot": "تصویر صفحه در لحظه خطا ثبت شد.",
   };
   if (stage && messages[stage]) return messages[stage];
+  const attempt = stage?.match(/^prompt-03-try(\d+)-(focused|after-input|verified|unverified)$/);
+  if (attempt) {
+    const action = attempt[2] === "focused"
+      ? "فوکوس روی کادر"
+      : attempt[2] === "after-input"
+        ? "پس از ورود متن"
+        : attempt[2] === "verified"
+          ? "تأیید موفق متن"
+          : "تأیید نشدن متن";
+    return `تصویر تلاش ${attempt[1]} ـ ${action} ثبت شد.`;
+  }
   if (stage?.startsWith("ocr-")) return "تصویر مرحله بررسی دیداری با OCR ثبت شد.";
   if (stage?.startsWith("prompt-")) return "تصویر یکی از مراحل ورود و ارسال پرامپت ثبت شد.";
   return kind === "log" ? "گزارش مرحله‌ای برای بررسی بعدی ثبت شد." : "تصویر مرحله‌ای برای بررسی بعدی ثبت شد.";

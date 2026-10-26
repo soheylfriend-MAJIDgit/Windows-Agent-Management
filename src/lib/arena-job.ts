@@ -3,7 +3,8 @@ import { AppError } from "./errors";
 export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
-const BRIDGE_MARKER = "# management-arena-bridge: 10";
+const BRIDGE_MARKER = "# management-arena-bridge: 11";
+const BRIDGE_10_MARKER = "# management-arena-bridge: 10";
 const BRIDGE_9_MARKER = "# management-arena-bridge: 9";
 const BRIDGE_8_MARKER = "# management-arena-bridge: 8";
 const BRIDGE_7_MARKER = "# management-arena-bridge: 7";
@@ -362,7 +363,7 @@ def save_failure_artifacts(detail):
             fh.write(
                 "زمان: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " تهران\\n"
                 "موضوع: توقف امن اتوماسیون Arena و نیاز به مداخله انسانی\\n"
-                "نسخه برنامه: Arena Bridge 10\\n"
+                "نسخه برنامه: Arena Bridge 11\\n"
                 "شناسه درخواست: " + PROMPT_REQUEST_ID + "\\n"
                 "پرامپت: " + PROMPT_TEXT + "\\n\\n"
                 "جزئیات خطا:\\n" + str(detail)
@@ -713,16 +714,33 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پی�
         $focusSafeAfterInput = ($null -ne $focused) -and -not (Test-Omnibox $focused $winRect.Top)
         $focusedText = Get-ElText $focused
         $composerText = Get-ElText $composer
-        $promptNormalized = ([string]$env:ARENA_PROMPT).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
-        # UIA TextPattern عمداً حداکثر ۱۰۰۰ نویسه می‌خواند؛ مقایسه کل پرامپت بلند
-        # false-negative می‌ساخت. یک probe آغازینِ معنادار، همراه با فوکوس امن و
-        # موفقیت واقعی SendInput/ValuePattern/Paste، برای اثبات حضور متن کافی است.
-        $probeLength = [Math]::Min(240, $promptNormalized.Length)
-        $promptProbe = if ($probeLength -gt 0) { $promptNormalized.Substring(0, $probeLength) } else { "" }
-        $focusedNormalized = ([string]$focusedText).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
-        $composerNormalized = ([string]$composerText).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
-        $okFocused = $focusSafeAfterInput -and $inputOk -and $focusedText -and $promptProbe -and $focusedNormalized.Contains($promptProbe)
-        $okComposer = $focusSafeAfterInput -and $inputOk -and $composerText -and $promptProbe -and $composerNormalized.Contains($promptProbe)
+        # contenteditable ممکن است line-break و ZWNJ را در UIA متفاوت برگرداند و برای
+        # متن بلند فقط یک پنجره ۱۰۰۰ نویسه‌ای (نه الزاماً ابتدای متن) بدهد. بنابراین
+        # متن را canonical و چند probe از ابتدا/میانه/انتها را length-aware بررسی می‌کنیم.
+        $promptCanonical = (([string]$env:ARENA_PROMPT -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\s+', ' ').Trim()
+        $focusedCanonical = (([string]$focusedText -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\s+', ' ').Trim()
+        $composerCanonical = (([string]$composerText -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\s+', ' ').Trim()
+        $probeLength = [Math]::Min(32, $promptCanonical.Length)
+        $promptProbes = @()
+        if ($probeLength -gt 0) {
+            $maxOffset = [Math]::Max(0, $promptCanonical.Length - $probeLength)
+            $offsets = @(0, [int]($maxOffset / 3), [int](2 * $maxOffset / 3), $maxOffset) | Select-Object -Unique
+            foreach ($offset in $offsets) { $promptProbes += $promptCanonical.Substring($offset, $probeLength) }
+        }
+        $focusedProbeHit = $false
+        $composerProbeHit = $false
+        foreach ($probe in $promptProbes) {
+            if ($focusedCanonical.Contains($probe)) { $focusedProbeHit = $true }
+            if ($composerCanonical.Contains($probe)) { $composerProbeHit = $true }
+        }
+        $minimumEvidenceLength = [Math]::Min(400, [Math]::Max(24, [int]($promptCanonical.Length * 0.2)))
+        $okFocused = $focusSafeAfterInput -and $inputOk -and $focusedProbeHit -and ($focusedCanonical.Length -ge $minimumEvidenceLength)
+        $okComposer = $focusSafeAfterInput -and $inputOk -and $composerProbeHit -and ($composerCanonical.Length -ge $minimumEvidenceLength)
+        Write-Output ("ARENA_VERIFY_EXPECTED_LENGTH=" + $promptCanonical.Length)
+        Write-Output ("ARENA_VERIFY_FOCUSED_LENGTH=" + $focusedCanonical.Length)
+        Write-Output ("ARENA_VERIFY_COMPOSER_LENGTH=" + $composerCanonical.Length)
+        Write-Output ("ARENA_VERIFY_FOCUSED_PROBE=" + [bool]$focusedProbeHit)
+        Write-Output ("ARENA_VERIFY_COMPOSER_PROBE=" + [bool]$composerProbeHit)
 
         # تأیید دوم: Select All + Copy فقط با فوکوس امن و sentinel مستقل.
         $okCopied = $false
@@ -735,8 +753,14 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پی�
                 [void][WinApi]::SendChord(0x11, 0x43)
                 Start-Sleep -Milliseconds 400
                 $copiedText = [string](Get-Clipboard -Raw)
-                $copiedNormalized = $copiedText.Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
-                $okCopied = $inputOk -and $promptProbe -and $copiedNormalized.Contains($promptProbe)
+                $copiedCanonical = (($copiedText -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\s+', ' ').Trim()
+                $copiedProbeHit = $false
+                foreach ($probe in $promptProbes) {
+                    if ($copiedCanonical.Contains($probe)) { $copiedProbeHit = $true; break }
+                }
+                $okCopied = $inputOk -and $copiedProbeHit -and ($copiedCanonical.Length -ge $minimumEvidenceLength)
+                Write-Output ("ARENA_VERIFY_COPIED_LENGTH=" + $copiedCanonical.Length)
+                Write-Output ("ARENA_VERIFY_COPIED_PROBE=" + [bool]$copiedProbeHit)
                 [void][WinApi]::PressKey(0x23) # End؛ برداشتن selection بدون تغییر متن
             } catch {
                 Write-Output ("ARENA_COPY_VERIFY_ERROR=" + $_.Exception.Message)
@@ -762,7 +786,7 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پی�
 function hardenArenaTyping(source: string): string {
   // Bridge 7 پرامپت‌های بلند را با متن UIA محدودشده به ۱۰۰۰ نویسه به‌طور کامل
   // مقایسه می‌کرد و با وجود حضور واقعی متن false-negative می‌ساخت.
-  if (!source.includes("$promptProbe =")) {
+  if (!source.includes("$promptProbe =") && !source.includes("ARENA_VERIFY_FOCUSED_PROBE=")) {
     const normalizedAnchor = `        $promptNormalized = ([string]$env:ARENA_PROMPT).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")\n`;
     const probeBlock = `${normalizedAnchor}        $probeLength = [Math]::Min(240, $promptNormalized.Length)\n        $promptProbe = if ($probeLength -gt 0) { $promptNormalized.Substring(0, $probeLength) } else { "" }\n`;
     const oldFocused = `        $okFocused = $focusSafeAfterInput -and $focusedText -and $focusedNormalized.Contains($promptNormalized)\n`;
@@ -782,6 +806,37 @@ function hardenArenaTyping(source: string): string {
       .replace(oldFocused, newFocused)
       .replace(oldComposer, newComposer)
       .replace(oldCopied, newCopied);
+  }
+
+  if (!source.includes("ARENA_VERIFY_FOCUSED_PROBE=")) {
+    const stableStart = VERIFIED_PASTE_LOOP.indexOf("        # contenteditable ممکن است");
+    const stableEnd = VERIFIED_PASTE_LOOP.indexOf("\n\n        # تأیید دوم:", stableStart);
+    const legacyStartAnchor = `        $promptNormalized = ([string]$env:ARENA_PROMPT).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")`;
+    const legacyStart = source.indexOf(legacyStartAnchor);
+    const legacyEnd = source.indexOf("\n\n        # تأیید دوم:", legacyStart);
+    if (stableStart < 0 || stableEnd < 0 || legacyStart < 0 || legacyEnd < 0) {
+      throw new AppError("بخش تأیید پایدار پرامپت چندخطی Arena پیدا نشد.", {
+        status: 409,
+        code: "arena_multiline_verifier_upgrade_failed",
+      });
+    }
+    source = source.slice(0, legacyStart)
+      + VERIFIED_PASTE_LOOP.slice(stableStart, stableEnd)
+      + source.slice(legacyEnd);
+
+    const stableCopyStart = VERIFIED_PASTE_LOOP.indexOf("                $copiedText = [string](Get-Clipboard -Raw)");
+    const stableCopyEnd = VERIFIED_PASTE_LOOP.indexOf("                [void][WinApi]::PressKey(0x23)", stableCopyStart);
+    const legacyCopyStart = source.indexOf("                $copiedText = [string](Get-Clipboard -Raw)");
+    const legacyCopyEnd = source.indexOf("                [void][WinApi]::PressKey(0x23)", legacyCopyStart);
+    if (stableCopyStart < 0 || stableCopyEnd < 0 || legacyCopyStart < 0 || legacyCopyEnd < 0) {
+      throw new AppError("بخش تأیید Clipboard پرامپت چندخطی پیدا نشد.", {
+        status: 409,
+        code: "arena_multiline_clipboard_upgrade_failed",
+      });
+    }
+    source = source.slice(0, legacyCopyStart)
+      + VERIFIED_PASTE_LOOP.slice(stableCopyStart, stableCopyEnd)
+      + source.slice(legacyCopyEnd);
   }
 
   if (!source.includes("import urllib.error\n")) {
@@ -895,11 +950,16 @@ function hardenArenaTyping(source: string): string {
     }
     source = `${source.slice(0, submitStart)}${VERIFIED_SUBMIT_BLOCK}${source.slice(submitEnd + 1)}`;
   }
-  if (!source.includes("Save-StepShot '05-after-submit'")) {
-    source = source.replace(
-      "if ($sent) { Write-Output 'ARENA_SENT_VERIFIED' } else { Write-Output 'ARENA_SEND_UNCERTAIN' }",
-      "Save-StepShot '05-after-submit'\nif ($sent) { Write-Output 'ARENA_SENT_VERIFIED' } else { Write-Output 'ARENA_SEND_UNCERTAIN' }",
-    );
+  const plainSubmitResult = "if ($sent) { Write-Output 'ARENA_SENT_VERIFIED' } else { Write-Output 'ARENA_SEND_UNCERTAIN' }";
+  const legacySubmitShot = `Save-StepShot '05-after-submit'\n${plainSubmitResult}`;
+  const accurateSubmitShots = "if ($sent) { Save-StepShot '05-after-submit'; Write-Output 'ARENA_SENT_VERIFIED' } else { Save-StepShot '05-submit-blocked'; Write-Output 'ARENA_SEND_UNCERTAIN' }";
+  if (source.includes(legacySubmitShot)) source = source.replace(legacySubmitShot, accurateSubmitShots);
+  else if (source.includes(plainSubmitResult)) source = source.replace(plainSubmitResult, accurateSubmitShots);
+  if (!source.includes("Save-StepShot '05-submit-blocked'")) {
+    throw new AppError("بخش تصویربرداری نتیجه ارسال Arena قابل ارتقا نیست.", {
+      status: 409,
+      code: "arena_submit_evidence_upgrade_failed",
+    });
   }
 
   const directOpenBlock = `    # ۱) باز کردن لینک
@@ -1033,12 +1093,17 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
     source = source.replace(markersAnchor, artifactMarkers);
   }
 
-  const redundantComposerOcr = `    wait_for_network()\n    try:\n        ocr_point = find_text_with_ocr([COMPOSER_PLACEHOLDER], stage="composer")\n    except Exception as exc:\n        print(f"هشدار: مکان‌یابی اولیه PaddleOCR ممکن نشد: {exc}")\n        ocr_point = None\n`;
-  if (source.includes(redundantComposerOcr)) {
-    source = source.replace(
-      redundantComposerOcr,
-      `    # OCR امنیتی پیش‌تر اجرا شده؛ UIA و focus guard مسیر اصلی composer هستند.\n    ocr_point = None\n`,
-    );
+  const typeRunnerStart = source.indexOf("\ndef type_and_submit():");
+  const typeRunnerTrace = source.indexOf(`    trace_id = safe_id + "_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")\n`, typeRunnerStart);
+  const typeRunnerOutput = source.indexOf("    output = run_hidden_powershell(\n", typeRunnerTrace);
+  if (typeRunnerStart >= 0 && typeRunnerTrace >= 0 && typeRunnerOutput > typeRunnerTrace) {
+    const traceLineEnd = source.indexOf("\n", typeRunnerTrace) + 1;
+    const preOutputBlock = source.slice(traceLineEnd, typeRunnerOutput);
+    if (preOutputBlock.includes("find_text_with_ocr([COMPOSER_PLACEHOLDER]")) {
+      source = source.slice(0, traceLineEnd)
+        + "    # OCR امنیتی پیش‌تر اجرا شده؛ UIA و focus guard مسیر اصلی composer هستند.\n    ocr_point = None\n"
+        + source.slice(typeRunnerOutput);
+    }
   }
 
   if (!source.includes('"ARENA_OCR_X"')) {
@@ -1073,7 +1138,7 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
 }
 
 
-/** ارتقای درجا از Bridge 1 تا 9؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+/** ارتقای درجا از Bridge 1 تا 10؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
 function upgradeLegacyBridge(source: string, oldMarker: string): string {
   const bridgeStart = source.indexOf(oldMarker);
   const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
@@ -1116,6 +1181,7 @@ export function buildArenaJobFile(options: {
     return source.endsWith("\n") ? source : `${source}\n`;
   }
   if (
+    source.includes(BRIDGE_10_MARKER) ||
     source.includes(BRIDGE_9_MARKER) ||
     source.includes(BRIDGE_8_MARKER) ||
     source.includes(BRIDGE_7_MARKER) ||
@@ -1126,9 +1192,11 @@ export function buildArenaJobFile(options: {
     source.includes(BRIDGE_2_MARKER) ||
     source.includes(LEGACY_BRIDGE_MARKER)
   ) {
-    const oldMarker = source.includes(BRIDGE_9_MARKER)
-      ? BRIDGE_9_MARKER
-      : source.includes(BRIDGE_8_MARKER)
+    const oldMarker = source.includes(BRIDGE_10_MARKER)
+      ? BRIDGE_10_MARKER
+      : source.includes(BRIDGE_9_MARKER)
+        ? BRIDGE_9_MARKER
+        : source.includes(BRIDGE_8_MARKER)
         ? BRIDGE_8_MARKER
         : source.includes(BRIDGE_7_MARKER)
         ? BRIDGE_7_MARKER
@@ -1153,7 +1221,7 @@ export function buildArenaJobFile(options: {
     throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 10 به‌صورت خودکار پشتیبانی می‌شوند.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 11 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 
