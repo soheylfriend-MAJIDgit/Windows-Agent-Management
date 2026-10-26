@@ -229,6 +229,7 @@ function artifactStageMessage(stage: string | null, kind: string): string {
     "prompt-04-before-submit": "تصویر نهایی پیش از ارسال پرامپت ثبت شد.",
     "prompt-05-after-submit": "تصویر صفحه بلافاصله پس از ارسال پرامپت ثبت شد.",
     "prompt-05-submit-blocked": "به‌دلیل تأیید نشدن متن، ارسال انجام نشد و تصویر توقف امن ثبت شد.",
+    "prompt-05-submit-unconfirmed": "Enter زده شد اما خروج متن از composer تأیید نشد؛ تصویر توقف امن ثبت شد.",
     "ocr-completion": "تصویر بررسی پایان پاسخ Arena ثبت شد.",
     "ocr-before-result-confirmation": "تصویر بررسی صفحه پیش از تأیید نتیجه ثبت شد.",
     "result-confirmation-before": "تصویر مرحله‌ای پیش از تأیید نتیجه با گزینه Yes ثبت شد.",
