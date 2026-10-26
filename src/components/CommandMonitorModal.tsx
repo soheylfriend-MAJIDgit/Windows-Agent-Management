@@ -76,6 +76,30 @@ async function parseResponse<T>(response: Response): Promise<T> {
 const INTERVENTION_REQUIRED_PREFIX = "SERVICE_HUMAN_INTERVENTION_REQUIRED:";
 const INTERVENTION_CLEARED_PREFIX = "SERVICE_HUMAN_INTERVENTION_CLEARED:";
 
+function artifactStageLabel(stage: string | null, kind: string): string {
+  const labels: Record<string, string> = {
+    "ocr-before-input": "بررسی صفحه پیش از ورود متن",
+    "ocr-composer": "پیدا کردن کادر پرامپت",
+    "prompt-01-browser-foreground": "فعال بودن مرورگر",
+    "prompt-02-composer-ready": "آماده بودن کادر پرامپت",
+    "prompt-03-try1-focused": "فوکوس روی کادر پرامپت",
+    "prompt-03-try1-after-input": "پس از ورود متن",
+    "prompt-03-try1-verified": "تأیید حضور متن",
+    "prompt-04-before-submit": "پیش از ارسال پرامپت",
+    "prompt-05-after-submit": "پس از ارسال پرامپت",
+    "ocr-completion": "بررسی پایان پاسخ",
+    "ocr-before-result-confirmation": "بررسی پیش از تأیید نتیجه",
+    "result-confirmation-before": "پیش از انتخاب Yes",
+    "result-confirmation-after": "پس از انتخاب Yes",
+    "failure-report": "گزارش خطا",
+    "failure-screenshot": "تصویر لحظه خطا",
+  };
+  if (stage && labels[stage]) return labels[stage];
+  if (stage?.startsWith("ocr-")) return "بررسی دیداری OCR";
+  if (stage?.startsWith("prompt-")) return "مرحله ورود یا ارسال پرامپت";
+  return kind === "log" ? "گزارش مرحله‌ای" : "تصویر مرحله‌ای";
+}
+
 function currentHumanIntervention(detail: Detail | null): HumanIntervention | null {
   if (!detail) return null;
   let active: HumanIntervention | null = null;
@@ -209,6 +233,9 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
 
   const command = detail?.command;
   const isFinal = command ? finalStates.includes(command.status) : false;
+  const connectionOnlyWarning = command?.status === "succeeded"
+    && Boolean(detail?.anomaly.reasons.length)
+    && (detail?.anomaly.reasons ?? []).every((reason) => reason.startsWith("مسیر ارتباط Windows Agent با API مدیریت"));
   const progress = command?.status === "pending" ? 8 : command?.status === "claimed" || command?.status === "waiting_confirmation" ? 28 : command?.status === "running" ? 58 : 100;
 
   return (
@@ -266,7 +293,7 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
         {error ? <div className="command-alert command-alert-error" role="alert">{error}</div> : null}
         {detail?.anomaly.detected ? (
           <div className={`command-alert ${detail.anomaly.shouldStop ? "command-alert-error" : "command-alert-warning"}`} role="alert">
-            <strong>رفتار غیرعادی تشخیص داده شد</strong>
+            <strong>{connectionOnlyWarning ? "اجرای موفق با هشدار ارتباطی" : "رفتار غیرعادی تشخیص داده شد"}</strong>
             {detail.anomaly.reasons.map((reason) => <span key={reason}>{reason}</span>)}
           </div>
         ) : null}
@@ -327,7 +354,7 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
               {!detail?.artifacts.length ? <p className="command-empty">هنوز تصویری گزارش نشده است.</p> : null}
               {detail?.artifacts.map((artifact) => (
                 <article className="command-artifact" key={artifact.id}>
-                  <div><strong>{artifact.name}</strong><span>{artifact.stage ?? artifact.kind}</span></div>
+                  <div><strong>{artifact.name}</strong><span>{artifactStageLabel(artifact.stage, artifact.kind)}</span></div>
                   {artifact.driveUrl ? <a href={artifact.driveUrl} target="_blank" rel="noreferrer">بازکردن در Drive</a> : <span className="artifact-pending">در انتظار Drive</span>}
                 </article>
               ))}

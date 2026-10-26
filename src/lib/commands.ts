@@ -217,7 +217,33 @@ function mapCommand(row: CommandRow): CommandView {
   };
 }
 
+function artifactStageMessage(stage: string | null, kind: string): string {
+  const messages: Record<string, string> = {
+    "ocr-before-input": "تصویر بررسی صفحه پیش از ورود متن ثبت شد.",
+    "ocr-composer": "تصویر مربوط به پیدا کردن کادر نوشتن پرامپت ثبت شد.",
+    "prompt-01-browser-foreground": "تصویر فعال بودن پنجره مرورگر ثبت شد.",
+    "prompt-02-composer-ready": "تصویر آماده بودن کادر پرامپت ثبت شد.",
+    "prompt-03-try1-focused": "تصویر فوکوس امن روی کادر پرامپت ثبت شد.",
+    "prompt-03-try1-after-input": "تصویر کادر پرامپت پس از ورود متن ثبت شد.",
+    "prompt-03-try1-verified": "تصویر تأیید حضور صحیح متن در کادر پرامپت ثبت شد.",
+    "prompt-04-before-submit": "تصویر نهایی پیش از ارسال پرامپت ثبت شد.",
+    "prompt-05-after-submit": "تصویر صفحه بلافاصله پس از ارسال پرامپت ثبت شد.",
+    "ocr-completion": "تصویر بررسی پایان پاسخ Arena ثبت شد.",
+    "ocr-before-result-confirmation": "تصویر بررسی صفحه پیش از تأیید نتیجه ثبت شد.",
+    "result-confirmation-before": "تصویر مرحله‌ای پیش از تأیید نتیجه با گزینه Yes ثبت شد.",
+    "result-confirmation-after": "تصویر مرحله‌ای پس از تأیید نتیجه با گزینه Yes ثبت شد.",
+    "failure-report": "گزارش متنی خطا برای بررسی بعدی ثبت شد.",
+    "failure-screenshot": "تصویر صفحه در لحظه خطا ثبت شد.",
+  };
+  if (stage && messages[stage]) return messages[stage];
+  if (stage?.startsWith("ocr-")) return "تصویر مرحله بررسی دیداری با OCR ثبت شد.";
+  if (stage?.startsWith("prompt-")) return "تصویر یکی از مراحل ورود و ارسال پرامپت ثبت شد.";
+  return kind === "log" ? "گزارش مرحله‌ای برای بررسی بعدی ثبت شد." : "تصویر مرحله‌ای برای بررسی بعدی ثبت شد.";
+}
+
 function displayEventMessage(row: CommandEventRow): string {
+  const artifact = serviceArtifactMarker(row.message);
+  if (artifact) return artifactStageMessage(artifact.stage, artifact.kind);
   if (row.stage === "network_paused") {
     return "دسترسی Windows Agent به API مدیریت موقتاً ناموفق بود. این رخداد به‌تنهایی به معنی قطع اینترنت یا قطع Arena نیست؛ تایمر بی‌پیشرفتی تا پاسخ بعدی API متوقف می‌ماند.";
   }

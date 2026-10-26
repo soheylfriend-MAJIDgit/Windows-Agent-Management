@@ -27,6 +27,14 @@ interface ServiceDefinition {
   fields: ServiceField[];
 }
 
+interface ArenaSavedTarget {
+  id: string;
+  name: string;
+  url: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 type InputState = Record<string, string | number | boolean>;
 type PromptInputMode = "cells" | "text";
 
@@ -85,11 +93,14 @@ function AutoGrowPromptInput({
 
 export default function ServicesPage() {
   const servicesApi = useApi<{ services: ServiceDefinition[] }>("/api/services");
+  const arenaTargetsApi = useApi<{ targets: ArenaSavedTarget[] }>("/api/services/arena-targets");
   const notify = useToast();
   const [selected, setSelected] = useState<ServiceDefinition | null>(null);
   const [input, setInput] = useState<InputState>({});
   const [promptInputMode, setPromptInputMode] = useState<PromptInputMode>("cells");
   const [promptCells, setPromptCells] = useState<string[]>([""]);
+  const [arenaTargetName, setArenaTargetName] = useState("");
+  const [targetBusyId, setTargetBusyId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<ApiRequestError | null>(null);
   const [activeCommandId, setActiveCommandId] = useState<string | null>(null);
@@ -111,6 +122,7 @@ export default function ServicesPage() {
     setInput(defaults(service));
     setPromptInputMode("cells");
     setPromptCells([""]);
+    setArenaTargetName("");
     setSubmitError(null);
   }
 
@@ -140,6 +152,49 @@ export default function ServicesPage() {
     const next = promptCells.length === 1 ? [""] : promptCells.filter((_, itemIndex) => itemIndex !== index);
     setPromptCells(next);
     setInput((fields) => ({ ...fields, prompts: serializePromptBlocks(next) }));
+  }
+
+  async function saveArenaTarget() {
+    const url = String(input.url ?? "").trim();
+    if (!url) {
+      notify.error("ابتدا لینک صفحه مدل را وارد کنید.");
+      return;
+    }
+    setTargetBusyId("save");
+    try {
+      await postJson<{ targets: ArenaSavedTarget[] }>("/api/services/arena-targets", {
+        url,
+        name: arenaTargetName,
+      });
+      await arenaTargetsApi.reload();
+      setArenaTargetName("");
+      notify.ok("صفحه مدل در فهرست ذخیره‌شده‌ها ثبت شد.");
+    } catch (error) {
+      notify.error(error instanceof Error ? error.message : "ذخیره صفحه مدل ممکن نشد.");
+    } finally {
+      setTargetBusyId(null);
+    }
+  }
+
+  async function deleteArenaTarget(target: ArenaSavedTarget) {
+    const label = target.name || target.url;
+    if (!window.confirm(`صفحه «${label}» از فهرست ذخیره‌شده حذف شود؟`)) return;
+    setTargetBusyId(target.id);
+    try {
+      const response = await fetch("/api/services/arena-targets", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: target.id }),
+      });
+      const body = await response.json().catch(() => ({})) as { error?: { message?: string } };
+      if (!response.ok) throw new Error(body.error?.message || "حذف صفحه مدل ممکن نشد.");
+      await arenaTargetsApi.reload();
+      notify.ok("صفحه از فهرست ذخیره‌شده‌ها حذف شد.");
+    } catch (error) {
+      notify.error(error instanceof Error ? error.message : "حذف صفحه مدل ممکن نشد.");
+    } finally {
+      setTargetBusyId(null);
+    }
   }
 
   async function runService(event: React.FormEvent) {
@@ -329,6 +384,71 @@ export default function ServicesPage() {
                           />
                         )}
                         {field.helper ? <span className="field-helper">{field.helper}</span> : null}
+                        {selected.slug === "arena-batch" && field.name === "url" ? (
+                          <section className="arena-target-manager" aria-labelledby="arena-target-manager-title">
+                            <div className="arena-target-manager-head">
+                              <div>
+                                <strong id="arena-target-manager-title">صفحات مدل ذخیره‌شده</strong>
+                                <span>نام اختیاری است؛ لینک بالا بدون ذخیره‌کردن هم قابل اجراست.</span>
+                              </div>
+                              <span className="status-chip">{(arenaTargetsApi.data?.targets.length ?? 0).toLocaleString("fa-IR")} صفحه</span>
+                            </div>
+
+                            <div className="arena-target-save-row">
+                              <input
+                                className="input"
+                                type="text"
+                                value={arenaTargetName}
+                                maxLength={80}
+                                placeholder="نام اختیاری؛ مثلاً مدل تولید محتوا"
+                                aria-label="نام اختیاری صفحه مدل"
+                                onChange={(event) => setArenaTargetName(event.target.value)}
+                              />
+                              <button
+                                type="button"
+                                className="button secondary"
+                                disabled={targetBusyId !== null || !String(input.url ?? "").trim()}
+                                onClick={() => void saveArenaTarget()}
+                              >
+                                {targetBusyId === "save" ? <span className="spinner" /> : "+ ذخیره لینک فعلی"}
+                              </button>
+                            </div>
+
+                            {arenaTargetsApi.loading && !arenaTargetsApi.data ? <span className="field-helper">در حال دریافت صفحات ذخیره‌شده…</span> : null}
+                            {arenaTargetsApi.error ? <ErrorBanner error={arenaTargetsApi.error} onRetry={() => void arenaTargetsApi.reload()} /> : null}
+                            {arenaTargetsApi.data?.targets.length ? (
+                              <div className="arena-target-list">
+                                {arenaTargetsApi.data.targets.map((target) => (
+                                  <article className={String(input.url ?? "") === target.url ? "arena-target-item is-selected" : "arena-target-item"} key={target.id}>
+                                    <button
+                                      type="button"
+                                      className="arena-target-select"
+                                      onClick={() => {
+                                        setInput((current) => ({ ...current, url: target.url }));
+                                        setArenaTargetName(target.name);
+                                      }}
+                                    >
+                                      <strong>{target.name || "بدون نام"}</strong>
+                                      <span dir="ltr">{target.url}</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="arena-target-delete"
+                                      disabled={targetBusyId !== null}
+                                      aria-label={`حذف ${target.name || target.url}`}
+                                      title="حذف از فهرست"
+                                      onClick={() => void deleteArenaTarget(target)}
+                                    >
+                                      ×
+                                    </button>
+                                  </article>
+                                ))}
+                              </div>
+                            ) : !arenaTargetsApi.loading ? (
+                              <span className="arena-target-empty">هنوز صفحه‌ای ذخیره نشده است.</span>
+                            ) : null}
+                          </section>
+                        ) : null}
                         {field.name === "prompts" ? (
                           <span className="field-helper" aria-live="polite">
                             {promptCount.toLocaleString("fa-IR")} پرامپت × {Number(input.rounds || 0).toLocaleString("fa-IR")} دور = {(promptCount * Number(input.rounds || 0)).toLocaleString("fa-IR")} اجرا
