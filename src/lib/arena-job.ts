@@ -3,7 +3,8 @@ import { AppError } from "./errors";
 export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
-const BRIDGE_MARKER = "# management-arena-bridge: 15";
+const BRIDGE_MARKER = "# management-arena-bridge: 16";
+const BRIDGE_15_MARKER = "# management-arena-bridge: 15";
 const BRIDGE_14_MARKER = "# management-arena-bridge: 14";
 const BRIDGE_13_MARKER = "# management-arena-bridge: 13";
 const BRIDGE_12_MARKER = "# management-arena-bridge: 12";
@@ -95,11 +96,14 @@ def describe_arena_action(marker):
         "ARENA_COMPOSER_PADDLEOCR": "کادر نوشتن پرامپت با OCR محلی پیدا شد.",
         "ARENA_COMPOSER_GEOMETRY_FALLBACK": "کادر پرامپت با موقعیت هندسی امن پیدا شد.",
         "ARENA_SENT_VERIFIED": "Enter ارسال شد و خروج پرامپت از کادر تأیید شد.",
-        "ARENA_SEND_UNCERTAIN": "ارسال قطعی تأیید نشد؛ Enter دوباره زده نمی‌شود.",
+        "ARENA_SEND_UNCERTAIN": "ارسال قطعی تأیید نشد؛ اقدام ارسال دیگری انجام نمی‌شود.",
         "ARENA_SUBMIT_BLOCKED_UNVERIFIED": "ارسال مسدود شد چون حضور متن هنوز تأیید نشده بود.",
         "ARENA_SUBMIT_BLOCKED_UNSAFE_FOCUS": "ارسال مسدود شد چون فوکوس روی کادر امن نبود.",
         "ARENA_SUBMIT_BLOCKED_MISSING_UNIQUE_PROBE": "ارسال مسدود شد چون قطعه یکتای انتهای همین پرامپت در composer پیدا نشد.",
-        "ARENA_SUBMIT_FALLBACK_CTRL_ENTER": "پس از باقی‌ماندن قطعه یکتای پرامپت، Ctrl+Enter ایمن فقط یک‌بار اجرا شد.",
+        "ARENA_SUBMIT_BLOCKED_TYPING_UNVERIFIED": "ارسال مسدود شد چون مرحله ورود متن تأیید نهایی نداشت.",
+        "ARENA_SUBMIT_BLOCKED_SHORT_UIA_EVIDENCE": "ارسال مسدود شد چون شاهد متنی UIA کوتاه‌تر از حد امن بود.",
+        "ARENA_SUBMIT_BLOCKED_MISSING_CURRENT_PROBE": "ارسال مسدود شد چون هیچ‌یک از قطعه‌های دقیق همین پرامپت در پنجره UIA دیده نشد.",
+        "ARENA_SUBMIT_FALLBACK_CTRL_ENTER": "یک قطعه دقیق از همان پرامپت پس از Enter باقی ماند؛ Ctrl+Enter ایمن فقط یک‌بار اجرا شد.",
     }
     if marker in exact:
         return exact[marker]
@@ -112,13 +116,33 @@ def describe_arena_action(marker):
         ("ARENA_PASTE_VERIFIED_TRY", "حضور متن در کادر در این تلاش تأیید شد: "),
         ("ARENA_PASTE_UNVERIFIED_TRY", "حضور متن در کادر در این تلاش تأیید نشد: "),
         ("ARENA_SUBMIT_SENDINPUT=", "کلید Enter برای ارسال زده شد؛ نتیجه فنی: "),
+        ("ARENA_SUBMIT_FALLBACK_SENDINPUT=", "اجرای فنی Ctrl+Enter کنترل‌شده: "),
         ("ARENA_SUBMIT_FOCUS_SAFE=", "امن‌بودن فوکوس بلافاصله پیش از ارسال: "),
-        ("ARENA_SUBMIT_PROBE_PRESENT=", "حضور قطعه یکتای انتهای پرامپت پیش از ارسال: "),
-        ("ARENA_SUBMIT_PROBE_REMAINS_AFTER_ENTER=", "باقی‌ماندن قطعه یکتا پس از Enter اول: "),
+        ("ARENA_SUBMIT_FOCUS_NEAR_COMPOSER=", "قرارداشتن عنصر فوکوس‌شده در محدوده composer: "),
+        ("ARENA_SUBMIT_FOCUSED_LENGTH=", "طول شاهد UIA بلافاصله پیش از ارسال: "),
+        ("ARENA_SUBMIT_MINIMUM_LENGTH=", "حداقل طول شاهد لازم برای ارسال: "),
+        ("ARENA_SUBMIT_PROBE_CANDIDATES=", "تعداد قطعه‌های دقیق بررسی‌شده پیش از ارسال: "),
+        ("ARENA_SUBMIT_PROBE_PRESENT=", "تطبیق یک قطعه دقیق از همین پرامپت پیش از ارسال: "),
+        ("ARENA_SUBMIT_MATCHED_OFFSET=", "موقعیت قطعه تطبیق‌یافته در پرامپت: "),
+        ("ARENA_SUBMIT_TAIL_PROBE_MATCHED=", "تطبیق مستقیم قطعه انتهایی پرامپت: "),
+        ("ARENA_SUBMIT_ELEMENT_NAME_LENGTH=", "طول Name عنصر فوکوس‌شده: "),
+        ("ARENA_SUBMIT_ELEMENT_AUTOMATION_ID=", "AutomationId عنصر فوکوس‌شده: "),
+        ("ARENA_SUBMIT_ELEMENT_CONTROL_TYPE=", "نوع UIA عنصر فوکوس‌شده: "),
+        ("ARENA_SUBMIT_ELEMENT_RECT=", "محدوده عنصر فوکوس‌شده: "),
+        ("ARENA_SUBMIT_READY=", "آمادگی نهایی و امن برای زدن Enter: "),
+        ("ARENA_SUBMIT_FOCUS_SAFE_AFTER_ENTER=", "امن‌بودن فوکوس پس از Enter اول: "),
+        ("ARENA_SUBMIT_FOCUS_NEAR_AFTER_ENTER=", "نزدیکی فوکوس به composer پس از Enter اول: "),
+        ("ARENA_SUBMIT_FOCUSED_LENGTH_AFTER_ENTER=", "طول شاهد UIA پس از Enter اول: "),
+        ("ARENA_SUBMIT_REMAINING_OFFSET_AFTER_ENTER=", "موقعیت قطعه باقی‌مانده پس از Enter اول: "),
+        ("ARENA_SUBMIT_PROBE_REMAINS_AFTER_ENTER=", "باقی‌ماندن یک قطعه دقیق در composer پس از Enter اول: "),
         ("ARENA_SUBMIT_FALLBACK_USED=", "استفاده از fallback کنترل‌شده Ctrl+Enter: "),
         ("ARENA_SUBMIT_MESSAGE_VISIBLE=", "مشاهده پرامپت به‌صورت پیام در گفتگو: "),
         ("ARENA_SUBMIT_PLACEHOLDER_RETURNED=", "بازگشت متن راهنمای composer پس از ارسال: "),
-        ("ARENA_SUBMIT_PROBE_REMAINS_FINAL=", "باقی‌ماندن قطعه یکتا پس از پایان تلاش ارسال: "),
+        ("ARENA_SUBMIT_FOCUS_SAFE_FINAL=", "امن‌بودن فوکوس در بررسی نهایی: "),
+        ("ARENA_SUBMIT_FOCUS_NEAR_FINAL=", "نزدیکی فوکوس نهایی به composer: "),
+        ("ARENA_SUBMIT_FOCUSED_LENGTH_FINAL=", "طول شاهد UIA در بررسی نهایی: "),
+        ("ARENA_SUBMIT_REMAINING_OFFSET_FINAL=", "موقعیت قطعه باقی‌مانده در بررسی نهایی: "),
+        ("ARENA_SUBMIT_PROBE_REMAINS_FINAL=", "باقی‌ماندن یک قطعه دقیق پس از پایان تلاش ارسال: "),
         ("ARENA_SUBMIT_FOCUSED_COMPOSER_CLEARED=", "خالی‌شدن composer در فوکوس و محدوده امن پس از ارسال: "),
         ("ARENA_VERIFY_EXPECTED_LENGTH=", "طول پرامپت مورد انتظار: "),
         ("ARENA_VERIFY_MINIMUM_LENGTH=", "حداقل شاهد متنی لازم از پنجره UIA: "),
@@ -728,48 +752,121 @@ function Try-SetPromptValue($startEl) {
 
 const VERIFIED_SUBMIT_BLOCK = `$sent = $false
 
-# Bridge 14: پیش از ارسال، فوکوس composer دوباره برقرار و قطعه یکتای انتهای متن تأیید می‌شود.
+# Bridge 16: composer دوباره فوکوس می‌شود و یکی از probeهای دقیق همین پرامپت
+# در پنجره محدود UIA تأیید می‌شود. tail اولویت دارد اما تنها پنجره قابل‌خواندن نیست.
 if ($composer) { try { $composer.SetFocus() } catch {} }
 try { [WinApi]::SetForegroundWindow($browserWin.Current.NativeWindowHandle) | Out-Null } catch {}
 Left-Click $clickPoint.X $clickPoint.Y
 Start-Sleep -Milliseconds 300
-[void][WinApi]::SendChord(0x11, 0x23) # Ctrl+End؛ caret روی انتهای متن یکتای همین مرحله
-Start-Sleep -Milliseconds 250
+[void][WinApi]::SendChord(0x11, 0x23) # Ctrl+End؛ تلاش برای نمایش انتهای متن
+Start-Sleep -Milliseconds 350
 $focusedBeforeSubmit = [System.Windows.Automation.AutomationElement]::FocusedElement
 $submitFocusSafe = ($null -ne $focusedBeforeSubmit) -and -not (Test-Omnibox $focusedBeforeSubmit $winRect.Top)
 $submitPromptCanonical = (([string]$env:ARENA_PROMPT -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\\s+', ' ').Trim()
-$submitProbeLength = [Math]::Min(32, $submitPromptCanonical.Length)
-$submitProbe = if ($submitProbeLength -gt 0) { $submitPromptCanonical.Substring($submitPromptCanonical.Length - $submitProbeLength, $submitProbeLength) } else { "" }
 $submitFocusedCanonical = ((([string](Get-ElText $focusedBeforeSubmit)) -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\\s+', ' ').Trim()
-$submitProbePresent = $submitProbe -and $submitFocusedCanonical.Contains($submitProbe)
+$submitProbeLength = [Math]::Min(32, $submitPromptCanonical.Length)
+$submitMinimumEvidenceLength = [Math]::Min(64, [Math]::Max(24, [int]($submitPromptCanonical.Length * 0.02)))
+$submitMatchedProbe = ""
+$submitMatchedOffset = -1
+$submitProbeCandidates = @()
+if ($submitProbeLength -gt 0) {
+    $submitMaxOffset = [Math]::Max(0, $submitPromptCanonical.Length - $submitProbeLength)
+    # tail عمداً اول است؛ اگر Chrome فقط head/middle را بدهد probe دقیق دیگری پذیرفته می‌شود.
+    $submitOffsets = @($submitMaxOffset, [int](2 * $submitMaxOffset / 3), [int]($submitMaxOffset / 3), 0) | Select-Object -Unique
+    foreach ($submitOffset in $submitOffsets) {
+        $candidate = $submitPromptCanonical.Substring($submitOffset, $submitProbeLength)
+        $submitProbeCandidates += $candidate
+        if (-not $submitMatchedProbe -and $submitFocusedCanonical.Contains($candidate)) {
+            $submitMatchedProbe = $candidate
+            $submitMatchedOffset = $submitOffset
+        }
+    }
+}
+$submitEvidenceLengthOk = $submitFocusedCanonical.Length -ge $submitMinimumEvidenceLength
+$submitProbePresent = [bool]$submitMatchedProbe
+$submitTailProbeMatched = $submitProbePresent -and ($submitMatchedOffset -eq [Math]::Max(0, $submitPromptCanonical.Length - $submitProbeLength))
+$submitFocusNearComposer = $false
+$submitElementNameLength = 0
+$submitElementAutomationId = ""
+$submitElementControlType = ""
+$submitElementRect = "unavailable"
+try {
+    $submitRect = $focusedBeforeSubmit.Current.BoundingRectangle
+    $submitFocusNearComposer = (
+        $submitFocusSafe -and
+        ($clickPoint.X -ge ($submitRect.Left - 80)) -and ($clickPoint.X -le ($submitRect.Right + 80)) -and
+        ($clickPoint.Y -ge ($submitRect.Top - 80)) -and ($clickPoint.Y -le ($submitRect.Bottom + 80))
+    )
+    $submitElementNameLength = ([string]$focusedBeforeSubmit.Current.Name).Length
+    $submitElementAutomationId = [string]$focusedBeforeSubmit.Current.AutomationId
+    $submitElementControlType = [string]$focusedBeforeSubmit.Current.ControlType.ProgrammaticName
+    $submitElementRect = ([int]$submitRect.Left).ToString() + "," + ([int]$submitRect.Top).ToString() + "," + ([int]$submitRect.Width).ToString() + "," + ([int]$submitRect.Height).ToString()
+} catch {}
+$submitReady = $textConfirmed -and $submitFocusSafe -and $submitEvidenceLengthOk -and $submitProbePresent
 Write-Output ("ARENA_SUBMIT_FOCUS_SAFE=" + [bool]$submitFocusSafe)
+Write-Output ("ARENA_SUBMIT_FOCUS_NEAR_COMPOSER=" + [bool]$submitFocusNearComposer)
+Write-Output ("ARENA_SUBMIT_FOCUSED_LENGTH=" + $submitFocusedCanonical.Length)
+Write-Output ("ARENA_SUBMIT_MINIMUM_LENGTH=" + $submitMinimumEvidenceLength)
+Write-Output ("ARENA_SUBMIT_PROBE_CANDIDATES=" + $submitProbeCandidates.Count)
 Write-Output ("ARENA_SUBMIT_PROBE_PRESENT=" + [bool]$submitProbePresent)
+Write-Output ("ARENA_SUBMIT_MATCHED_OFFSET=" + $submitMatchedOffset)
+Write-Output ("ARENA_SUBMIT_TAIL_PROBE_MATCHED=" + [bool]$submitTailProbeMatched)
+Write-Output ("ARENA_SUBMIT_ELEMENT_NAME_LENGTH=" + $submitElementNameLength)
+Write-Output ("ARENA_SUBMIT_ELEMENT_AUTOMATION_ID=" + $submitElementAutomationId)
+Write-Output ("ARENA_SUBMIT_ELEMENT_CONTROL_TYPE=" + $submitElementControlType)
+Write-Output ("ARENA_SUBMIT_ELEMENT_RECT=" + $submitElementRect)
+Write-Output ("ARENA_SUBMIT_READY=" + [bool]$submitReady)
 
-if ($textConfirmed -and $submitFocusSafe -and $submitProbePresent) {
+if ($submitReady) {
+    Save-StepShot '04-submit-refocused-verified'
     $enterOk = [WinApi]::PressKey(0x0D)
     Write-Output ("ARENA_SUBMIT_SENDINPUT=" + $enterOk)
     Start-Sleep -Milliseconds 5000
+    Save-StepShot '04-after-enter-first'
 
-    # اگر قطعه یکتای همین پرامپت هنوز در composer است، Enter اول ارسال نکرده است.
+    # fallback فقط وقتی مجاز است که همان probe دقیق هنوز در عنصر فوکوس‌شده و امن باشد؛
+    # تطبیق متن فعلی خودِ شاهد composer است و هندسه نیز جداگانه برای تشخیص ثبت می‌شود.
     $focusedAfterEnter = [System.Windows.Automation.AutomationElement]::FocusedElement
     $focusSafeAfterEnter = ($null -ne $focusedAfterEnter) -and -not (Test-Omnibox $focusedAfterEnter $winRect.Top)
     $afterEnterCanonical = ((([string](Get-ElText $focusedAfterEnter)) -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\\s+', ' ').Trim()
-    $probeRemainsAfterEnter = $focusSafeAfterEnter -and $submitProbe -and $afterEnterCanonical.Contains($submitProbe)
+    $focusNearComposerAfterEnter = $false
+    try {
+        $afterEnterRect = $focusedAfterEnter.Current.BoundingRectangle
+        $focusNearComposerAfterEnter = (
+            $focusSafeAfterEnter -and
+            ($clickPoint.X -ge ($afterEnterRect.Left - 80)) -and ($clickPoint.X -le ($afterEnterRect.Right + 80)) -and
+            ($clickPoint.Y -ge ($afterEnterRect.Top - 80)) -and ($clickPoint.Y -le ($afterEnterRect.Bottom + 80))
+        )
+    } catch {}
+    $probeRemainsAfterEnter = $false
+    $remainingOffsetAfterEnter = -1
+    for ($probeIndex = 0; $probeIndex -lt $submitProbeCandidates.Count; $probeIndex++) {
+        if ($afterEnterCanonical.Contains($submitProbeCandidates[$probeIndex])) {
+            $probeRemainsAfterEnter = $focusSafeAfterEnter -and $focusNearComposerAfterEnter
+            $remainingOffsetAfterEnter = $submitOffsets[$probeIndex]
+            break
+        }
+    }
+    Write-Output ("ARENA_SUBMIT_FOCUS_SAFE_AFTER_ENTER=" + [bool]$focusSafeAfterEnter)
+    Write-Output ("ARENA_SUBMIT_FOCUS_NEAR_AFTER_ENTER=" + [bool]$focusNearComposerAfterEnter)
+    Write-Output ("ARENA_SUBMIT_FOCUSED_LENGTH_AFTER_ENTER=" + $afterEnterCanonical.Length)
+    Write-Output ("ARENA_SUBMIT_REMAINING_OFFSET_AFTER_ENTER=" + $remainingOffsetAfterEnter)
     Write-Output ("ARENA_SUBMIT_PROBE_REMAINS_AFTER_ENTER=" + [bool]$probeRemainsAfterEnter)
 
-    # تنها fallback مجاز: همان متن یکتا هنوز حاضر و فوکوس امن است؛ Ctrl+Enter فقط یک‌بار.
     $fallbackUsed = $false
+    $fallbackOk = $false
     if ($enterOk -and $probeRemainsAfterEnter) {
         $fallbackUsed = $true
         Write-Output 'ARENA_SUBMIT_FALLBACK_CTRL_ENTER'
-        [void][WinApi]::SendChord(0x11, 0x0D)
+        $fallbackOk = [WinApi]::SendChord(0x11, 0x0D)
+        Write-Output ("ARENA_SUBMIT_FALLBACK_SENDINPUT=" + $fallbackOk)
         Start-Sleep -Milliseconds 4000
+        Save-StepShot '04-after-fallback-ctrl-enter'
     }
 
     $focusedAfterSubmit = [System.Windows.Automation.AutomationElement]::FocusedElement
     $focusSafeAfterSubmit = ($null -ne $focusedAfterSubmit) -and -not (Test-Omnibox $focusedAfterSubmit $winRect.Top)
     $afterSubmitCanonical = ((([string](Get-ElText $focusedAfterSubmit)) -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\\s+', ' ').Trim()
-    $probeRemainsAfterSubmit = $focusSafeAfterSubmit -and $submitProbe -and $afterSubmitCanonical.Contains($submitProbe)
     $focusNearComposerAfterSubmit = $false
     try {
         $afterRect = $focusedAfterSubmit.Current.BoundingRectangle
@@ -779,9 +876,18 @@ if ($textConfirmed -and $submitFocusSafe -and $submitProbePresent) {
             ($clickPoint.Y -ge ($afterRect.Top - 80)) -and ($clickPoint.Y -le ($afterRect.Bottom + 80))
         )
     } catch {}
+    $probeRemainsAfterSubmit = $false
+    $remainingOffsetFinal = -1
+    for ($probeIndex = 0; $probeIndex -lt $submitProbeCandidates.Count; $probeIndex++) {
+        if ($afterSubmitCanonical.Contains($submitProbeCandidates[$probeIndex])) {
+            $probeRemainsAfterSubmit = $focusSafeAfterSubmit -and $focusNearComposerAfterSubmit
+            $remainingOffsetFinal = $submitOffsets[$probeIndex]
+            break
+        }
+    }
     $focusedComposerCleared = $focusNearComposerAfterSubmit -and -not $probeRemainsAfterSubmit -and ($afterSubmitCanonical.Length -lt $submitProbeLength)
 
-    # شواهد تکمیلی: پیام بالای composer یا برگشت placeholder.
+    # شواهد مستقل نهایی: پیام بالای composer یا برگشت placeholder یا composer خالی.
     $messageVisible = $false
     $placeholderReturned = $false
     try {
@@ -799,17 +905,22 @@ if ($textConfirmed -and $submitFocusSafe -and $submitProbePresent) {
     Write-Output ("ARENA_SUBMIT_FALLBACK_USED=" + [bool]$fallbackUsed)
     Write-Output ("ARENA_SUBMIT_MESSAGE_VISIBLE=" + [bool]$messageVisible)
     Write-Output ("ARENA_SUBMIT_PLACEHOLDER_RETURNED=" + [bool]$placeholderReturned)
+    Write-Output ("ARENA_SUBMIT_FOCUS_SAFE_FINAL=" + [bool]$focusSafeAfterSubmit)
+    Write-Output ("ARENA_SUBMIT_FOCUS_NEAR_FINAL=" + [bool]$focusNearComposerAfterSubmit)
+    Write-Output ("ARENA_SUBMIT_FOCUSED_LENGTH_FINAL=" + $afterSubmitCanonical.Length)
+    Write-Output ("ARENA_SUBMIT_REMAINING_OFFSET_FINAL=" + $remainingOffsetFinal)
     Write-Output ("ARENA_SUBMIT_PROBE_REMAINS_FINAL=" + [bool]$probeRemainsAfterSubmit)
     Write-Output ("ARENA_SUBMIT_FOCUSED_COMPOSER_CLEARED=" + [bool]$focusedComposerCleared)
     $sent = $enterOk -and -not $probeRemainsAfterSubmit -and ($messageVisible -or $placeholderReturned -or $focusedComposerCleared)
 } else {
+    if (-not $textConfirmed) { Write-Output 'ARENA_SUBMIT_BLOCKED_TYPING_UNVERIFIED' }
     if (-not $submitFocusSafe) { Write-Output 'ARENA_SUBMIT_BLOCKED_UNSAFE_FOCUS' }
-    if (-not $submitProbePresent) { Write-Output 'ARENA_SUBMIT_BLOCKED_MISSING_UNIQUE_PROBE' }
+    if (-not $submitEvidenceLengthOk) { Write-Output 'ARENA_SUBMIT_BLOCKED_SHORT_UIA_EVIDENCE' }
+    if (-not $submitProbePresent) { Write-Output 'ARENA_SUBMIT_BLOCKED_MISSING_CURRENT_PROBE' }
     Write-Output 'ARENA_SUBMIT_BLOCKED_UNVERIFIED'
 }
 
 `;
-
 const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پیش و پس از تایپ، خروج فوکوس به omnibox را رد می‌کند.
     Save-StepShot '02-composer-ready'
     for ($try = 1; $try -le 3 -and -not $textConfirmed; $try++) {
@@ -1127,13 +1238,13 @@ function hardenArenaTyping(source: string): string {
       "    Write-Output 'ARENA_BROWSER_FG'\n    Save-StepShot '01-browser-foreground'\n",
     );
   }
-  // Bridge 15: بلوک ارسال در همه نسخه‌های قبلی بدون اتکا به متن comment تعویض می‌شود.
-  // این کار نسخه فعال D1 را نیز که Bridge 14 در marker و Bridge 5 در بدنه دارد واقعاً ارتقا می‌دهد.
+  // Bridge 16: بلوک ارسال در همه نسخه‌های قبلی بدون اتکا به متن comment تعویض می‌شود.
+  // این کار نسخه فعال D1 را نیز که Bridge 15 در marker و Bridge 5 در بدنه دارد واقعاً ارتقا می‌دهد.
   const submitEndAnchor = "\nif ($sent) { Write-Output 'ARENA_SENT_VERIFIED' }";
   const submitStart = source.indexOf("$sent = $false");
   const submitEnd = source.indexOf(submitEndAnchor, submitStart);
   if (submitStart < 0 || submitEnd < 0) {
-    throw new AppError("بخش ارسال و تأیید نهایی Arena برای ارتقای Bridge 14 پیدا نشد.", {
+    throw new AppError("بخش ارسال و تأیید نهایی Arena برای ارتقای Bridge 16 پیدا نشد.", {
       status: 409,
       code: "arena_submit_upgrade_failed",
     });
@@ -1371,7 +1482,7 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
 }
 
 
-/** ارتقای درجا از Bridge 1 تا 14؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+/** ارتقای درجا از Bridge 1 تا 15؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
 function upgradeLegacyBridge(source: string, oldMarker: string): string {
   const bridgeStart = source.indexOf(oldMarker);
   const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
@@ -1414,6 +1525,7 @@ export function buildArenaJobFile(options: {
     return source.endsWith("\n") ? source : `${source}\n`;
   }
   if (
+    source.includes(BRIDGE_15_MARKER) ||
     source.includes(BRIDGE_14_MARKER) ||
     source.includes(BRIDGE_13_MARKER) ||
     source.includes(BRIDGE_12_MARKER) ||
@@ -1429,9 +1541,11 @@ export function buildArenaJobFile(options: {
     source.includes(BRIDGE_2_MARKER) ||
     source.includes(LEGACY_BRIDGE_MARKER)
   ) {
-    const oldMarker = source.includes(BRIDGE_14_MARKER)
-      ? BRIDGE_14_MARKER
-      : source.includes(BRIDGE_13_MARKER)
+    const oldMarker = source.includes(BRIDGE_15_MARKER)
+      ? BRIDGE_15_MARKER
+      : source.includes(BRIDGE_14_MARKER)
+        ? BRIDGE_14_MARKER
+        : source.includes(BRIDGE_13_MARKER)
         ? BRIDGE_13_MARKER
         : source.includes(BRIDGE_12_MARKER)
         ? BRIDGE_12_MARKER
@@ -1466,7 +1580,7 @@ export function buildArenaJobFile(options: {
     throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 15 به‌صورت خودکار پشتیبانی می‌شوند.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 16 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 
