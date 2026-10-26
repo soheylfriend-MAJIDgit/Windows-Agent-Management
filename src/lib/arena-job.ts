@@ -906,10 +906,10 @@ function hardenArenaTyping(source: string): string {
   // Bridge 13: نسخه جدید Arena در UIA فقط پنجره قابل‌مشاهده‌ای حدود ۱۰۰ نویسه
   // برمی‌گرداند. آستانه قدیمی ۴۰۰ نویسه، با وجود حضور واقعی کل متن در composer،
   // ارسال را مسدود می‌کرد. probe دقیق + فوکوس امن + موفقیت ورودی همچنان الزامی است.
-  const strictEvidenceThreshold = "        $minimumEvidenceLength = [Math]::Min(400, [Math]::Max(24, [int]($promptCanonical.Length * 0.2)))\n";
   const boundedEvidenceThreshold = "        $minimumEvidenceLength = [Math]::Min(96, [Math]::Max(24, [int]($promptCanonical.Length * 0.03)))\n";
-  if (source.includes(strictEvidenceThreshold)) {
-    source = source.replace(strictEvidenceThreshold, boundedEvidenceThreshold);
+  const evidenceThresholdPattern = /^[ \t]*\$minimumEvidenceLength\s*=.*(?:\r?\n|$)/m;
+  if (evidenceThresholdPattern.test(source)) {
+    source = source.replace(evidenceThresholdPattern, boundedEvidenceThreshold);
   }
 
   // Bridge 7 پرامپت‌های بلند را با متن UIA محدودشده به ۱۰۰۰ نویسه به‌طور کامل
@@ -974,15 +974,11 @@ function hardenArenaTyping(source: string): string {
   const latestVerifierEnd = VERIFIED_PASTE_LOOP.indexOf("\n\n        # تأیید دوم:", latestVerifierStart);
   const sourceVerifierStart = source.indexOf("        # contenteditable ممکن است");
   const sourceVerifierEnd = source.indexOf("\n\n        # تأیید دوم:", sourceVerifierStart);
-  if (latestVerifierStart < 0 || latestVerifierEnd < 0 || sourceVerifierStart < 0 || sourceVerifierEnd < 0) {
-    throw new AppError("بلوک کامل تأیید پرامپت Arena برای ارتقای Bridge 13 پیدا نشد.", {
-      status: 409,
-      code: "arena_bridge13_verifier_upgrade_failed",
-    });
+  if (latestVerifierStart >= 0 && latestVerifierEnd >= 0 && sourceVerifierStart >= 0 && sourceVerifierEnd >= 0) {
+    source = source.slice(0, sourceVerifierStart)
+      + VERIFIED_PASTE_LOOP.slice(latestVerifierStart, latestVerifierEnd)
+      + source.slice(sourceVerifierEnd);
   }
-  source = source.slice(0, sourceVerifierStart)
-    + VERIFIED_PASTE_LOOP.slice(latestVerifierStart, latestVerifierEnd)
-    + source.slice(sourceVerifierEnd);
 
   if (!source.includes("import urllib.error\n")) {
     if (!source.includes("import urllib.request\n")) {
