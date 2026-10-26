@@ -912,9 +912,13 @@ function hardenArenaTyping(source: string): string {
     source = source.replace(evidenceThresholdPattern, boundedEvidenceThreshold);
   }
 
+  // وجود نام marker در مترجم گزارش Bridge به معنی وجود verifier در PowerShell نیست؛
+  // فقط خط واقعی Write-Output داخل اسکریپت تایپ، نشانه ارتقای verifier محسوب می‌شود.
+  const focusedProbeOutputMarker = `Write-Output ("ARENA_VERIFY_FOCUSED_PROBE="`;
+
   // Bridge 7 پرامپت‌های بلند را با متن UIA محدودشده به ۱۰۰۰ نویسه به‌طور کامل
   // مقایسه می‌کرد و با وجود حضور واقعی متن false-negative می‌ساخت.
-  if (!source.includes("$promptProbe =") && !source.includes("ARENA_VERIFY_FOCUSED_PROBE=")) {
+  if (!source.includes("$promptProbe =") && !source.includes(focusedProbeOutputMarker)) {
     const normalizedAnchor = `        $promptNormalized = ([string]$env:ARENA_PROMPT).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")\n`;
     const probeBlock = `${normalizedAnchor}        $probeLength = [Math]::Min(240, $promptNormalized.Length)\n        $promptProbe = if ($probeLength -gt 0) { $promptNormalized.Substring(0, $probeLength) } else { "" }\n`;
     const oldFocused = `        $okFocused = $focusSafeAfterInput -and $focusedText -and $focusedNormalized.Contains($promptNormalized)\n`;
@@ -936,7 +940,7 @@ function hardenArenaTyping(source: string): string {
       .replace(oldCopied, newCopied);
   }
 
-  if (!source.includes("ARENA_VERIFY_FOCUSED_PROBE=")) {
+  if (!source.includes(focusedProbeOutputMarker)) {
     const stableStart = VERIFIED_PASTE_LOOP.indexOf("        # contenteditable ممکن است");
     const stableEnd = VERIFIED_PASTE_LOOP.indexOf("\n\n        # تأیید دوم:", stableStart);
     const legacyStartAnchor = `        $promptNormalized = ([string]$env:ARENA_PROMPT).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")`;
