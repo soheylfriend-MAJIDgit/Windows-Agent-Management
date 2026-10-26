@@ -253,14 +253,40 @@ function artifactStageMessage(stage: string | null, kind: string): string {
   return kind === "log" ? "گزارش مرحله‌ای برای بررسی بعدی ثبت شد." : "تصویر مرحله‌ای برای بررسی بعدی ثبت شد.";
 }
 
+function serviceProgressMessage(message: string): string | null {
+  let match = message.match(/^SERVICE_BATCH_ITEM_STARTED: (\d+)\/(\d+)$/);
+  if (match) {
+    const current = Number(match[1]);
+    const total = Number(match[2]);
+    return `پرامپت ${current.toLocaleString("fa-IR")} از ${total.toLocaleString("fa-IR")} شروع شد؛ پس از این مورد ${Math.max(0, total - current).toLocaleString("fa-IR")} پرامپت باقی می‌ماند.`;
+  }
+  match = message.match(/^SERVICE_BATCH_ITEM_COMPLETED: (\d+)(?:\/(\d+))?$/);
+  if (match) return match[2]
+    ? `پرامپت ${Number(match[1]).toLocaleString("fa-IR")} از ${Number(match[2]).toLocaleString("fa-IR")} با موفقیت کامل شد؛ ${Math.max(0, Number(match[2]) - Number(match[1])).toLocaleString("fa-IR")} پرامپت باقی مانده است.`
+    : `${Number(match[1]).toLocaleString("fa-IR")} پرامپت با موفقیت کامل شده است.`;
+  match = message.match(/^SERVICE_BATCH_ITEM_FAILED: (\d+)\/(\d+): (.+)$/);
+  if (match) return `پرامپت ${Number(match[1]).toLocaleString("fa-IR")} از ${Number(match[2]).toLocaleString("fa-IR")} ناموفق شد: ${match[3]}`;
+  match = message.match(/^SERVICE_BATCH_RESULT_CONFIRMED: (\d+)\/(\d+)$/);
+  if (match) return `نتیجه پرامپت ${Number(match[1]).toLocaleString("fa-IR")} از ${Number(match[2]).toLocaleString("fa-IR")} با گزینه Yes تأیید شد.`;
+  match = message.match(/^SERVICE_BATCH_SUMMARY: موفق=(\d+) ناموفق=(\d+) مجموع=(\d+)$/);
+  if (match) return `خلاصه اجرا: ${Number(match[1]).toLocaleString("fa-IR")} موفق، ${Number(match[2]).toLocaleString("fa-IR")} ناموفق، از مجموع ${Number(match[3]).toLocaleString("fa-IR")} پرامپت.`;
+  match = message.match(/^SERVICE_COMPLETED: (\d+) پرامپت کامل شد$/);
+  if (match) return `اجرای ترتیبی تمام شد؛ هر ${Number(match[1]).toLocaleString("fa-IR")} پرامپت کامل شدند.`;
+  if (message.startsWith("SERVICE_OCR_READY:")) return "ابزار بررسی دیداری آماده است؛ اجرای پرامپت‌ها آغاز می‌شود.";
+  if (message.startsWith("SERVICE_BATCH_RESULT_YES:")) return "روی گزینه Yes پنجره نتیجه کلیک شد.";
+  return null;
+}
+
 function displayEventMessage(row: CommandEventRow): string {
+  const progress = serviceProgressMessage(row.message);
+  if (progress) return progress;
   const artifact = serviceArtifactMarker(row.message);
   if (artifact) return artifactStageMessage(artifact.stage, artifact.kind);
   if (row.stage === "network_paused") {
-    return "دسترسی Windows Agent به API مدیریت موقتاً ناموفق بود. این رخداد به‌تنهایی به معنی قطع اینترنت یا قطع Arena نیست؛ تایمر بی‌پیشرفتی تا پاسخ بعدی API متوقف می‌ماند.";
+    return "ارسال گزارش از Windows Agent به این پنل چند لحظه پاسخ نگرفت؛ اجرای Arena متوقف نشده و دوباره تلاش می‌شود.";
   }
   if (row.stage === "network_resumed") {
-    return "ارتباط Windows Agent با API مدیریت دوباره پاسخ داد. این پیام بازیابی مسیر Agent→API است، نه اثبات قطع و وصل اینترنت عمومی.";
+    return "ارسال گزارش از Windows Agent به این پنل دوباره برقرار شد.";
   }
   return row.message;
 }
@@ -405,7 +431,7 @@ export async function createManagedCommand(input: {
       reportArtifactMetadata: true,
     },
   }, "payload");
-  const timeoutSeconds = Math.min(3600, Math.max(30, Number(input.timeoutSeconds ?? 600)));
+  const timeoutSeconds = Math.min(604_800, Math.max(30, Number(input.timeoutSeconds ?? 600)));
   const noProgressSeconds = Math.min(timeoutSeconds, Math.max(30, Number(input.noProgressSeconds ?? 120)));
   const now = new Date().toISOString();
   await dbBatch([
@@ -496,12 +522,16 @@ export async function getCommandDetail(idValue: unknown, enforceOwnerKeyId?: str
     .filter(({ event }) => event.message.startsWith("SERVICE_HUMAN_INTERVENTION_CLEARED:"))
     .at(-1);
   if (interventionRequired && (!interventionCleared || interventionCleared.index < interventionRequired.index)) {
-    reasons.push("اتوماسیون Arena برای مداخله انسانی در checkpoint امن متوقف شده است.");
+    if (interventionRequired.event.message.includes('"reason": "completion_wait_expired"')) {
+      reasons.push("زمان یادآوری انتظار پاسخ تمام شده است؛ پایش Arena همچنان ادامه دارد و منتظر تصمیم مدیر است.");
+    } else {
+      reasons.push("اتوماسیون Arena برای مداخله انسانی در checkpoint امن متوقف شده است.");
+    }
   }
   if (eventRows.some((event) => event.level === "fatal")) reasons.push("رخداد بحرانی از Windows Agent گزارش شده است.");
   const managementApiPauses = eventRows.filter((event) => event.stage === "network_paused");
   if (managementApiPauses.length >= 3) {
-    reasons.push(`مسیر ارتباط Windows Agent با API مدیریت در این اجرا ناپایدار بوده است (${managementApiPauses.length} وقفه کوتاه)؛ این وضعیت لزوماً قطع اینترنت عمومی نیست.`);
+    reasons.push(`ارسال گزارش از Windows Agent به پنل در این اجرا ${managementApiPauses.length.toLocaleString("fa-IR")} بار وقفه کوتاه داشته است؛ خود اجرای Arena ادامه داشته است.`);
   }
   const operationalStages = new Set(["network_paused", "network_resumed", "cancel_requested"]);
   const unexpectedEvents = eventRows.filter(

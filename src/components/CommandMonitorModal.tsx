@@ -76,6 +76,13 @@ async function parseResponse<T>(response: Response): Promise<T> {
 const INTERVENTION_REQUIRED_PREFIX = "SERVICE_HUMAN_INTERVENTION_REQUIRED:";
 const INTERVENTION_CLEARED_PREFIX = "SERVICE_HUMAN_INTERVENTION_CLEARED:";
 
+function durationLabel(seconds: number): string {
+  if (seconds >= 86_400 && seconds % 86_400 === 0) return `${faNumber(seconds / 86_400)} روز`;
+  if (seconds >= 3_600 && seconds % 3_600 === 0) return `${faNumber(seconds / 3_600)} ساعت`;
+  if (seconds >= 60 && seconds % 60 === 0) return `${faNumber(seconds / 60)} دقیقه`;
+  return `${faNumber(seconds)} ثانیه`;
+}
+
 function artifactStageLabel(stage: string | null, kind: string): string {
   const labels: Record<string, string> = {
     "ocr-before-input": "بررسی صفحه پیش از ورود متن",
@@ -110,6 +117,21 @@ function artifactStageLabel(stage: string | null, kind: string): string {
   if (stage?.startsWith("ocr-")) return "بررسی دیداری OCR";
   if (stage?.startsWith("prompt-")) return "مرحله ورود یا ارسال پرامپت";
   return kind === "log" ? "گزارش مرحله‌ای" : "تصویر مرحله‌ای";
+}
+
+function timelineMessage(message: string): string {
+  for (const prefix of [INTERVENTION_REQUIRED_PREFIX, "SERVICE_HUMAN_INTERVENTION_WAITING:", INTERVENTION_CLEARED_PREFIX]) {
+    if (!message.startsWith(prefix)) continue;
+    try {
+      const payload = JSON.parse(message.slice(prefix.length).trim()) as { message?: unknown; guidance?: unknown };
+      const title = typeof payload.message === "string" ? payload.message : "وضعیت مداخله انسانی تغییر کرد.";
+      const guidance = typeof payload.guidance === "string" ? payload.guidance : "";
+      return [title, guidance].filter(Boolean).join(" ");
+    } catch {
+      return "وضعیت مداخله انسانی تغییر کرد؛ جزئیات در پنجره تصمیم مدیر نمایش داده می‌شود.";
+    }
+  }
+  return message;
 }
 
 function currentHumanIntervention(detail: Detail | null): HumanIntervention | null {
@@ -247,7 +269,7 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
   const isFinal = command ? finalStates.includes(command.status) : false;
   const connectionOnlyWarning = command?.status === "succeeded"
     && Boolean(detail?.anomaly.reasons.length)
-    && (detail?.anomaly.reasons ?? []).every((reason) => reason.startsWith("مسیر ارتباط Windows Agent با API مدیریت"));
+    && (detail?.anomaly.reasons ?? []).every((reason) => reason.startsWith("ارسال گزارش از Windows Agent به پنل"));
   const progress = command?.status === "pending" ? 8 : command?.status === "claimed" || command?.status === "waiting_confirmation" ? 28 : command?.status === "running" ? 58 : 100;
 
   return (
@@ -267,20 +289,22 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
             <section className="human-intervention-modal" role="alertdialog" aria-modal="true" aria-labelledby="human-intervention-title">
               <span className="human-intervention-icon" aria-hidden="true">!</span>
               <div>
-                <span className="eyebrow">توقف امن اتوماسیون</span>
-                <h3 id="human-intervention-title">نیاز به مداخله انسانی</h3>
+                <span className="eyebrow">{humanIntervention.reason === "completion_wait_expired" ? "پایش همچنان فعال است" : "توقف امن اتوماسیون"}</span>
+                <h3 id="human-intervention-title">{humanIntervention.reason === "completion_wait_expired" ? "ادامه انتظار یا توقف؟" : "نیاز به مداخله انسانی"}</h3>
                 <p>{humanIntervention.message}</p>
                 <p className="human-intervention-guidance">
                   {humanIntervention.reason === "security_verification"
                     ? "به پنجره Arena بروید و چالش ضدربات را دستی کامل کنید. اتوماسیون در این فاصله هیچ کلیک، کلید یا Enter نمی‌فرستد و پس از رفع چالش از checkpoint امن ادامه می‌دهد."
-                    : humanIntervention.guidance || "اجرای خودکار متوقف شده است. تصاویر مرحله‌ای و گزارش خطا را بررسی کنید و پس از رفع مشکل فرمان تازه‌ای بسازید."}
+                    : humanIntervention.reason === "completion_wait_expired"
+                      ? "پاسخ هنوز کامل نشده است و پایش همچنان ادامه دارد. اگر زمان کار طبیعی است، پیام را ببندید و منتظر بمانید؛ فقط در صورت نیاز توقف امن را انتخاب کنید."
+                      : humanIntervention.guidance || "اجرای خودکار متوقف شده است. تصاویر مرحله‌ای و گزارش خطا را بررسی کنید و پس از رفع مشکل فرمان تازه‌ای بسازید."}
                 </p>
                 {humanIntervention.requestId ? <code dir="ltr">{humanIntervention.requestId}</code> : null}
                 {humanIntervention.artifactPath ? <small dir="ltr">{humanIntervention.artifactPath}</small> : null}
                 {humanIntervention.artifactPaths?.map((path) => <small dir="ltr" key={path}>{path}</small>)}
               </div>
               <div className="human-intervention-actions">
-                {humanIntervention.reason === "security_verification" && !isFinal ? (
+                {(humanIntervention.reason === "security_verification" || humanIntervention.reason === "completion_wait_expired") && !isFinal ? (
                   <button
                     type="button"
                     className="button primary"
@@ -289,7 +313,7 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
                       void load();
                     }}
                   >
-                    چالش را حل کردم؛ ادامه پایش
+                    {humanIntervention.reason === "security_verification" ? "چالش را حل کردم؛ ادامه پایش" : "ادامه پایش و انتظار"}
                   </button>
                 ) : null}
                 <button type="button" className="button secondary" disabled={!detail} onClick={downloadEvidence}>دانلود گزارش شواهد</button>
@@ -329,7 +353,7 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
               />
               توقف خودکار در خطای بحرانی، پایان زمان یا توقف پیشرفت
             </label>
-            {command ? <span>حد اجرا: {faNumber(command.timeoutSeconds)} ثانیه · بی‌پیشرفتی: {faNumber(command.noProgressSeconds)} ثانیه</span> : null}
+            {command ? <span>حد ایمنی اجرا: {durationLabel(command.timeoutSeconds)} · هشدار بی‌پیشرفتی: {durationLabel(command.noProgressSeconds)}</span> : null}
           </div>
         </div>
 
@@ -349,7 +373,7 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
                       <strong>{event.stage}</strong>
                       <time dateTime={event.createdAt}>{formatJalaliDateTime(event.createdAt, true)}</time>
                     </div>
-                    <p>{event.message}</p>
+                    <p>{timelineMessage(event.message)}</p>
                   </div>
                 </article>
               ))}

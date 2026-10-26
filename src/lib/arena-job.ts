@@ -3,7 +3,8 @@ import { AppError } from "./errors";
 export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
-const BRIDGE_MARKER = "# management-arena-bridge: 11";
+const BRIDGE_MARKER = "# management-arena-bridge: 12";
+const BRIDGE_11_MARKER = "# management-arena-bridge: 11";
 const BRIDGE_10_MARKER = "# management-arena-bridge: 10";
 const BRIDGE_9_MARKER = "# management-arena-bridge: 9";
 const BRIDGE_8_MARKER = "# management-arena-bridge: 8";
@@ -42,7 +43,9 @@ import shutil
 TELEGRAM_REPORT_MODE = "final"
 PROMPT_REQUEST_ID = "initial"
 FAILURE_INTERVENTION_REPORTED_FOR = None
-ARENA_COMPLETION_TIMEOUT = 180
+ARENA_COMPLETION_TIMEOUT = 3600
+ARENA_ASK_ON_COMPLETION_TIMEOUT = True
+ARENA_SHOW_CLICK_HIGHLIGHTS = True
 ARENA_COMPLETION_POLL_SECONDS = 3
 NETWORK_RECHECK_SECONDS = 60
 OCR_TIMEOUT_SECONDS = max(20, int(os.environ.get("WINDOWS_AGENT_OCR_TIMEOUT_SECONDS", "45")))
@@ -79,6 +82,38 @@ def capture_named_step(stage):
     take_screenshot(path)
     register_step_artifact(path, safe_stage)
     return path
+
+
+def describe_arena_action(marker):
+    """marker فنی PowerShell را به گزارش کوتاه و قابل‌فهم مدیریتی تبدیل می‌کند."""
+    exact = {
+        "ARENA_BROWSER_FG": "پنجره Arena فعال و آماده تعامل شد.",
+        "ARENA_COMPOSER_PLACEHOLDER": "کادر نوشتن پرامپت از روی متن راهنما پیدا شد.",
+        "ARENA_COMPOSER_PADDLEOCR": "کادر نوشتن پرامپت با OCR محلی پیدا شد.",
+        "ARENA_COMPOSER_GEOMETRY_FALLBACK": "کادر پرامپت با موقعیت هندسی امن پیدا شد.",
+        "ARENA_SENT_VERIFIED": "Enter ارسال شد و خروج پرامپت از کادر تأیید شد.",
+        "ARENA_SEND_UNCERTAIN": "ارسال قطعی تأیید نشد؛ Enter دوباره زده نمی‌شود.",
+        "ARENA_SUBMIT_BLOCKED_UNVERIFIED": "ارسال مسدود شد چون حضور متن هنوز تأیید نشده بود.",
+        "ARENA_SUBMIT_BLOCKED_UNSAFE_FOCUS": "ارسال مسدود شد چون فوکوس روی کادر امن نبود.",
+    }
+    if marker in exact:
+        return exact[marker]
+    prefixes = [
+        ("ARENA_CLICK_HIGHLIGHT=", "دایره زرد محل کلیک روی کادر پرامپت نمایش داده شد: "),
+        ("ARENA_CLICK_COMPOSER=", "روی مختصات کادر پرامپت کلیک شد: "),
+        ("ARENA_INPUT_UNICODE=", "متن فارسی با ورودی Unicode وارد کادر شد؛ نتیجه فنی: "),
+        ("ARENA_INPUT_VALUEPATTERN=", "ورود متن با ValuePattern امتحان شد؛ نتیجه فنی: "),
+        ("ARENA_INPUT_SENDINPUT_PASTE=", "ورود متن با Clipboard امتحان شد؛ نتیجه فنی: "),
+        ("ARENA_PASTE_VERIFIED_TRY", "حضور متن در کادر در این تلاش تأیید شد: "),
+        ("ARENA_PASTE_UNVERIFIED_TRY", "حضور متن در کادر در این تلاش تأیید نشد: "),
+        ("ARENA_SUBMIT_SENDINPUT=", "کلید Enter برای ارسال زده شد؛ نتیجه فنی: "),
+        ("ARENA_VERIFY_EXPECTED_LENGTH=", "طول پرامپت مورد انتظار: "),
+        ("ARENA_VERIFY_FOCUSED_LENGTH=", "طول متن خوانده‌شده از کادر فعال: "),
+    ]
+    for prefix, description in prefixes:
+        if marker.startswith(prefix):
+            return description + marker[len(prefix):]
+    return None
 
 
 def network_reachable():
@@ -363,7 +398,7 @@ def save_failure_artifacts(detail):
             fh.write(
                 "زمان: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " تهران\\n"
                 "موضوع: توقف امن اتوماسیون Arena و نیاز به مداخله انسانی\\n"
-                "نسخه برنامه: Arena Bridge 11\\n"
+                "نسخه برنامه: Arena Bridge 12\\n"
                 "شناسه درخواست: " + PROMPT_REQUEST_ID + "\\n"
                 "پرامپت: " + PROMPT_TEXT + "\\n\\n"
                 "جزئیات خطا:\\n" + str(detail)
@@ -398,13 +433,31 @@ def wait_for_arena_completion():
     detector_script = DIALOG_PS_SCRIPT.replace(detector_anchor, detector_exit, 1)
     deadline = time.monotonic() + ARENA_COMPLETION_TIMEOUT
     attempt = 0
-    while time.monotonic() < deadline:
+    completion_intervention_announced = False
+    while True:
+        if time.monotonic() >= deadline:
+            if not ARENA_ASK_ON_COMPLETION_TIMEOUT:
+                raise TimeoutError(
+                    f"تا {ARENA_COMPLETION_TIMEOUT} ثانیه پنجره «{DIALOG_PHRASE}» ظاهر نشد"
+                )
+            payload = {
+                "reason": "completion_wait_expired",
+                "requestId": PROMPT_REQUEST_ID,
+                "message": "زمان یادآوری انتظار پاسخ تمام شد، اما پایش بدون توقف ادامه دارد.",
+                "guidance": "در صورت طبیعی بودن طول کار، فقط ادامه پایش را انتخاب کنید؛ برای پایان دادن، توقف امن را بزنید.",
+                "waitedSeconds": ARENA_COMPLETION_TIMEOUT,
+            }
+            marker = "SERVICE_HUMAN_INTERVENTION_REQUIRED" if not completion_intervention_announced else "SERVICE_HUMAN_INTERVENTION_WAITING"
+            print(marker + ": " + json.dumps(payload, ensure_ascii=False))
+            completion_intervention_announced = True
+            deadline = time.monotonic() + ARENA_COMPLETION_TIMEOUT
+
         offline_started = time.monotonic()
         wait_for_network()
         # مدت قطعی از مهلت پاسخ کم نمی‌شود.
         deadline += max(0, time.monotonic() - offline_started)
         attempt += 1
-        print(f"پایش پایان Arena؛ انتظار برای «{DIALOG_PHRASE}» (بررسی {attempt})...")
+        print(f"پایش پاسخ Arena: هنوز منتظر پایان پرامپت هستیم (بررسی {attempt})")
         security_match = security_verification_match(stage="completion-uia", ocr_fallback=False)
         if security_match:
             intervention_started = time.monotonic()
@@ -417,7 +470,13 @@ def wait_for_arena_completion():
             print(f"هشدار: بررسی پایان Arena موقتاً ناموفق بود: {exc}")
             output = ""
         if "ARENA_COMPLETION_DIALOG_FOUND" in output:
-            print("پنجره پایان Arena با UI Automation دیده شد؛ اجرای مقصد کامل شده است")
+            if completion_intervention_announced:
+                print("SERVICE_HUMAN_INTERVENTION_CLEARED: " + json.dumps({
+                    "reason": "completion_wait_expired",
+                    "requestId": PROMPT_REQUEST_ID,
+                    "message": "پاسخ Arena کامل شد و انتظار طولانی پایان یافت.",
+                }, ensure_ascii=False))
+            print("Arena پایان پاسخ را اعلام کرد؛ آماده تأیید نتیجه هستیم.")
             return True
         try:
             ocr_match = find_text_with_ocr([DIALOG_PHRASE] + SECURITY_VERIFICATION_PHRASES, stage="completion")
@@ -430,14 +489,17 @@ def wait_for_arena_completion():
             deadline += max(0, time.monotonic() - intervention_started)
             continue
         if ocr_match:
-            print("پنجره پایان Arena با PaddleOCR دیده شد؛ اجرای مقصد کامل شده است")
+            if completion_intervention_announced:
+                print("SERVICE_HUMAN_INTERVENTION_CLEARED: " + json.dumps({
+                    "reason": "completion_wait_expired",
+                    "requestId": PROMPT_REQUEST_ID,
+                    "message": "پاسخ Arena کامل شد و انتظار طولانی پایان یافت.",
+                }, ensure_ascii=False))
+            print("Arena پایان پاسخ را نشان داد؛ آماده تأیید نتیجه هستیم.")
             return True
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(ARENA_COMPLETION_POLL_SECONDS, remaining))
-    raise TimeoutError(
-        f"تا {ARENA_COMPLETION_TIMEOUT} ثانیه پنجره «{DIALOG_PHRASE}» ظاهر نشد"
-    )
 `;
 
 const WRAPPED_MAIN = `def main():
@@ -581,6 +643,52 @@ function Save-StepShot([string]$stage) {
     }
 }
 
+if (-not ("ArenaClickPulse" -as [type])) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Drawing;
+using System.Windows.Forms;
+public class ArenaClickPulse : Form {
+    public ArenaClickPulse() {
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        TopMost = true;
+        Width = 88; Height = 88;
+        BackColor = Color.Magenta;
+        TransparencyKey = Color.Magenta;
+    }
+    protected override bool ShowWithoutActivation { get { return true; } }
+    protected override CreateParams CreateParams {
+        get { var cp = base.CreateParams; cp.ExStyle |= 0x08000000 | 0x20 | 0x80; return cp; }
+    }
+    protected override void OnPaint(PaintEventArgs e) {
+        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using (var fill = new SolidBrush(Color.FromArgb(175, 255, 220, 0))) e.Graphics.FillEllipse(fill, 8, 8, 72, 72);
+        using (var pen = new Pen(Color.FromArgb(245, 255, 145, 0), 7)) e.Graphics.DrawEllipse(pen, 8, 8, 72, 72);
+        using (var center = new SolidBrush(Color.FromArgb(245, 255, 80, 0))) e.Graphics.FillEllipse(center, 34, 34, 20, 20);
+    }
+}
+"@ -ReferencedAssemblies 'System.Windows.Forms','System.Drawing'
+}
+
+function Show-ClickPulse([double]$x, [double]$y, [string]$label) {
+    if ($env:ARENA_SHOW_CLICK_HIGHLIGHTS -ne '1') { return }
+    $pulse = $null
+    try {
+        $pulse = New-Object ArenaClickPulse
+        $pulse.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+        $pulse.Location = [System.Drawing.Point]::new([int]($x - 44), [int]($y - 44))
+        $pulse.Show()
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Milliseconds 320
+        Write-Output ("ARENA_CLICK_HIGHLIGHT=" + $label + "@" + [int]$x + "," + [int]$y)
+    } catch {
+        Write-Output ("ARENA_CLICK_HIGHLIGHT_FAILED=" + $_.Exception.Message)
+    } finally {
+        if ($pulse) { $pulse.Close(); $pulse.Dispose() }
+    }
+}
+
 function Try-SetPromptValue($startEl) {
     $el = $startEl
     for ($depth = 0; $depth -lt 7 -and $el; $depth++) {
@@ -669,7 +777,9 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پی�
     for ($try = 1; $try -le 3 -and -not $textConfirmed; $try++) {
         if ($composer) { try { $composer.SetFocus() } catch {} }
         Start-Sleep -Milliseconds 250
+        Show-ClickPulse $clickPoint.X $clickPoint.Y 'کادر پرامپت'
         Left-Click $clickPoint.X $clickPoint.Y
+        Write-Output ("ARENA_CLICK_COMPOSER=" + [int]$clickPoint.X + "," + [int]$clickPoint.Y)
         Start-Sleep -Milliseconds 400
         Save-StepShot ("03-try" + $try + "-focused")
 
@@ -1020,7 +1130,7 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
     time.sleep(AFTER_ENTER_WAIT)
 `;
     const completionWaitBlock = `    # ۶) پایان واقعی فقط با ظهور پنجره نتیجه Arena تأیید می‌شود.
-    print("ارسال انجام شد؛ منتظر پایان کار مقصد و پنجره نتیجه Arena هستیم...")
+    print("پرامپت ارسال شد؛ اکنون منتظر کامل‌شدن پاسخ و نمایش پنجره نتیجه Arena هستیم.")
     wait_for_arena_completion()
 `;
     if (!source.includes(fixedWaitBlock)) {
@@ -1066,17 +1176,24 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
             "ARENA_TRACE_ID": trace_id,
             "ARENA_OCR_X": str(ocr_point["x"]) if ocr_point else "",
             "ARENA_OCR_Y": str(ocr_point["y"]) if ocr_point else "",
+            "ARENA_SHOW_CLICK_HIGHLIGHTS": "1" if ARENA_SHOW_CLICK_HIGHLIGHTS else "0",
         },
         timeout=180,
     )
     markers = [line.strip() for line in output.splitlines() if line.strip()]
+    technical_warnings = []
     for marker in markers:
         if marker.startswith("ARENA_STEP_SCREENSHOT="):
             step_path = marker.split("=", 1)[1]
             step_name = os.path.splitext(os.path.basename(step_path))[0].rsplit("_", 1)[-1]
             register_step_artifact(step_path, "prompt-" + step_name)
-    if markers:
-        print("گزارش فنی Arena: " + " | ".join(markers))
+        description = describe_arena_action(marker)
+        if description:
+            print("اقدام Arena: " + description)
+        if "ERROR" in marker or "FAILED" in marker or "UNVERIFIED" in marker or "UNSAFE" in marker:
+            technical_warnings.append(marker)
+    if technical_warnings:
+        print("جزئیات فنی هشدار Arena: " + " | ".join(technical_warnings))
 `;
   if (source.includes(oldRunner)) source = source.replace(oldRunner, diagnosticRunner);
   else if (source.includes(currentRunner)) source = source.replace(currentRunner, diagnosticRunner);
@@ -1091,6 +1208,23 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
       });
     }
     source = source.replace(markersAnchor, artifactMarkers);
+  }
+
+  if (!source.includes("technical_warnings = []")) {
+    const reportStart = source.indexOf("    for marker in markers:\n", source.indexOf("\ndef type_and_submit():"));
+    const reportEndAnchor = `    if markers:\n        print("گزارش فنی Arena: " + " | ".join(markers))\n`;
+    const reportEnd = source.indexOf(reportEndAnchor, reportStart);
+    const readableReportStart = diagnosticRunner.indexOf("    technical_warnings = []\n");
+    const readableReportEnd = diagnosticRunner.length;
+    if (reportStart < 0 || reportEnd < 0 || readableReportStart < 0) {
+      throw new AppError("بخش گزارش اقدامات Arena برای ارتقای متن فارسی پیدا نشد.", {
+        status: 409,
+        code: "arena_action_report_upgrade_failed",
+      });
+    }
+    source = source.slice(0, reportStart)
+      + diagnosticRunner.slice(readableReportStart, readableReportEnd)
+      + source.slice(reportEnd + reportEndAnchor.length);
   }
 
   const typeRunnerStart = source.indexOf("\ndef type_and_submit():");
@@ -1119,12 +1253,30 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
     }
     source = source.replace(traceAnchor, traceWithOcr).replace(envAnchor, envWithOcr);
   }
+  if (!source.includes('"ARENA_SHOW_CLICK_HIGHLIGHTS"')) {
+    const clickEnvAnchor = `            "ARENA_OCR_Y": str(ocr_point["y"]) if ocr_point else "",\n`;
+    if (!source.includes(clickEnvAnchor)) {
+      throw new AppError("محل افزودن تنظیم نمایش کلیک Arena پیدا نشد.", {
+        status: 409,
+        code: "arena_click_highlight_upgrade_failed",
+      });
+    }
+    source = source.replace(
+      clickEnvAnchor,
+      `${clickEnvAnchor}            "ARENA_SHOW_CLICK_HIGHLIGHTS": "1" if ARENA_SHOW_CLICK_HIGHLIGHTS else "0",\n`,
+    );
+  }
   if (!source.includes("ARENA_DIAGNOSTIC_DIR")) {
     throw new AppError("تابع اجرای PowerShell برای ثبت تصاویر مرحله‌ای قابل ارتقا نیست.", {
       status: 409,
       code: "arena_runner_upgrade_failed",
     });
   }
+
+  source = source.replace(
+    "    print(\"ارسال انجام شد؛ منتظر پایان کار ایجنت همکار و پنجره نتیجه Arena هستیم...\")\n",
+    "    print(\"پرامپت ارسال شد؛ اکنون منتظر کامل‌شدن پاسخ و نمایش پنجره نتیجه Arena هستیم.\")\n",
+  );
 
   // گزارش فنی باید حتی پیش از raise شدن خطای تأیید در لاگ مادر دیده شود.
   source = source.replace(
@@ -1138,7 +1290,7 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
 }
 
 
-/** ارتقای درجا از Bridge 1 تا 10؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+/** ارتقای درجا از Bridge 1 تا 11؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
 function upgradeLegacyBridge(source: string, oldMarker: string): string {
   const bridgeStart = source.indexOf(oldMarker);
   const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
@@ -1181,6 +1333,7 @@ export function buildArenaJobFile(options: {
     return source.endsWith("\n") ? source : `${source}\n`;
   }
   if (
+    source.includes(BRIDGE_11_MARKER) ||
     source.includes(BRIDGE_10_MARKER) ||
     source.includes(BRIDGE_9_MARKER) ||
     source.includes(BRIDGE_8_MARKER) ||
@@ -1192,9 +1345,11 @@ export function buildArenaJobFile(options: {
     source.includes(BRIDGE_2_MARKER) ||
     source.includes(LEGACY_BRIDGE_MARKER)
   ) {
-    const oldMarker = source.includes(BRIDGE_10_MARKER)
-      ? BRIDGE_10_MARKER
-      : source.includes(BRIDGE_9_MARKER)
+    const oldMarker = source.includes(BRIDGE_11_MARKER)
+      ? BRIDGE_11_MARKER
+      : source.includes(BRIDGE_10_MARKER)
+        ? BRIDGE_10_MARKER
+        : source.includes(BRIDGE_9_MARKER)
         ? BRIDGE_9_MARKER
         : source.includes(BRIDGE_8_MARKER)
         ? BRIDGE_8_MARKER
@@ -1221,7 +1376,7 @@ export function buildArenaJobFile(options: {
     throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 11 به‌صورت خودکار پشتیبانی می‌شوند.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 12 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 

@@ -3649,6 +3649,50 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
   border-style: dashed;
 }
 
+.arena-url-compact-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 2fr) minmax(130px, .7fr) auto minmax(175px, .9fr) 38px;
+  align-items: center;
+  gap: 7px;
+}
+
+.arena-url-compact-row .input,
+.arena-url-compact-row .button { min-width: 0; min-height: 40px; }
+.arena-url-input,
+.arena-url-select { direction: ltr; }
+.arena-url-select { text-align: start; }
+.arena-url-save { justify-content: center; padding-inline: 14px; }
+.arena-url-delete {
+  width: 38px;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 19px;
+  cursor: pointer;
+}
+.arena-url-delete:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+.arena-url-delete:disabled { opacity: .4; cursor: not-allowed; }
+
+.service-advanced-options {
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.service-advanced-options summary {
+  padding: 12px 14px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+.service-advanced-options[open] summary { border-bottom: 1px solid var(--border); color: var(--text); }
+.service-advanced-grid { display: grid; gap: 10px; padding: 13px; }
+.service-advanced-grid .field { margin: 0 !important; }
+
 .arena-target-manager {
   display: grid;
   gap: 10px;
@@ -3765,6 +3809,12 @@ html[dir="rtl"] .switch input:checked + .switch-track::after {
   .service-field-heading { align-items: flex-start; flex-direction: column; }
   .prompt-mode-toggle { width: 100%; }
   .prompt-mode-toggle button { flex: 1; }
+  .arena-url-compact-row { grid-template-columns: 1fr auto; }
+  .arena-url-input { grid-column: 1 / -1; }
+  .arena-url-name { grid-column: 1 / 2; }
+  .arena-url-save { grid-column: 2 / 3; }
+  .arena-url-select { grid-column: 1 / 2; }
+  .arena-url-delete { grid-column: 2 / 3; }
   .arena-target-manager-head { align-items: flex-start; }
   .arena-target-save-row { align-items: stretch; flex-direction: column; }
   .arena-target-save-row .button { width: 100%; justify-content: center; }

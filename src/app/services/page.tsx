@@ -287,6 +287,7 @@ export default function ServicesPage() {
 
                 {selected.fields
                   .filter((field) => field.name !== "unrecoverableAcceptance" || Boolean(input.networkAcceptance))
+                  .filter((field) => selected.slug !== "arena-batch" || !["completionTimeoutMinutes", "askOnCompletionTimeout", "showClickHighlights", "stopOnError"].includes(field.name))
                   .map((field) => (
                   <div className="field" key={field.name}>
                     {field.type === "checkbox" ? (
@@ -334,7 +335,68 @@ export default function ServicesPage() {
                             </div>
                           ) : null}
                         </div>
-                        {field.type === "textarea" && field.name === "prompts" && promptInputMode === "cells" ? (
+                        {selected.slug === "arena-batch" && field.name === "url" ? (
+                          <div className="arena-url-compact-row">
+                            <input
+                              id={`service-${field.name}`}
+                              className="input arena-url-input"
+                              type="url"
+                              dir="ltr"
+                              value={String(input.url ?? "")}
+                              required
+                              placeholder="https://arena.ai/agent/..."
+                              aria-label="لینک صفحه مدل"
+                              onChange={(event) => setInput((current) => ({ ...current, url: event.target.value }))}
+                            />
+                            <input
+                              className="input arena-url-name"
+                              type="text"
+                              value={arenaTargetName}
+                              maxLength={80}
+                              placeholder="نام اختیاری"
+                              aria-label="نام اختیاری صفحه مدل"
+                              onChange={(event) => setArenaTargetName(event.target.value)}
+                            />
+                            <button
+                              type="button"
+                              className="button secondary arena-url-save"
+                              disabled={targetBusyId !== null || !String(input.url ?? "").trim()}
+                              onClick={() => void saveArenaTarget()}
+                              title="ذخیره لینک فعلی"
+                            >
+                              {targetBusyId === "save" ? <span className="spinner" /> : "ذخیره"}
+                            </button>
+                            <select
+                              className="input arena-url-select"
+                              value={(arenaTargetsApi.data?.targets.find((target) => target.url === String(input.url ?? ""))?.id) ?? ""}
+                              aria-label="انتخاب از صفحات ذخیره‌شده"
+                              onChange={(event) => {
+                                const target = arenaTargetsApi.data?.targets.find((item) => item.id === event.target.value);
+                                if (!target) return;
+                                setInput((current) => ({ ...current, url: target.url }));
+                                setArenaTargetName(target.name);
+                              }}
+                            >
+                              <option value="">انتخاب ذخیره‌شده‌ها ({(arenaTargetsApi.data?.targets.length ?? 0).toLocaleString("fa-IR")})</option>
+                              {arenaTargetsApi.data?.targets.map((target) => (
+                                <option value={target.id} key={target.id}>{target.name || "بدون نام"}</option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              className="arena-url-delete"
+                              disabled={targetBusyId !== null || !arenaTargetsApi.data?.targets.some((target) => target.url === String(input.url ?? ""))}
+                              aria-label="حذف صفحه انتخاب‌شده از فهرست"
+                              title="حذف صفحه انتخاب‌شده"
+                              onClick={() => {
+                                const target = arenaTargetsApi.data?.targets.find((item) => item.url === String(input.url ?? ""));
+                                if (target) void deleteArenaTarget(target);
+                              }}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ) : field.type === "textarea" && field.name === "prompts" && promptInputMode === "cells" ? (
                           <div className="prompt-cell-list" id={`service-${field.name}`}>
                             {promptCells.map((prompt, index) => (
                               <article className="prompt-cell" key={index}>
@@ -395,70 +457,8 @@ export default function ServicesPage() {
                           />
                         )}
                         {field.helper ? <span className="field-helper">{field.helper}</span> : null}
-                        {selected.slug === "arena-batch" && field.name === "url" ? (
-                          <section className="arena-target-manager" aria-labelledby="arena-target-manager-title">
-                            <div className="arena-target-manager-head">
-                              <div>
-                                <strong id="arena-target-manager-title">صفحات مدل ذخیره‌شده</strong>
-                                <span>نام اختیاری است؛ لینک بالا بدون ذخیره‌کردن هم قابل اجراست.</span>
-                              </div>
-                              <span className="status-chip">{(arenaTargetsApi.data?.targets.length ?? 0).toLocaleString("fa-IR")} صفحه</span>
-                            </div>
-
-                            <div className="arena-target-save-row">
-                              <input
-                                className="input"
-                                type="text"
-                                value={arenaTargetName}
-                                maxLength={80}
-                                placeholder="نام اختیاری؛ مثلاً مدل تولید محتوا"
-                                aria-label="نام اختیاری صفحه مدل"
-                                onChange={(event) => setArenaTargetName(event.target.value)}
-                              />
-                              <button
-                                type="button"
-                                className="button secondary"
-                                disabled={targetBusyId !== null || !String(input.url ?? "").trim()}
-                                onClick={() => void saveArenaTarget()}
-                              >
-                                {targetBusyId === "save" ? <span className="spinner" /> : "+ ذخیره لینک فعلی"}
-                              </button>
-                            </div>
-
-                            {arenaTargetsApi.loading && !arenaTargetsApi.data ? <span className="field-helper">در حال دریافت صفحات ذخیره‌شده…</span> : null}
-                            {arenaTargetsApi.error ? <ErrorBanner error={arenaTargetsApi.error} onRetry={() => void arenaTargetsApi.reload()} /> : null}
-                            {arenaTargetsApi.data?.targets.length ? (
-                              <div className="arena-target-list">
-                                {arenaTargetsApi.data.targets.map((target) => (
-                                  <article className={String(input.url ?? "") === target.url ? "arena-target-item is-selected" : "arena-target-item"} key={target.id}>
-                                    <button
-                                      type="button"
-                                      className="arena-target-select"
-                                      onClick={() => {
-                                        setInput((current) => ({ ...current, url: target.url }));
-                                        setArenaTargetName(target.name);
-                                      }}
-                                    >
-                                      <strong>{target.name || "بدون نام"}</strong>
-                                      <span dir="ltr">{target.url}</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="arena-target-delete"
-                                      disabled={targetBusyId !== null}
-                                      aria-label={`حذف ${target.name || target.url}`}
-                                      title="حذف از فهرست"
-                                      onClick={() => void deleteArenaTarget(target)}
-                                    >
-                                      ×
-                                    </button>
-                                  </article>
-                                ))}
-                              </div>
-                            ) : !arenaTargetsApi.loading ? (
-                              <span className="arena-target-empty">هنوز صفحه‌ای ذخیره نشده است.</span>
-                            ) : null}
-                          </section>
+                        {selected.slug === "arena-batch" && field.name === "url" && arenaTargetsApi.error ? (
+                          <ErrorBanner error={arenaTargetsApi.error} onRetry={() => void arenaTargetsApi.reload()} />
                         ) : null}
                         {field.name === "prompts" ? (
                           <span className="field-helper" aria-live="polite">
@@ -469,6 +469,54 @@ export default function ServicesPage() {
                     )}
                   </div>
                 ))}
+
+                {selected.slug === "arena-batch" ? (
+                  <details className="service-advanced-options">
+                    <summary>تنظیمات پیشرفته انتظار و نمایش کلیک</summary>
+                    <div className="service-advanced-grid">
+                      <div className="field">
+                        <label className="field-label" htmlFor="service-completionTimeoutMinutes">زمان یادآوری انتظار پاسخ (دقیقه)</label>
+                        <input
+                          id="service-completionTimeoutMinutes"
+                          className="input"
+                          type="number"
+                          min={5}
+                          max={720}
+                          value={Number(input.completionTimeoutMinutes ?? 60)}
+                          onChange={(event) => setInput((current) => ({ ...current, completionTimeoutMinutes: Number(event.target.value) }))}
+                        />
+                        <span className="field-helper">پیش‌فرض ۶۰ دقیقه است. در حالت درخواست تصمیم، رسیدن به این زمان اجرای Arena را متوقف نمی‌کند.</span>
+                      </div>
+                      <div>
+                        <label className="service-checkbox">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(input.askOnCompletionTimeout)}
+                            onChange={(event) => setInput((current) => ({ ...current, askOnCompletionTimeout: event.target.checked }))}
+                          />
+                          <span>پس از پایان زمان سؤال شود و پایش همچنان ادامه یابد</span>
+                        </label>
+                        <span className="field-helper">
+                          {Boolean(input.askOnCompletionTimeout)
+                            ? "فعال: فقط پیام تصمیم مدیر نمایش داده می‌شود و انتظار ادامه دارد."
+                            : "غیرفعال: با پایان زمان تعیین‌شده، اجرای این پرامپت ناموفق و متوقف می‌شود."}
+                        </span>
+                      </div>
+                      <label className="service-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(input.showClickHighlights)}
+                          onChange={(event) => setInput((current) => ({ ...current, showClickHighlights: event.target.checked }))}
+                        />
+                        <span>محل کلیک کادر پرامپت با دایره بزرگ زرد نمایش داده شود</span>
+                      </label>
+                      <label className="service-checkbox">
+                        <input type="checkbox" checked readOnly />
+                        <span>در خطای واقعی، پیش از رفتن به پرامپت بعدی توقف امن انجام شود</span>
+                      </label>
+                    </div>
+                  </details>
+                ) : null}
               </div>
 
               <footer className="command-modal-actions">
