@@ -232,9 +232,7 @@ npm run deploy`}</pre>
               <h3 style={{ marginBottom: 4 }}>۲. کلیدها</h3>
               <pre className="code-block">{`wrangler secret put GITHUB_TOKEN
 wrangler secret put MANAGER_PASSCODE
-# اختیاری — گزارش‌های درایو:
-wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
-wrangler secret put GOOGLE_DRIVE_LOGS_FOLDER_ID`}</pre>
+# تصاویر به Secret جدا نیاز ندارند؛ binding خصوصی R2 با نام SCREENSHOTS استفاده می‌شود.`}</pre>
               <p className="prose" style={{ marginTop: 6 }}>
                 توکن فقط سمت سرور است و هرگز به مرورگر نمی‌رود. بدون توکن، سایت فقط خواندنی می‌شود.
               </p>
@@ -249,11 +247,9 @@ npm run self-test  # آزمون پارسرها و قواعد`}</pre>
               </p>
             </div>
             <div>
-              <h3 style={{ marginBottom: 4 }}>۴. درایو</h3>
+              <h3 style={{ marginBottom: 4 }}>۴. فضای تصاویر</h3>
               <p className="prose">
-                پوشه‌ی <span className="mono">Windows-Agent-DB/logs</span> را با ایمیل حساب سرویس (دسترسی بیننده) به
-                اشتراک بگذارید. شناسه‌ی پوشه از انتهای آدرس آن گرفته می‌شود. همگام‌سازی خودکار هر چند دقیقه انجام
-                می‌شود؛ برای نتیجه‌ی فوری، فایل را دستی در گزارش اجرا وارد کنید.
+                یک R2 bucket خصوصی با نام <span className="mono">windows-agent-management-screenshots</span> بسازید و آن را با binding <span className="mono">SCREENSHOTS</span> متصل کنید. Agent تصویر را به API مدیریت می‌فرستد؛ متادیتا و گزارش‌ها در D1 ثبت می‌شوند.
               </p>
             </div>
           </div>
@@ -291,8 +287,7 @@ npm run self-test  # آزمون پارسرها و قواعد`}</pre>
               </li>
               <li>
                 <strong>گزارش</strong>
-                یا درایو را همگام کنید، یا متن فایل نتیجه را در «ورود دستی» بچسبانید؛ باید کارت نتیجه با کد خروج ۰ و
-                خروجی متنی دیده شود.
+                نتیجه Agent باید مستقیماً در D1 ثبت شود؛ برای داده قدیمی می‌توانید متن فایل را در «ورود دستی» بچسبانید. کارت نتیجه باید کد خروج و خروجی متنی را نشان دهد.
               </li>
               <li>
                 <strong>خطا</strong>
@@ -314,8 +309,7 @@ npm run self-test  # آزمون پارسرها و قواعد`}</pre>
               <strong>چرا اجرای دوباره نسخه تازه می‌سازد؟</strong> برای اینکه هر اجرا به محتوای immutable، شماره نسخه و SHA-256 دقیق متصل باشد؛ دیگر Commit یا Push لازم نیست.
             </p>
             <p>
-              <strong>چرا نتیجه فوراً نمی‌آید؟</strong> همگام‌سازی گوگل درایو ۱ تا ۳ دقیقه تأخیر دارد. تا آن زمان
-              می‌توانید فایل را دستی وارد کنید.
+              <strong>چرا نتیجه فوراً نمی‌آید؟</strong> وضعیت Heartbeat و صف فرمان Agent را بررسی کنید. گزارش D1 و تصویر R2 پس از ارسال Agent بدون همگام‌سازی واسط نمایش داده می‌شوند.
             </p>
             <p>
               <strong>اگر توکن GitHub نباشد چه می‌شود؟</strong> کاتالوگ، ویرایش، پرامپت و اجرای D1 ادامه دارد؛ فقط انتقال اولیه از مخزن قدیمی و کارهای کد پایه GitHub در دسترس نیست.

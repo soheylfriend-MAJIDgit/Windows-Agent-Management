@@ -21,8 +21,23 @@ export interface D1Database {
   exec(query: string): Promise<{ count: number; duration?: number }>;
 }
 
+export interface R2ObjectBody {
+  body: ReadableStream<Uint8Array>;
+  size: number;
+  etag: string;
+  httpMetadata?: { contentType?: string; cacheControl?: string };
+}
+
+export interface R2Bucket {
+  put(key: string, value: ArrayBuffer | ArrayBufferView | Blob | ReadableStream, options?: { httpMetadata?: { contentType?: string; cacheControl?: string }; customMetadata?: Record<string, string> }): Promise<unknown>;
+  get(key: string): Promise<R2ObjectBody | null>;
+  delete(key: string | string[]): Promise<void>;
+  head(key: string): Promise<{ size: number; etag: string } | null>;
+}
+
 export interface AppEnv {
   DB?: D1Database;
+  SCREENSHOTS?: R2Bucket;
   GITHUB_TOKEN?: string;
   GOOGLE_SERVICE_ACCOUNT_JSON?: string;
   GOOGLE_SERVICE_ACCOUNT_JSON_B64?: string;
@@ -68,6 +83,18 @@ export async function envVar(name: keyof AppEnv | string): Promise<string | unde
 
 export async function hasEnv(name: string): Promise<boolean> {
   return Boolean(await envVar(name));
+}
+
+export async function getScreenshotBucket(): Promise<R2Bucket> {
+  const env = await getEnv();
+  if (!env.SCREENSHOTS) {
+    throw new AppError("فضای R2 اسکرین‌شات‌ها به Worker متصل نیست.", {
+      status: 503,
+      code: "screenshots_r2_binding_missing",
+      hint: "در Cloudflare یک R2 bucket با نام windows-agent-management-screenshots بسازید و Deploy را دوباره اجرا کنید.",
+    });
+  }
+  return env.SCREENSHOTS;
 }
 
 /** D1؛ در صورت نبودن binding، خطای فارسی قابل‌فهم با راهنما. */
@@ -381,6 +408,30 @@ const SCHEMA_SQL: string[] = [
     created_at TEXT NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_command_artifacts_command ON command_artifacts(command_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS screenshots (
+    id TEXT PRIMARY KEY,
+    object_key TEXT NOT NULL UNIQUE,
+    command_id TEXT,
+    execution_id TEXT,
+    agent_key_id TEXT NOT NULL,
+    agent_id TEXT,
+    stage TEXT,
+    name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    width INTEGER,
+    height INTEGER,
+    occurred_at TEXT,
+    visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('private', 'public')),
+    share_token TEXT UNIQUE,
+    created_at TEXT NOT NULL,
+    deleted_at TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_screenshots_created ON screenshots(created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_screenshots_command ON screenshots(command_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_screenshots_agent ON screenshots(agent_key_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_screenshots_share ON screenshots(share_token)`,
   `CREATE TABLE IF NOT EXISTS automations (
     id TEXT PRIMARY KEY,
     slug TEXT NOT NULL UNIQUE,

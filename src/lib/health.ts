@@ -1,6 +1,5 @@
 import { getRepoConfig } from "./config";
-import { dbHealthy, envVar } from "./db";
-import { driveStatus, getDriveState, testDrive } from "./drive";
+import { dbHealthy, envVar, getScreenshotBucket } from "./db";
 import { fetchArchive, fetchRateLimit } from "./github";
 import { authEnabled } from "./auth";
 import type { HealthCheck } from "./types";
@@ -75,37 +74,11 @@ export async function runHealthCheck(deep: boolean): Promise<HealthResult> {
     });
   }
 
-  const driveConfigured = (await driveStatus()).configured;
-  checks.push({
-    name: "همگام‌سازی گوگل درایو",
-    ok: driveConfigured,
-    optional: !driveConfigured,
-    message: driveConfigured ? "حساب سرویس و پوشه تنظیم شده‌اند." : "پیکربندی نشده؛ گزارش‌ها را دستی وارد کنید.",
-    hint: driveConfigured
-      ? undefined
-      : "GOOGLE_SERVICE_ACCOUNT_JSON و GOOGLE_DRIVE_LOGS_FOLDER_ID را تنظیم کنید (راهنما در تنظیمات).",
-  });
-  if (deep && driveConfigured) {
-    const result = await testDrive();
-    checks.push({
-      name: "اتصال گوگل درایو",
-      ok: result.ok,
-      message: result.message,
-      hint: result.hint,
-    });
-  }
-  if (driveConfigured) {
-    const state = await getDriveState();
-    checks.push({
-      name: "آخرین همگام‌سازی درایو",
-      ok: !state.lastError,
-      message: state.lastSyncAt
-        ? state.lastError
-          ? `آخرین تلاش ناموفق: ${state.lastError}`
-          : "آخرین همگام‌سازی موفق بود."
-        : "هنوز همگام‌سازی انجام نشده.",
-      detail: state.lastSyncAt ?? undefined,
-    });
+  try {
+    await getScreenshotBucket();
+    checks.push({ name: "ذخیره اسکرین‌شات‌ها", ok: true, message: "Cloudflare R2 با binding=SCREENSHOTS متصل است." });
+  } catch (error) {
+    checks.push({ name: "ذخیره اسکرین‌شات‌ها", ok: false, message: error instanceof Error ? error.message : "R2 متصل نیست.", hint: "bucket خصوصی windows-agent-management-screenshots و binding=SCREENSHOTS را ایجاد کنید." });
   }
 
   checks.push({

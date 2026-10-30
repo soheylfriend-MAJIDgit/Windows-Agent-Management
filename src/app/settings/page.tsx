@@ -148,7 +148,7 @@ export default function SettingsPage() {
       <PageHeader
         eyebrow="مدیریت"
         title="تنظیمات"
-        subtitle="مخزن‌ها، همگام‌سازی درایو، وضعیت اتصال‌ها و متغیرهای محیطی. مقدارهای حساس فقط سمت سرور نگه‌داری می‌شوند."
+        subtitle="مخزن‌ها، Cloudflare R2/D1، وضعیت اتصال‌ها و متغیرهای محیطی. مقدارهای حساس فقط سمت سرور نگه‌داری می‌شوند."
         actions={
           <>
             <Link href="/database" className="btn btn-small">
@@ -229,45 +229,6 @@ export default function SettingsPage() {
             <section className="card">
               <div className="card-head">
                 <h2 className="row" style={{ gap: 7 }}>
-                  <Icon name="drive" size={16} />
-                  همگام‌سازی درایو
-                </h2>
-                <StatusChip status={drive?.configured ? "success" : "pending"} label={drive?.configured ? "پیکربندی شده" : "بدون اتصال"} />
-              </div>
-              <label className="switch" style={{ marginBottom: 12 }}>
-                <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-                <span className="switch-track" aria-hidden="true" />
-                همگام‌سازی خودکار گزارش‌ها
-              </label>
-              <div className="field">
-                <label htmlFor="limit">سقف فایل در هر همگام‌سازی</label>
-                <input
-                  id="limit"
-                  className="input"
-                  type="number"
-                  min={5}
-                  max={40}
-                  value={limit}
-                  onChange={(e) => setLimit(Number(e.target.value))}
-                  dir="ltr"
-                />
-                <span className="field-helper">بین ۵ و ۴۰ فایل؛ فایل‌های تازه‌تر اولویت دارند.</span>
-              </div>
-              <div className="card-foot" style={{ marginTop: 10 }}>
-                <span>
-                  {bundle.sync.lastSyncAt ? `آخرین موفقیت: ${relativeFa(bundle.sync.lastSyncAt)}` : "هنوز همگام‌سازی نشده"}
-                </span>
-                <button type="button" className="btn btn-small btn-primary" onClick={saveSync} disabled={savingSync}>
-                  {savingSync ? <span className="spinner" /> : <Icon name="check" size={13} />}
-                  ذخیره
-                </button>
-              </div>
-              {bundle.sync.lastError ? <p className="form-error" style={{ marginTop: 6 }}>{bundle.sync.lastError}</p> : null}
-            </section>
-
-            <section className="card">
-              <div className="card-head">
-                <h2 className="row" style={{ gap: 7 }}>
                   <Icon name="shield" size={16} />
                   وضعیت اتصال‌ها
                 </h2>
@@ -299,8 +260,7 @@ export default function SettingsPage() {
                   : env
                     ? [
                         { name: "توکن گیت‌هاب", ok: env.githubToken, note: env.githubToken ? "تنظیم شده" : "تنظیم نشده" },
-                        { name: "حساب سرویس درایو", ok: env.driveServiceAccount, note: env.driveServiceAccount ? "تنظیم شده" : "تنظیم نشده" },
-                        { name: "پوشه‌ی logs درایو", ok: env.driveFolder, note: env.driveFolder ? env.driveFolderId ?? "تنظیم شده" : "تنظیم نشده" },
+                        { name: "ذخیره تصاویر", ok: true, note: "Cloudflare R2 + D1؛ وضعیت واقعی را با دکمه بررسی ببینید" },
                         { name: "کد مدیریت", ok: env.passcode, note: env.passcode ? "فعال" : "بدون رمز" },
                       ].map((row) => (
                         <div className="status-row" key={row.name}>
@@ -339,18 +299,6 @@ export default function SettingsPage() {
                   helper="کلاسیک یا fine-grained با دسترسی Contents: Read and write روی Windows-Agent-hamkar."
                 />
                 <SecretRow
-                  label="حساب سرویس گوگل"
-                  present={Boolean(env?.driveServiceAccount)}
-                  command="wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON < service-account.json"
-                  helper="محتوای فایل JSON حساب سرویس؛ فقط خواندن درایو کافی است."
-                />
-                <SecretRow
-                  label="شناسه‌ی پوشه‌ی logs"
-                  present={Boolean(env?.driveFolder)}
-                  command="wrangler secret put GOOGLE_DRIVE_LOGS_FOLDER_ID"
-                  helper="شناسه از انتهای آدرس پوشه: drive.google.com/drive/folders/<ID>"
-                />
-                <SecretRow
                   label="کد مدیریت (ورود)"
                   present={Boolean(env?.passcode)}
                   command="wrangler secret put MANAGER_PASSCODE"
@@ -366,40 +314,9 @@ export default function SettingsPage() {
             </section>
 
             <section className="card">
-              <div className="card-head">
-                <h2 className="row" style={{ gap: 7 }}>
-                  <Icon name="drive" size={16} />
-                  راه‌اندازی گوگل درایو
-                </h2>
-              </div>
-              <ol className="steps">
-                <li>
-                  <strong>پروژه و API</strong>
-                  در Google Cloud یک پروژه بسازید و <span className="mono">Google Drive API</span> را فعال کنید.
-                </li>
-                <li>
-                  <strong>حساب سرویس</strong>
-                  یک Service Account بسازید و کلید JSON بگیرید.
-                </li>
-                <li>
-                  <strong>اشتراک‌گذاری پوشه</strong>
-                  پوشه‌ی <span className="mono">logs</span> را با ایمیل حساب سرویس، دسترسی «بیننده» به اشتراک بگذارید.
-                </li>
-                <li>
-                  <strong>ثبت مقدارها</strong>
-                  JSON و شناسه‌ی پوشه را با دستورهای بالا به‌عنوان secret ثبت کنید.
-                </li>
-              </ol>
-              {drive?.accountsEmail ? (
-                <div className="field" style={{ marginTop: 10 }}>
-                  <span className="field-label">ایمیل حساب سرویس</span>
-                  <div className="secret-row">
-                    <span>{drive.accountsEmail}</span>
-                    <CopyButton text={drive.accountsEmail} label="کپی" />
-                  </div>
-                </div>
-              ) : null}
-              <p className="feedback">همگام‌سازی گوگل درایو ۱ تا ۳ دقیقه تأخیر دارد؛ برای نتیجه‌ی فوری از ورود دستی استفاده کنید.</p>
+              <div className="card-head"><h2 className="row" style={{ gap: 7 }}><Icon name="image" size={16} />ذخیره تصاویر Cloudflare</h2><StatusChip status="success" label="R2 + D1" /></div>
+              <ol className="steps"><li><strong>R2 bucket</strong>یک bucket خصوصی با نام <span className="mono">windows-agent-management-screenshots</span> بسازید.</li><li><strong>Binding</strong>نام binding باید <span className="mono">SCREENSHOTS</span> باشد.</li><li><strong>Agent API</strong>ایجنت فایل را به <span className="mono">/api/agent/screenshots</span> می‌فرستد؛ هیچ Secret مربوط به R2 در Agent قرار نمی‌گیرد.</li></ol>
+              <p className="feedback">Google Drive بازنشسته شده است؛ تصویر در R2 و متادیتا و گزارش در D1 ذخیره می‌شود.</p>
             </section>
 
             <section className="card">

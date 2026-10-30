@@ -30,6 +30,12 @@
       "migrations_dir": "migrations"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "SCREENSHOTS",
+      "bucket_name": "windows-agent-management-screenshots"
+    }
+  ],
   "vars": {
     "NEXTJS_ENV": "production",
     "COLLAB_OWNER": "soheylfriend-MAJIDgit",

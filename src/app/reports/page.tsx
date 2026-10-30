@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useApi, useDebounced, postJson, ApiRequestError } from "@/hooks/useApi";
 import { useOverview } from "@/components/OverviewProvider";
@@ -38,17 +37,6 @@ interface ReportsResponse {
   invalidDate?: boolean;
 }
 
-interface SyncResponse {
-  ok: boolean;
-  configured: boolean;
-  downloaded: number;
-  results: number;
-  errors: number;
-  skipped: number;
-  warnings: string[];
-  syncedAt: string;
-  message?: string;
-}
 
 interface IngestResponse {
   kind: "result" | "error";
@@ -84,7 +72,6 @@ export default function ReportsPage() {
     return now ? { jy: now.jy, jm: now.jm, jd: now.jd } : { jy: 1405, jm: 1, jd: 1 };
   });
   const [status, setStatus] = useState<RunStatusFilter>("all");
-  const [syncBusy, setSyncBusy] = useState(false);
   const [showIngest, setShowIngest] = useState(false);
   const [ingestName, setIngestName] = useState("");
   const [ingestKind, setIngestKind] = useState<"auto" | "result" | "error">("auto");
@@ -126,32 +113,9 @@ export default function ReportsPage() {
 
   const reports = useApi<ReportsResponse>(url, { refreshMs: 90_000 });
   const current = reports.data && reports.data.type === tab ? reports.data : null;
-  const driveConfigured = Boolean(overview.data?.connections.drive.configured);
-  const lastSync = overview.syncState?.lastSyncAt ?? overview.data?.connections.drive.lastSyncAt ?? null;
-  const lastError = overview.syncState?.lastError ?? overview.data?.connections.drive.lastError ?? null;
 
   const resultCount = overview.data?.stats.ran;
   const errorCount = overview.data?.stats.errorLogs;
-
-  async function handleSync(force = false) {
-    setSyncBusy(true);
-    try {
-      const result = await postJson<SyncResponse>("/api/sync", { force });
-      if (!result.configured) {
-        notify.warn(result.message ?? "گوگل درایو پیکربندی نشده است.");
-      } else if (result.warnings.length) {
-        notify.warn(result.warnings[0]);
-      } else {
-        notify.ok(result.message ?? "همگام‌سازی انجام شد.");
-      }
-      await reports.reload({ silent: true });
-      await overview.refresh();
-    } catch (err) {
-      notify.error(err instanceof ApiRequestError ? err.message : "همگام‌سازی ناموفق بود.");
-    } finally {
-      setSyncBusy(false);
-    }
-  }
 
   async function handleIngest(event: React.FormEvent) {
     event.preventDefault();
@@ -206,10 +170,6 @@ export default function ReportsPage() {
               <Icon name="inbox" size={14} />
               ورود دستی
             </button>
-            <button type="button" className="btn btn-small" onClick={() => handleSync(false)} disabled={syncBusy || !driveConfigured}>
-              {syncBusy ? <span className="spinner" /> : <Icon name="drive" size={14} />}
-              همگام‌سازی درایو
-            </button>
             <button type="button" className="btn btn-small" onClick={() => reports.reload()} disabled={reports.refreshing}>
               {reports.refreshing ? <span className="spinner" /> : <Icon name="refresh" size={14} />}
               به‌روزرسانی
@@ -217,43 +177,6 @@ export default function ReportsPage() {
           </>
         }
       />
-
-      {!driveConfigured ? (
-        <Banner
-          tone="info"
-          title="همگام‌سازی خودکار درایو غیرفعال است"
-          actions={
-            <>
-              <Link href="/settings" className="btn btn-small">
-                تنظیم اتصال درایو
-              </Link>
-              <button type="button" className="btn btn-small btn-primary" onClick={() => setShowIngest(true)}>
-                ورود دستی فایل
-              </button>
-            </>
-          }
-        >
-          فایل‌های <span className="mono">*_result.txt</span> و <span className="mono">errors_*.txt</span> در گوگل درایو
-          هستند. با حساب سرویس، پنل هر چند لحظه آن‌ها را می‌خواند؛ در غیر این صورت می‌توانید متن فایل را دستی وارد کنید.
-        </Banner>
-      ) : lastError ? (
-        <Banner
-          tone="warn"
-          title="آخرین همگام‌سازی درایو ناموفق بود"
-          actions={
-            <>
-              <button type="button" className="btn btn-small" onClick={() => handleSync(true)} disabled={syncBusy}>
-                همگام‌سازی اجباری
-              </button>
-              <Link href="/settings" className="btn btn-small btn-ghost">
-                بررسی تنظیمات
-              </Link>
-            </>
-          }
-        >
-          {lastError}
-        </Banner>
-      ) : null}
 
       {showIngest ? (
         <section className="card" style={{ marginBottom: 14 }}>
@@ -348,8 +271,7 @@ export default function ReportsPage() {
         </div>
         <div className="row" style={{ gap: 8 }}>
           <span className="field-helper">
-            {current ? `${faNumber(current.total)} مورد` : ""}
-            {lastSync ? ` · همگام‌سازی: ${relativeFa(lastSync)}` : ""}
+            {current ? `${faNumber(current.total)} مورد ذخیره‌شده در D1` : ""}
           </span>
         </div>
       </div>
@@ -466,21 +388,13 @@ export default function ReportsPage() {
             <EmptyState
               icon="terminal"
               title="هنوز نتیجه‌ای ثبت نشده"
-              text="پس از اجرای کدها توسط پنل ویندوز، فایل‌های نتیجه در logs ساخته می‌شوند. می‌توانید یک فایل را دستی هم وارد کنید یا درایو را وصل کنید."
+              text="پس از اجرای کدها، نتیجه Agent مستقیماً در D1 ثبت می‌شود؛ ورود دستی نیز برای داده‌های قدیمی فعال است."
               actions={
                 <>
                   <button type="button" className="btn btn-small" onClick={() => setShowIngest(true)}>
                     ورود دستی نتیجه
                   </button>
-                  {driveConfigured ? (
-                    <button type="button" className="btn btn-small btn-primary" onClick={() => handleSync(true)} disabled={syncBusy}>
-                      همگام‌سازی اجباری
-                    </button>
-                  ) : (
-                    <Link href="/settings" className="btn btn-small btn-primary">
-                      تنظیم درایو
-                    </Link>
-                  )}
+                  <a href="/screenshots" className="btn btn-small btn-primary">مشاهده اسکرین‌شات‌ها</a>
                 </>
               }
             />
@@ -497,29 +411,19 @@ export default function ReportsPage() {
           <EmptyState
             icon="check-circle"
             title="خطایی ثبت نشده"
-            text="فایل errors_*.txt در پوشه‌ی logs/errors خالی است یا هنوز همگام‌سازی نشده. اگر درایو متصل است، همگام‌سازی را دوباره بزنید."
-            actions={
-              driveConfigured ? (
-                <button type="button" className="btn btn-small" onClick={() => handleSync(true)} disabled={syncBusy}>
-                  همگام‌سازی اجباری
-                </button>
-              ) : undefined
-            }
+            text="Windows Agent هنوز خطایی در D1 ثبت نکرده است."
           />
         </section>
       )}
 
-      <p className="feedback">
-        گزارش‌ها در D1 نگه‌داری می‌شوند و فایل اصلی در درایو دست‌نخورده می‌ماند. همگام‌سازی گوگل درایو ذاتاً ۱ تا ۳
-        دقیقه تأخیر دارد.
-      </p>
+      <p className="feedback">گزارش‌ها مستقیماً در D1 و تصاویر در Cloudflare R2 نگه‌داری می‌شوند؛ Google Drive در این مسیر استفاده نمی‌شود.</p>
     </>
   );
 }
 
 function RunCard({ run }: { run: Run }) {
   const ok = run.status === "success";
-  const sourceLabel = run.source === "drive" ? "درایو" : run.source === "manual" ? "دستی" : run.source;
+  const sourceLabel = run.source === "drive" ? "میراث قدیمی" : run.source === "manual" ? "دستی" : run.source;
   const hasOutput = Boolean(run.output);
   const hasErrors = Boolean(run.errors);
 

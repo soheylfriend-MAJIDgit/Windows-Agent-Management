@@ -39,6 +39,7 @@ const DEFAULT_SCOPES = [
   "commands:read",
   "results:write",
   "artifacts:write",
+  "artifacts:read",
   "reports:read",
 ];
 

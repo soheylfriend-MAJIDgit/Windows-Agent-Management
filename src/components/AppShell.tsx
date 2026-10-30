@@ -10,7 +10,7 @@ import { Icon, type IconName } from "./icons";
 import { Logo } from "./Logo";
 import { Banner } from "./ui";
 import { CommandCenterDock } from "./CommandCenterDock";
-import { faNumber, relativeFa } from "@/lib/jalali";
+import { faNumber } from "@/lib/jalali";
 import { postJson } from "@/hooks/useApi";
 
 interface NavItem {
@@ -25,6 +25,7 @@ const PRIMARY = [
   { href: "/codes", label: "کدهای اتوماسیون", icon: "code" },
   { href: "/prompt", label: "پرامپت", icon: "send" },
   { href: "/reports", label: "گزارش‌ها", icon: "report" },
+  { href: "/screenshots", label: "اسکرین‌شات‌ها", icon: "image" },
   { href: "/database", label: "دیتابیس", icon: "database" },
   { href: "/agent-keys", label: "کلید ایجنت", icon: "lock" },
   { href: "/settings", label: "تنظیمات", icon: "settings" },
@@ -39,7 +40,7 @@ export function AppShell({
   session: { enabled: boolean; authed: boolean };
 }) {
   const pathname = usePathname();
-  const { data, error, syncState } = useOverview();
+  const { data, error } = useOverview();
   const [loggingOut, setLoggingOut] = useState(false);
 
   const stats = data?.stats;
@@ -152,18 +153,7 @@ export function AppShell({
             ) : null}
           </span>
           <span className="foot-group">
-            {syncState?.configured ? (
-              <span>
-                <span
-                  className={`status-mark ${syncState.lastError ? "is-danger" : "is-ok"}`}
-                  aria-hidden="true"
-                />
-                {syncState.lastError ? "آخرین همگام‌سازی ناموفق بود" : "همگام‌سازی درایو فعال"}
-                {syncState.lastSyncAt ? ` · ${relativeFa(syncState.lastSyncAt)}` : ""}
-              </span>
-            ) : (
-              <span>درایو متصل نیست · ورود دستی گزارش‌ها فعال است</span>
-            )}
+            <span><span className="status-mark is-ok" aria-hidden="true" />ذخیره تصاویر: Cloudflare R2 + D1</span>
             <span aria-hidden="true">·</span>
             <span>ساعت تهران</span>
           </span>

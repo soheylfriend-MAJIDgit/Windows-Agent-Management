@@ -41,33 +41,6 @@ export const SERVICE_CATALOG: ServiceDefinition[] = [
     ],
   },
   {
-    slug: "drive-control",
-    title: "پل کنترل مستقیم Google Drive",
-    summary: "فرمان‌های نسخه‌دار پوشه اختصاصی Drive را دریافت، در workspace جدا اجرا و نتیجه را دوباره در Drive و D1 ثبت می‌کند.",
-    category: "کنترل ویندوز",
-    caution: "این سرویس می‌تواند PAYLOAD.py را اجرا کند. فقط پوشه اختصاصی و فرمان‌های دارای hash، انقضا و شناسه یکتا پذیرفته می‌شوند؛ فایل پایه هیچ Agentی تغییر نمی‌کند.",
-    fields: [
-      {
-        name: "folderPath",
-        label: "مسیر mirror پوشه اختصاصی Drive در ویندوز",
-        type: "text",
-        required: true,
-        defaultValue: "C:\\Users\\alibatel\\My Drive\\Windows-Agent-DB\\Wndows-Agent-Management",
-        helper: "نسخه آنلاین Google Drive منبع فرمان است؛ این مسیر فقط mirror همگام‌شده Google Drive Desktop است.",
-      },
-      { name: "pollSeconds", label: "فاصله بررسی تغییرها (ثانیه)", type: "number", required: true, min: 3, max: 60, defaultValue: 5 },
-      { name: "maxDurationHours", label: "مدت فعال‌بودن پل (ساعت)", type: "number", required: true, min: 1, max: 168, defaultValue: 168 },
-      { name: "maxCommandMinutes", label: "حداکثر زمان هر فرمان (دقیقه)", type: "number", required: true, min: 1, max: 120, defaultValue: 20 },
-      {
-        name: "confirmed",
-        label: "می‌پذیرم PAYLOAD.py این پوشه با کنترل hash و انقضا در workspace جدا اجرا شود",
-        type: "checkbox",
-        required: true,
-        defaultValue: false,
-      },
-    ],
-  },
-  {
     slug: "arena-batch",
     title: "اجرای ترتیبی پرامپت‌ها",
     summary: "فهرست دستی پرامپت‌ها را به‌ترتیب در یک گفت‌وگوی Arena اجرا می‌کند.",
@@ -822,31 +795,11 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
     source = closeFoldersSource();
     summary = "اجرای تعاملی بستن پنجره‌های پوشه";
   } else if (service.slug === "drive-control") {
-    if (!boolField(input, "confirmed")) {
-      throw new AppError("تأیید اجرای payload پوشه اختصاصی Drive الزامی است.", {
-        status: 422,
-        code: "service_drive_control_confirmation_required",
-      });
-    }
-    const folderPath = typeof input.folderPath === "string" ? input.folderPath.trim() : "";
-    if (
-      folderPath.length < 10 || folderPath.length > 240 ||
-      !/^[A-Za-z]:\\/.test(folderPath) || folderPath.includes("..") ||
-      !folderPath.toLowerCase().endsWith("\\wndows-agent-management")
-    ) {
-      throw new AppError("مسیر پوشه اختصاصی Drive معتبر نیست یا به Wndows-Agent-Management ختم نمی‌شود.", {
-        status: 422,
-        code: "service_drive_control_path_invalid",
-      });
-    }
-    const pollSeconds = numberField(input, "pollSeconds", 3, 60);
-    const maxDurationHours = numberField(input, "maxDurationHours", 1, 168);
-    const maxCommandMinutes = numberField(input, "maxCommandMinutes", 1, 120);
-    source = driveControlSource(folderPath, pollSeconds, maxDurationHours, maxCommandMinutes);
-    timeoutSeconds = Math.min(604_800, maxDurationHours * 3600 + 300);
-    noProgressSeconds = 120;
-    requiredCapabilities = ["d1_automations"];
-    summary = `پل کنترل مستقیم پوشه Drive برای ${maxDurationHours} ساعت`;
+    throw new AppError("سرویس Google Drive بازنشسته شده است.", {
+      status: 410,
+      code: "drive_service_retired",
+      hint: "برای فایل و اسکرین‌شات از APIهای D1/R2 مدیریت استفاده کنید.",
+    });
   } else if (service.slug === "director-monitor") {
     const url = httpsUrl(input.url);
     const duration = numberField(input, "durationMinutes", 1, 55);
@@ -908,20 +861,13 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
       "پایش پیوسته فایل play-puase-stop.txt و توقف امن روی pause یا stop",
       "نمایش زنده تغییرهای Message.txt به‌عنوان پیام مستقیم Agent همکار",
       "بایگانی مستقل هر نسخه تازه Complete MarkDown REPORT.md",
-      "ثبت تصویر مرحله‌ای و ارائه لینک Google Drive برای هر تصویر",
+      "ثبت تصویر مرحله‌ای و Upload مستقیم به Cloudflare R2 همراه متادیتای D1",
       "تأیید ورود متن، ارسال واقعی، پایان پاسخ Arena و انتخاب Yes",
       "پایش تغییر پایدار NextPrompt.txt و جلوگیری از محتوای قدیمی، ناقص یا تکراری",
     ] : service.slug === "arena-batch" ? [
       "اجرای متن دقیق فهرست دستی بدون افزودن قرارداد یا لینک‌های Drive",
       "ثبت تصاویر مرحله‌ای ورود متن، ارسال و پایان پاسخ Arena",
       "تأیید ورود متن، ارسال واقعی، پایان پاسخ Arena و انتخاب Yes",
-    ] : service.slug === "drive-control" ? [
-      "Google Drive آنلاین منبع ایجاد COMMAND.json و PAYLOAD.py است؛ مسیر محلی فقط mirror همگام‌شده است",
-      "هیچ فرمانی هنگام قطع اینترنت یا CONTROL=pause اجرا نمی‌شود",
-      "اعتبار commandId، revision، انقضا و SHA-256 پیش از هر اجرا بررسی می‌شود",
-      "هر payload در workspace جدا اجرا می‌شود و فایل پایه Agentها دست‌نخورده می‌ماند",
-      "STATUS.json، RESULT.json، STDOUT.txt و STDERR.txt پس از هر مرحله overwrite می‌شوند",
-      "رویدادهای receipt، heartbeat و نتیجه هم‌زمان در D1 ثبت می‌شوند",
     ] : undefined,
   });
   return { commandId: run.commandId, version: saved.version.version, service };

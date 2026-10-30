@@ -1,5 +1,4 @@
 import { dbHealthy, envVar } from "./db";
-import { driveStatus, getDriveState } from "./drive";
 import { AppError } from "./errors";
 import { fetchArchive, fetchLatestCommit, getLastGoodArchive, type ArchiveSnapshot } from "./github";
 import { getRepoConfig } from "./config";
@@ -107,8 +106,8 @@ export async function getOverview(options: { force?: boolean } = {}): Promise<Ov
   const data = await getJobsData({ force: options.force, enrichLimit: options.force ? 8 : 3 });
   const latest = await latestRunsByJob();
   const counts = await tableCounts();
-  const drive = await getDriveState();
-  const driveCfg = await driveStatus();
+  const drive = { lastSyncAt: null, lastError: null };
+  const driveCfg = { configured: false };
   const tokenConfigured = Boolean(await envVar("GITHUB_TOKEN"));
 
   const present = data.jobs.filter((j) => j.present);

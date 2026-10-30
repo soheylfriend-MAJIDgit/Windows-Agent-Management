@@ -1,12 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
 import { useOverview } from "@/components/OverviewProvider";
 import { PageHeader, Banner, ErrorBanner, EmptyState, StatusChip } from "@/components/ui";
 import { Icon, type IconName } from "@/components/icons";
 import { useToast } from "@/components/ToastProvider";
-import { ApiRequestError } from "@/hooks/useApi";
 import { faDuration } from "@/lib/format";
 import { faNumber, formatJalaliDateTime, relativeFa } from "@/lib/jalali";
 import type { EventRecord, JobView, Run } from "@/lib/types";
@@ -14,12 +12,10 @@ import type { EventRecord, JobView, Run } from "@/lib/types";
 type Tone = "accent" | "ok" | "warn" | "danger";
 
 export default function DashboardPage() {
-  const { data, error, loading, refreshing, reload, refresh, runSync, syncState } = useOverview();
+  const { data, error, loading, refreshing, reload, refresh } = useOverview();
   const notify = useToast();
-  const [syncBusy, setSyncBusy] = useState(false);
 
   const stats = data?.stats;
-  const driveConfigured = Boolean(data?.connections.drive.configured);
   const setupIssue = error && !data && (error.code?.startsWith("db_") || error.code === "internal_error");
   const lastChecked = data ? formatJalaliDateTime(data.fetchedAt) : "—";
 
@@ -28,27 +24,6 @@ export default function DashboardPage() {
     notify.ok("داده‌های داشبورد تازه شد.");
   }
 
-  async function handleSync() {
-    if (!driveConfigured) {
-      notify.warn("گوگل درایو پیکربندی نشده است؛ در تنظیمات راهنمای اتصال را ببینید.");
-      return;
-    }
-    setSyncBusy(true);
-    try {
-      const result = await runSync({});
-      if (!result.configured) {
-        notify.warn(result.message ?? "درایو پیکربندی نشده است.");
-      } else if (result.warnings.length) {
-        notify.warn(result.warnings[0]);
-      } else {
-        notify.ok(result.message ?? "همگام‌سازی انجام شد.");
-      }
-    } catch (err) {
-      notify.error(err instanceof ApiRequestError ? err.message : "همگام‌سازی ناموفق بود.");
-    } finally {
-      setSyncBusy(false);
-    }
-  }
 
   return (
     <>
@@ -58,16 +33,10 @@ export default function DashboardPage() {
         subtitle={`نمای کلی کدهای ایجنت همکار، نتیجه‌ی اجراها و سلامت اتصال‌ها — آخرین بررسی: ${lastChecked}`}
         actions={
           <>
-            <button
-              type="button"
-              className="btn btn-small"
-              onClick={handleSync}
-              disabled={syncBusy || !driveConfigured}
-              title={driveConfigured ? "خواندن فایل‌های تازه از گوگل درایو" : "برای فعال‌سازی، درایو را در تنظیمات وصل کنید"}
-            >
-              {syncBusy ? <span className="spinner" /> : <Icon name="drive" size={14} />}
-              همگام‌سازی درایو
-            </button>
+            <Link href="/screenshots" className="btn btn-small">
+              <Icon name="image" size={14} />
+              اسکرین‌شات‌ها
+            </Link>
             <button type="button" className="btn btn-small" onClick={handleRefresh} disabled={refreshing}>
               {refreshing ? <span className="spinner" /> : <Icon name="refresh" size={14} />}
               به‌روزرسانی
@@ -274,7 +243,7 @@ export default function DashboardPage() {
             <EmptyState
               icon="terminal"
               title="هنوز اجرایی ثبت نشده"
-              text="پس از اجرا توسط پنل ویندوز، فایل نتیجه در درایو ساخته می‌شود. می‌توانید آن را دستی هم وارد کنید."
+              text="پس از اجرا، Windows Agent نتیجه را مستقیماً در D1 ثبت می‌کند؛ ورود دستی داده‌های قدیمی نیز فعال است."
               actions={
                 <Link href="/reports" className="btn btn-small">
                   ورود دستی نتیجه
@@ -311,19 +280,11 @@ export default function DashboardPage() {
                   badge={data.connections.github.ok ? "متصل" : "قطع"}
                 />
                 <ConnectionRow
-                  icon="drive"
-                  label="گوگل درایو (logs)"
-                  ok={data.connections.drive.configured && !data.connections.drive.lastError}
-                  text={
-                    !data.connections.drive.configured
-                      ? "پیکربندی نشده؛ نتیجه‌ها را دستی وارد کنید"
-                      : data.connections.drive.lastError
-                        ? data.connections.drive.lastError
-                        : syncState?.lastSyncAt ?? data.connections.drive.lastSyncAt
-                          ? `آخرین همگام‌سازی: ${relativeFa(syncState?.lastSyncAt ?? data.connections.drive.lastSyncAt ?? "")}`
-                          : "آماده‌ی همگام‌سازی"
-                  }
-                  badge={!data.connections.drive.configured ? "اختیاری" : data.connections.drive.lastError ? "خطا" : "متصل"}
+                  icon="image"
+                  label="فضای تصاویر Cloudflare"
+                  ok={true}
+                  text="فایل‌ها در R2 و متادیتا و گزارش‌ها در D1 نگهداری می‌شوند"
+                  badge="R2 + D1"
                 />
                 <ConnectionRow
                   icon="database"
@@ -362,9 +323,7 @@ export default function DashboardPage() {
               <Icon name="clock" size={17} />
               رویدادهای اخیر
             </h2>
-            {syncState?.lastSyncAt ? (
-              <span className="card-head-sub">درایو: {relativeFa(syncState.lastSyncAt)}</span>
-            ) : null}
+            <span className="card-head-sub">رخدادهای D1</span>
           </div>
           {data && data.events.length ? (
             <ul className="timeline">
