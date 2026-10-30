@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiRequest, ApiRequestError, postJson, useApi } from "@/hooks/useApi";
 import { Banner, CopyButton, EmptyState, ErrorBanner, LoadingState, PageHeader, StatusChip } from "@/components/ui";
 import { Icon } from "@/components/icons";
@@ -53,8 +53,14 @@ export default function AgentKeysPage() {
   const [confirmAction, setConfirmAction] = useState<{ id: string; type: "rotate" | "revoke" } | null>(null);
   const [generated, setGenerated] = useState<{ key: string; id: string } | null>(null);
   const [origin, setOrigin] = useState("");
+  const registeredKeysRef = useRef<HTMLElement>(null);
 
   useEffect(() => setOrigin(window.location.origin), []);
+
+  function showRegisteredKeys() {
+    registeredKeysRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    registeredKeysRef.current?.focus({ preventScroll: true });
+  }
 
   const bundle = keysApi.data;
   const endpoint = origin ? `${origin}/api/agent` : "/api/agent";
@@ -151,10 +157,22 @@ export default function AgentKeysPage() {
         title="کلید ایجنت"
         subtitle="کلیدهای اتصال Windows Agent به Cloudflare را بسازید، تعویض کنید یا فوراً از کار بیندازید."
         actions={
-          <button type="button" className="btn btn-small" onClick={() => keysApi.reload()} disabled={keysApi.refreshing}>
-            {keysApi.refreshing ? <span className="spinner" /> : <Icon name="refresh" size={14} />}
-            به‌روزرسانی
-          </button>
+          <div className="row">
+            <button
+              type="button"
+              className="btn btn-small btn-primary"
+              onClick={showRegisteredKeys}
+              disabled={!bundle}
+              title="نمایش فهرست امن کلیدها؛ مقدار محرمانه کلیدهای قبلی قابل بازیابی نیست"
+            >
+              <Icon name="layers" size={14} />
+              مشاهده کلیدهای ثبت‌شده
+            </button>
+            <button type="button" className="btn btn-small" onClick={() => keysApi.reload()} disabled={keysApi.refreshing}>
+              {keysApi.refreshing ? <span className="spinner" /> : <Icon name="refresh" size={14} />}
+              به‌روزرسانی
+            </button>
+          </div>
         }
       />
 
@@ -302,12 +320,21 @@ export default function AgentKeysPage() {
             </section>
           </div>
 
-          <section className="card agent-key-list-card">
+          <section
+            ref={registeredKeysRef}
+            id="registered-agent-keys"
+            className="card agent-key-list-card"
+            tabIndex={-1}
+            aria-labelledby="registered-agent-keys-title"
+          >
             <div className="card-head">
-              <h2 className="row" style={{ gap: 7 }}>
-                <Icon name="layers" size={16} />
-                کلیدهای ثبت‌شده
-              </h2>
+              <div>
+                <h2 id="registered-agent-keys-title" className="row" style={{ gap: 7 }}>
+                  <Icon name="layers" size={16} />
+                  کلیدهای ثبت‌شده
+                </h2>
+                <p className="field-helper">برای امنیت فقط پیشوند، دسترسی‌ها و وضعیت نمایش داده می‌شود؛ مقدار کامل قابل بازیابی نیست.</p>
+              </div>
               <span className="field-helper">{faNumber(bundle.keys.length)} کلید</span>
             </div>
 

@@ -151,6 +151,31 @@ function parseObject(value: string | null): Record<string, unknown> {
   }
 }
 
+function serviceArtifactMarker(message: string): {
+  artifactId: string;
+  kind: string;
+  stage: string | null;
+  name: string;
+  localPath: string;
+  mimeType: string | null;
+} | null {
+  const prefix = "SERVICE_ARTIFACT:";
+  if (!message.startsWith(prefix)) return null;
+  try {
+    const value = JSON.parse(message.slice(prefix.length).trim()) as Record<string, unknown>;
+    const artifactId = typeof value.artifactId === "string" ? value.artifactId : "";
+    const kind = typeof value.kind === "string" ? value.kind.trim().slice(0, 40) : "";
+    const stage = typeof value.stage === "string" ? value.stage.trim().slice(0, 80) || null : null;
+    const name = typeof value.name === "string" ? value.name.trim().slice(0, 260) : "";
+    const localPath = typeof value.localPath === "string" ? value.localPath.trim().slice(0, 1000) : "";
+    const mimeType = typeof value.mimeType === "string" ? value.mimeType.trim().slice(0, 120) || null : null;
+    if (!/^art_[A-Za-z0-9_-]{8,50}$/.test(artifactId) || !kind || !name || !localPath) return null;
+    return { artifactId, kind, stage, name, localPath, mimeType };
+  } catch {
+    return null;
+  }
+}
+
 function text(value: unknown, label: string, max: number, required = true): string | null {
   if (value === undefined || value === null) {
     if (required) throw new AppError(`${label} لازم است.`, { status: 400, code: "command_field_required" });
@@ -192,6 +217,117 @@ function mapCommand(row: CommandRow): CommandView {
   };
 }
 
+function artifactStageMessage(stage: string | null, kind: string): string {
+  const messages: Record<string, string> = {
+    "ocr-before-input": "تصویر بررسی صفحه پیش از ورود متن ثبت شد.",
+    "ocr-composer": "تصویر مربوط به پیدا کردن کادر نوشتن پرامپت ثبت شد.",
+    "prompt-01-browser-foreground": "تصویر فعال بودن پنجره مرورگر ثبت شد.",
+    "prompt-02-composer-ready": "تصویر آماده بودن کادر پرامپت ثبت شد.",
+    "prompt-03-try1-focused": "تصویر فوکوس امن روی کادر پرامپت ثبت شد.",
+    "prompt-03-try1-after-input": "تصویر کادر پرامپت پس از ورود متن ثبت شد.",
+    "prompt-03-try1-verified": "تصویر تأیید حضور صحیح متن در کادر پرامپت ثبت شد.",
+    "prompt-04-before-submit": "تصویر نهایی پیش از ارسال پرامپت ثبت شد.",
+    "prompt-04-submit-refocused-verified": "تصویر composer پس از بازگرداندن فوکوس و تأیید مجدد پرامپت ثبت شد.",
+    "prompt-04-after-enter-first": "تصویر وضعیت Arena پنج ثانیه پس از Enter اول ثبت شد.",
+    "prompt-04-after-fallback-ctrl-enter": "تصویر وضعیت Arena پس از fallback کنترل‌شده Ctrl+Enter ثبت شد.",
+    "prompt-04-before-send-button-click": "تصویر شواهد باقی‌ماندن پرامپت پیش از کلیک کنترل‌شده دکمه ارسال ثبت شد.",
+    "prompt-04-after-send-button-click": "تصویر وضعیت Arena پس از کلیک کنترل‌شده دکمه ارسال ثبت شد.",
+    "prompt-05-after-submit": "تصویر صفحه بلافاصله پس از ارسال پرامپت ثبت شد.",
+    "prompt-05-submit-blocked": "به‌دلیل تأیید نشدن متن، ارسال انجام نشد و تصویر توقف امن ثبت شد.",
+    "prompt-05-submit-unconfirmed": "Enter زده شد اما خروج متن از composer تأیید نشد؛ تصویر توقف امن ثبت شد.",
+    "ocr-completion": "تصویر بررسی پایان پاسخ Arena ثبت شد.",
+    "ocr-before-result-confirmation": "تصویر بررسی صفحه پیش از تأیید نتیجه ثبت شد.",
+    "result-confirmation-before": "تصویر مرحله‌ای پیش از تأیید نتیجه با گزینه Yes ثبت شد.",
+    "result-confirmation-after": "تصویر مرحله‌ای پس از تأیید نتیجه با گزینه Yes ثبت شد.",
+    "failure-report": "گزارش متنی خطا برای بررسی بعدی ثبت شد.",
+    "failure-screenshot": "تصویر صفحه در لحظه خطا ثبت شد.",
+  };
+  if (stage && messages[stage]) return messages[stage];
+  const nextPrompt = stage?.match(/^next-prompt-(\d+)-consumed$/);
+  if (nextPrompt) return `تصویر صفحه پس از مصرف امن پرامپت خودکار شماره ${Number(nextPrompt[1]).toLocaleString("fa-IR")} ثبت شد.`;
+  const attempt = stage?.match(/^prompt-03-try(\d+)-(focused|after-input|verified|unverified)$/);
+  if (attempt) {
+    const action = attempt[2] === "focused"
+      ? "فوکوس روی کادر"
+      : attempt[2] === "after-input"
+        ? "پس از ورود متن"
+        : attempt[2] === "verified"
+          ? "تأیید موفق متن"
+          : "تأیید نشدن متن";
+    return `تصویر تلاش ${attempt[1]} ـ ${action} ثبت شد.`;
+  }
+  if (stage?.startsWith("agent-report-")) return "نسخه مستقل گزارش Markdown ایجنت برای این اجرا ثبت شد.";
+  if (stage?.startsWith("ocr-")) return "تصویر مرحله بررسی دیداری با OCR ثبت شد.";
+  if (stage?.startsWith("prompt-")) return "تصویر یکی از مراحل ورود و ارسال پرامپت ثبت شد.";
+  return kind === "log" || kind === "agent-report" ? "گزارش مرحله‌ای برای بررسی بعدی ثبت شد." : "تصویر مرحله‌ای برای بررسی بعدی ثبت شد.";
+}
+
+function serviceProgressMessage(message: string): string | null {
+  let match = message.match(/^SERVICE_BATCH_ITEM_STARTED: (\d+)\/(\d+)$/);
+  if (match) {
+    const current = Number(match[1]);
+    const total = Number(match[2]);
+    return `پرامپت ${current.toLocaleString("fa-IR")} از ${total.toLocaleString("fa-IR")} شروع شد؛ پس از این مورد ${Math.max(0, total - current).toLocaleString("fa-IR")} پرامپت باقی می‌ماند.`;
+  }
+  match = message.match(/^SERVICE_BATCH_ITEM_COMPLETED: (\d+)(?:\/(\d+))?$/);
+  if (match) return match[2]
+    ? `پرامپت ${Number(match[1]).toLocaleString("fa-IR")} از ${Number(match[2]).toLocaleString("fa-IR")} با موفقیت کامل شد؛ ${Math.max(0, Number(match[2]) - Number(match[1])).toLocaleString("fa-IR")} پرامپت باقی مانده است.`
+    : `${Number(match[1]).toLocaleString("fa-IR")} پرامپت با موفقیت کامل شده است.`;
+  match = message.match(/^SERVICE_BATCH_ITEM_FAILED: (\d+)\/(\d+): (.+)$/);
+  if (match) return `پرامپت ${Number(match[1]).toLocaleString("fa-IR")} از ${Number(match[2]).toLocaleString("fa-IR")} ناموفق شد: ${match[3]}`;
+  match = message.match(/^SERVICE_BATCH_RESULT_CONFIRMED: (\d+)\/(\d+)$/);
+  if (match) return `نتیجه پرامپت ${Number(match[1]).toLocaleString("fa-IR")} از ${Number(match[2]).toLocaleString("fa-IR")} با گزینه Yes تأیید شد.`;
+  match = message.match(/^SERVICE_BATCH_SUMMARY: موفق=(\d+) ناموفق=(\d+) مجموع=(\d+)$/);
+  if (match) return `خلاصه اجرا: ${Number(match[1]).toLocaleString("fa-IR")} موفق، ${Number(match[2]).toLocaleString("fa-IR")} ناموفق، از مجموع ${Number(match[3]).toLocaleString("fa-IR")} پرامپت.`;
+  match = message.match(/^SERVICE_COMPLETED: (\d+) پرامپت کامل شد$/);
+  if (match) return `اجرای ترتیبی تمام شد؛ هر ${Number(match[1]).toLocaleString("fa-IR")} پرامپت کامل شدند.`;
+  match = message.match(/^SERVICE_NEXT_PROMPT_WAITING: (\d+)\/(\d+)$/);
+  if (match) return `پاسخ قبلی و تأیید Yes کامل شد؛ منتظر تغییر فایل برای پرامپت ${Number(match[1]).toLocaleString("fa-IR")} از سقف ${Number(match[2]).toLocaleString("fa-IR")} هستیم.`;
+  match = message.match(/^SERVICE_NEXT_PROMPT_STILL_WAITING: (\d+)\/(\d+)$/);
+  if (match) return `فایل NextPrompt هنوز پرامپت تازه‌ای برای مرحله ${Number(match[1]).toLocaleString("fa-IR")} ندارد؛ پایش ادامه دارد.`;
+  match = message.match(/^SERVICE_NEXT_PROMPT_CHANGE_DETECTED: (\d+)\/(\d+) hash=([a-f0-9]+) chars=(\d+)$/);
+  if (match) return `تغییر واقعی فایل برای پرامپت ${Number(match[1]).toLocaleString("fa-IR")} شناسایی شد؛ ${Number(match[4]).toLocaleString("fa-IR")} نویسه در حال بررسی پایداری است.`;
+  match = message.match(/^SERVICE_NEXT_PROMPT_CONSUMED: (\d+)\/(\d+) hash=([a-f0-9]+) chars=(\d+)$/);
+  if (match) return `پرامپت تازه شماره ${Number(match[1]).toLocaleString("fa-IR")} پس از سه خواندن پایدار مصرف و از فایل پاک شد؛ اکنون برای Arena آماده است.`;
+  match = message.match(/^SERVICE_NEXT_PROMPT_STOP: (\d+)\/(\d+)$/);
+  if (match) return "Agent همکار پایان کار را با [[STOP]] اعلام کرد؛ اجرای خودکار بدون ارسال متن کنترلی پایان می‌یابد.";
+  if (message.startsWith("SERVICE_NEXT_PROMPT_MODE_READY:")) return "حالت خودکار فایل NextPrompt فعال شد؛ Windows Agent از فایل همگام‌شده محلی استفاده می‌کند.";
+  if (message.startsWith("SERVICE_NEXT_PROMPT_STALE_REMOVED:")) return "محتوای قدیمی فایل NextPrompt حذف شد تا به‌اشتباه ارسال نشود.";
+  if (message.startsWith("SERVICE_NEXT_PROMPT_FILE_CLEARED:")) return "پرامپت مصرف‌شده از فایل NextPrompt پاک شد؛ فایل فقط برای مرحله بعد آماده است.";
+  if (message.startsWith("SERVICE_NEXT_PROMPT_FILE_READY:")) return "فایل NextPrompt خالی و پایدار است؛ پرامپت اول می‌تواند ارسال شود.";
+  if (message.startsWith("SERVICE_NEXT_PROMPT_DUPLICATE_IGNORED:")) return "محتوای قدیمی یا تکراری فایل شناسایی، نادیده گرفته و حذف شد؛ چیزی به Arena ارسال نشد.";
+  if (message.startsWith("SERVICE_NEXT_PROMPT_READ_RETRY:")) return "خواندن فایل همگام‌شده موقتاً کامل نبود؛ بدون ارسال، دوباره بررسی می‌شود.";
+  if (message.startsWith("SERVICE_AGENT_DIRECT_MESSAGE:")) {
+    return `(پیام مستقیم ایجنت همکار: ${message.slice("SERVICE_AGENT_DIRECT_MESSAGE:".length).trim()})`;
+  }
+  if (message === "SERVICE_CONTROL_CHANGED: play") return "فایل کنترل روی play قرار گرفت؛ ادامه کار از checkpoint امن مجاز است.";
+  if (message === "SERVICE_CONTROL_CHANGED: pause") return "Agent همکار فایل کنترل را روی pause گذاشت؛ تعامل خودکار تا مداخله انسانی معلق شد.";
+  if (message === "SERVICE_CONTROL_CHANGED: stop") return "Agent همکار فایل کنترل را روی stop گذاشت؛ سرویس به‌صورت امن و کامل پایان می‌یابد.";
+  if (message.startsWith("SERVICE_CONTROL_STOPPED:")) return "درخواست stop فایل کنترل اعمال شد و ادامه سرویس متوقف شد.";
+  if (message.startsWith("SERVICE_CONTROL_INVALID:")) return "مقدار فایل کنترل معتبر نیست؛ فقط play، pause یا stop پذیرفته می‌شود و هیچ تعامل تازه‌ای بر اساس مقدار نامعتبر انجام نشد.";
+  if (message.startsWith("SERVICE_COMPANION_FILES_READY:")) return "فایل‌های کنترل، پیام زنده و گزارش برای این اجرای تازه آماده شدند.";
+  if (message.startsWith("SERVICE_MONITORING_PLAN_ACTIVE:")) return "پایش کنترل، پیام مستقیم، گزارش Markdown، تصاویر و مراحل Arena فعال است.";
+  if (message.startsWith("SERVICE_AGENT_REPORT_MISSING:")) return message.slice("SERVICE_AGENT_REPORT_MISSING:".length).trim();
+  if (message.startsWith("SERVICE_COMPANION_MONITOR_RETRY:")) return "خواندن یکی از فایل‌های همگام‌شده موقتاً ممکن نبود؛ پایش بدون تعامل با Arena دوباره تلاش می‌کند.";
+  if (message.startsWith("SERVICE_OCR_READY:")) return "ابزار بررسی دیداری آماده است؛ اجرای پرامپت‌ها آغاز می‌شود.";
+  if (message.startsWith("SERVICE_BATCH_RESULT_YES:")) return "روی گزینه Yes پنجره نتیجه کلیک شد.";
+  return null;
+}
+
+function displayEventMessage(row: CommandEventRow): string {
+  const progress = serviceProgressMessage(row.message);
+  if (progress) return progress;
+  const artifact = serviceArtifactMarker(row.message);
+  if (artifact) return artifactStageMessage(artifact.stage, artifact.kind);
+  if (row.stage === "network_paused") {
+    return "ارسال گزارش از Windows Agent به این پنل چند لحظه پاسخ نگرفت؛ اجرای Arena متوقف نشده و دوباره تلاش می‌شود.";
+  }
+  if (row.stage === "network_resumed") {
+    return "ارسال گزارش از Windows Agent به این پنل دوباره برقرار شد.";
+  }
+  return row.message;
+}
+
 function mapEvent(row: CommandEventRow): CommandEventView {
   return {
     id: row.id,
@@ -199,7 +335,7 @@ function mapEvent(row: CommandEventRow): CommandEventView {
     seq: row.seq,
     stage: row.stage,
     level: row.level,
-    message: row.message,
+    message: displayEventMessage(row),
     data: parseObject(row.data),
     createdAt: row.created_at,
   };
@@ -255,11 +391,23 @@ function parseScopes(value: string): string[] {
   }
 }
 
-export async function findOnlineCommandAgent(requiredCapability: string | string[] = "command_plane"): Promise<{ keyId: string; agentId: string; agentName: string }> {
+function tehranHeartbeatTime(value: string): string {
+  try {
+    return new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+      timeZone: "Asia/Tehran",
+      dateStyle: "medium",
+      timeStyle: "medium",
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
+export async function findOnlineCommandAgent(requiredCapability: string | string[] = "command_plane"): Promise<{ keyId: string; agentId: string; agentName: string; agentVersion: string | null; heartbeatAt: string; autoMode: boolean; busy: string | null }> {
   const requiredCapabilities = Array.isArray(requiredCapability) ? requiredCapability : [requiredCapability];
   const cutoff = new Date(Date.now() - 90_000).toISOString();
-  const rows = await dbAll<{ agent_key_id: string; agent_id: string; agent_name: string; scopes: string; capabilities: string }>(
-    `SELECT a.agent_key_id, a.id AS agent_id, a.name AS agent_name, a.capabilities, k.scopes
+  const rows = await dbAll<{ agent_key_id: string; agent_id: string; agent_name: string; agent_version: string | null; last_seen_at: string; scopes: string; capabilities: string; state: string }>(
+    `SELECT a.agent_key_id, a.id AS agent_id, a.name AS agent_name, a.version AS agent_version, a.last_seen_at, a.capabilities, a.state, k.scopes
      FROM managed_agents a
      JOIN agent_keys k ON k.id = a.agent_key_id
      WHERE a.last_seen_at >= ? AND k.status = 'active'
@@ -278,13 +426,99 @@ export async function findOnlineCommandAgent(requiredCapability: string | string
       && scopes.includes("artifacts:write");
   });
   if (!match) {
+    if (rows.length) {
+      const candidate = rows[0];
+      const capabilities = parseObject(candidate.capabilities);
+      const scopes = parseScopes(candidate.scopes);
+      const missingCapabilities = ["command_plane", ...requiredCapabilities]
+        .filter((capability, index, all) => all.indexOf(capability) === index)
+        .filter((capability) => capabilities[capability] !== true);
+      const missingScopes = ["commands:read", "events:write", "results:write", "artifacts:write"]
+        .filter((scope) => !scopes.includes(scope));
+      const reasons = [
+        missingCapabilities.length ? `قابلیت غیرفعال: ${missingCapabilities.join("، ")}` : "",
+        missingScopes.length ? `دسترسی کلید ناقص: ${missingScopes.join("، ")}` : "",
+      ].filter(Boolean).join("؛ ");
+      throw new AppError("Windows Agent آنلاین است، اما شرایط لازم این اجرا را ندارد.", {
+        status: 409,
+        code: "command_agent_incompatible",
+        hint: reasons || "وضعیت capabilityها و scopeهای کلید را در تب کلید ایجنت بررسی کنید.",
+      });
+    }
+    const latest = await dbFirst<{ agent_name: string; agent_version: string | null; last_seen_at: string; key_status: string; expires_at: string | null }>(
+      `SELECT a.name AS agent_name, a.version AS agent_version, a.last_seen_at, k.status AS key_status, k.expires_at
+       FROM managed_agents a
+       JOIN agent_keys k ON k.id = a.agent_key_id
+       ORDER BY a.last_seen_at DESC LIMIT 1`,
+    );
+    const lastSeenHint = latest
+      ? `آخرین Heartbeat از ${latest.agent_name}${latest.agent_version ? ` نسخه ${latest.agent_version}` : ""} در ${tehranHeartbeatTime(latest.last_seen_at)} ثبت شده است${latest.key_status !== "active" ? `؛ وضعیت کلید: ${latest.key_status}` : latest.expires_at && latest.expires_at <= new Date().toISOString() ? "؛ کلید منقضی شده است" : ""}.`
+      : "هنوز هیچ Heartbeat ثبت‌شده‌ای در D1 وجود ندارد.";
     throw new AppError("Windows Agent آنلاین و آماده‌ی دریافت فرمان پیدا نشد.", {
       status: 409,
       code: "command_agent_offline",
-      hint: `نسخه‌ی سازگار manager_client را اجرا کنید تا capabilityهای ${requiredCapabilities.join("، ")} را گزارش دهد؛ کلید نیز به commands:read، events:write، results:write و artifacts:write نیاز دارد.`,
+      hint: `${lastSeenHint} برنامه Windows Agent را باز نگه دارید، وضعیت اتصال مدیریت را روی «وصل» بررسی کنید و پس از حداکثر ۳۰ ثانیه دوباره تلاش کنید.`,
     });
   }
-  return { keyId: match.agent_key_id, agentId: match.agent_id, agentName: match.agent_name };
+  const runtimeState = parseObject(match.state);
+  return {
+    keyId: match.agent_key_id,
+    agentId: match.agent_id,
+    agentName: match.agent_name,
+    agentVersion: match.agent_version,
+    heartbeatAt: match.last_seen_at,
+    autoMode: runtimeState.auto_mode === true,
+    busy: typeof runtimeState.busy === "string" && runtimeState.busy.trim() ? runtimeState.busy.trim() : null,
+  };
+}
+
+export async function commandAgentPreflight(requiredCapability: string | string[] = "d1_automations") {
+  const agent = await findOnlineCommandAgent(requiredCapability);
+  const [queue, latest] = await Promise.all([
+    dbFirst<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM commands
+       WHERE agent_id = ? AND status IN ('pending', 'claimed', 'waiting_confirmation', 'running')`,
+      [agent.agentId],
+    ),
+    dbFirst<{ id: string; title: string; status: string; created_at: string; last_event_at: string }>(
+      `SELECT id, title, status, created_at, last_event_at FROM commands
+       WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1`,
+      [agent.agentId],
+    ),
+  ]);
+  const activeCommands = Number(queue?.count ?? 0);
+  const checkedAt = new Date().toISOString();
+  return {
+    ok: true as const,
+    ready: !agent.busy && activeCommands === 0,
+    checkedAt,
+    agent: {
+      name: agent.agentName,
+      version: agent.agentVersion,
+      heartbeatAt: agent.heartbeatAt,
+      autoMode: agent.autoMode,
+      busy: agent.busy,
+    },
+    queue: {
+      activeCommands,
+      latest: latest ? {
+        id: latest.id,
+        title: latest.title,
+        status: latest.status,
+        createdAt: latest.created_at,
+        lastEventAt: latest.last_event_at,
+      } : null,
+    },
+    checks: [
+      { key: "heartbeat", ok: true, label: "Heartbeat تازه‌تر از ۹۰ ثانیه" },
+      { key: "command_plane", ok: true, label: "مسیر دریافت فرمان فعال" },
+      { key: "d1_automations", ok: true, label: "دریافت اتوماسیون immutable از D1" },
+      { key: "scopes", ok: true, label: "scopeهای خواندن فرمان و ثبت نتیجه کامل" },
+      { key: "mode", ok: true, label: agent.autoMode ? "حالت محلی Automatic؛ بدون پنجره Yes/No" : "حالت محلی Manual؛ نیازمند تأیید Yes/No" },
+      { key: "availability", ok: !agent.busy, label: agent.busy ? `ایجنت مشغول است: ${agent.busy}` : "ایجنت برای claim فرمان آزاد است" },
+      { key: "queue", ok: activeCommands === 0, label: activeCommands ? `${activeCommands} فرمان فعال یا در صف وجود دارد` : "صف فرمان فعال خالی است" },
+    ],
+  };
 }
 
 export async function createManagedCommand(input: {
@@ -313,7 +547,7 @@ export async function createManagedCommand(input: {
       reportArtifactMetadata: true,
     },
   }, "payload");
-  const timeoutSeconds = Math.min(3600, Math.max(30, Number(input.timeoutSeconds ?? 600)));
+  const timeoutSeconds = Math.min(604_800, Math.max(30, Number(input.timeoutSeconds ?? 600)));
   const noProgressSeconds = Math.min(timeoutSeconds, Math.max(30, Number(input.noProgressSeconds ?? 120)));
   const now = new Date().toISOString();
   await dbBatch([
@@ -355,6 +589,27 @@ export async function createManagedCommand(input: {
   return mapCommand((await commandRow(id))!);
 }
 
+async function finalizePreProcessCancellation(row: CommandRow): Promise<CommandRow> {
+  if (!row.cancel_requested_at || !(["pending", "claimed", "waiting_confirmation"] as CommandStatus[]).includes(row.status)) return row;
+  const now = new Date().toISOString();
+  const reason = row.cancel_reason ?? "توقف پیش از شروع Process ویندوز ثبت شد.";
+  const stopped = await dbRun(
+    `UPDATE commands SET status = 'cancelled', completed_at = ?, last_event_at = ?
+     WHERE id = ? AND cancel_requested_at IS NOT NULL AND status IN ('pending', 'claimed', 'waiting_confirmation')`,
+    [now, now, row.id],
+  );
+  if (stopped.meta?.changes !== 0) {
+    await dbRun(
+      `INSERT INTO command_events (command_id, seq, stage, level, message, data, created_at)
+       VALUES (?, (SELECT COALESCE(MAX(seq), 1000000) + 1 FROM command_events WHERE command_id = ?),
+               'cancelled', 'warning', ?, '{}', ?)`,
+      [row.id, row.id, `فرمان پیش از شروع Process ویندوز متوقف شد: ${reason}`, now],
+    );
+    if (row.prompt_id) await dbRun("UPDATE prompts SET status = 'cancelled', error = ? WHERE id = ?", [reason, row.prompt_id]);
+  }
+  return (await commandRow(row.id))!;
+}
+
 async function applyAutomaticStop(row: CommandRow): Promise<CommandRow> {
   if (!isActive(row.status) || row.auto_stop_on_anomaly !== 1 || row.cancel_requested_at) return row;
   const nowMs = Date.now();
@@ -385,6 +640,7 @@ export async function getCommandDetail(idValue: unknown, enforceOwnerKeyId?: str
   if (!row || (enforceOwnerKeyId && row.agent_key_id !== enforceOwnerKeyId)) {
     throw new AppError("فرمان پیدا نشد.", { status: 404, code: "command_not_found" });
   }
+  row = await finalizePreProcessCancellation(row);
   row = await applyAutomaticStop(row);
   const [eventRows, artifactRows] = await Promise.all([
     dbAll<CommandEventRow>("SELECT * FROM command_events WHERE command_id = ? ORDER BY created_at ASC, id ASC", [id]),
@@ -395,8 +651,33 @@ export async function getCommandDetail(idValue: unknown, enforceOwnerKeyId?: str
     ? Math.max(0, Math.floor((now - Date.parse(row.last_event_at ?? row.created_at)) / 1000))
     : null;
   const reasons: string[] = [];
+  const interventionRequired = eventRows
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => event.message.startsWith("SERVICE_HUMAN_INTERVENTION_REQUIRED:"))
+    .at(-1);
+  const interventionCleared = eventRows
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => event.message.startsWith("SERVICE_HUMAN_INTERVENTION_CLEARED:"))
+    .at(-1);
+  if (interventionRequired && (!interventionCleared || interventionCleared.index < interventionRequired.index)) {
+    if (interventionRequired.event.message.includes('"reason": "completion_wait_expired"')) {
+      reasons.push("زمان یادآوری انتظار پاسخ تمام شده است؛ پایش Arena همچنان ادامه دارد و منتظر تصمیم مدیر است.");
+    } else {
+      reasons.push("اتوماسیون Arena برای مداخله انسانی در checkpoint امن متوقف شده است.");
+    }
+  }
   if (eventRows.some((event) => event.level === "fatal")) reasons.push("رخداد بحرانی از Windows Agent گزارش شده است.");
-  if (eventRows.some((event) => event.level === "warning" || event.level === "error")) reasons.push("هشدار یا خطای غیرعادی در timeline وجود دارد.");
+  const managementApiPauses = eventRows.filter((event) => event.stage === "network_paused");
+  if (managementApiPauses.length >= 3) {
+    reasons.push(`ارسال گزارش از Windows Agent به پنل در این اجرا ${managementApiPauses.length.toLocaleString("fa-IR")} بار وقفه کوتاه داشته است؛ خود اجرای Arena ادامه داشته است.`);
+  }
+  const operationalStages = new Set(["network_paused", "network_resumed", "cancel_requested"]);
+  const unexpectedEvents = eventRows.filter(
+    (event) => (event.level === "warning" || event.level === "error") && !operationalStages.has(event.stage),
+  );
+  if (unexpectedEvents.length) {
+    for (const event of unexpectedEvents.slice(-3)) reasons.push(`${event.stage}: ${event.message}`);
+  }
   if (row.cancel_requested_at) reasons.push(row.cancel_reason ?? "درخواست توقف ثبت شده است.");
   if (staleSeconds !== null && staleSeconds > row.no_progress_seconds) reasons.push("گزارش پیشرفت متوقف شده است.");
   return {
@@ -422,12 +703,13 @@ export async function requestCommandCancellation(idValue: unknown, reasonValue?:
   const id = validCommandId(idValue);
   const row = await commandRow(id);
   if (!row) throw new AppError("فرمان پیدا نشد.", { status: 404, code: "command_not_found" });
-  if (!isActive(row.status)) return getCommandDetail(id);
+  if (!isActive(row.status) || row.cancel_requested_at) return getCommandDetail(id);
   const reason = text(reasonValue, "علت توقف", 300, false) ?? "توقف دستی از سایت ایجنت مدیریت";
   const now = new Date().toISOString();
-  if (row.status === "pending") {
+  if ((["pending", "claimed", "waiting_confirmation"] as CommandStatus[]).includes(row.status)) {
     const stopped = await dbRun(
-      "UPDATE commands SET status = 'cancelled', cancel_requested_at = ?, cancel_reason = ?, completed_at = ?, last_event_at = ? WHERE id = ? AND status = 'pending'",
+      `UPDATE commands SET status = 'cancelled', cancel_requested_at = ?, cancel_reason = ?, completed_at = ?, last_event_at = ?
+       WHERE id = ? AND status IN ('pending', 'claimed', 'waiting_confirmation')`,
       [now, reason, now, now, id],
     );
     if (stopped.meta?.changes !== 0) {
@@ -449,6 +731,24 @@ export async function requestCommandCancellation(idValue: unknown, reasonValue?:
     },
   ]);
   return getCommandDetail(id);
+}
+
+export async function requestAllCommandCancellationsForAgent(agentId: string, reason: string): Promise<{ matched: number; requested: number; commandIds: string[] }> {
+  const rows = await dbAll<{ id: string }>(
+    `SELECT id FROM commands WHERE agent_id = ? AND status IN ('pending', 'claimed', 'waiting_confirmation', 'running') ORDER BY created_at ASC LIMIT 100`,
+    [agentId],
+  );
+  const commandIds = rows.map((row) => row.id);
+  let requested = 0;
+  for (const id of commandIds) {
+    try {
+      await requestCommandCancellation(id, reason);
+      requested += 1;
+    } catch {
+      // یک race با نهایی‌شدن طبیعی فرمان نباید توقف بقیه را مختل کند.
+    }
+  }
+  return { matched: commandIds.length, requested, commandIds };
 }
 
 export async function setCommandAutoStop(idValue: unknown, enabled: unknown): Promise<CommandDetail> {
@@ -571,6 +871,27 @@ export async function appendCommandEvent(
     },
     { sql: "UPDATE commands SET last_event_at = ? WHERE id = ?", params: [now, id] },
   ];
+  const artifactMarker = serviceArtifactMarker(message);
+  if (artifactMarker) {
+    queries.push({
+      sql: `INSERT INTO command_artifacts
+        (id, command_id, kind, stage, name, local_path, drive_file_id, drive_url, mime_type, size, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          kind = excluded.kind, stage = excluded.stage, name = excluded.name,
+          local_path = excluded.local_path, mime_type = excluded.mime_type`,
+      params: [
+        artifactMarker.artifactId,
+        id,
+        artifactMarker.kind,
+        artifactMarker.stage ?? "arena-step",
+        artifactMarker.name,
+        artifactMarker.localPath,
+        artifactMarker.mimeType ?? "application/octet-stream",
+        now,
+      ],
+    });
+  }
   if (autoTrigger && !row.cancel_requested_at) {
     queries.push({
       sql: "UPDATE commands SET cancel_requested_at = ?, cancel_reason = ? WHERE id = ?",

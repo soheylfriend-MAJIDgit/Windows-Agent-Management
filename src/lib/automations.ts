@@ -296,6 +296,7 @@ export async function requestAutomationRun(
     timeoutSeconds?: number;
     noProgressSeconds?: number;
     requiredCapabilities?: string[];
+    monitoringPlan?: string[];
   },
 ): Promise<{ commandId: string; automation: AutomationView; version: AutomationVersionView }> {
   const detail = await getAutomation(identifier, true);
@@ -325,6 +326,7 @@ export async function requestAutomationRun(
       sourceEndpoint: `/api/agent/automations/${detail.automation.id}/versions/${detail.activeVersion.id}`,
       executionPolicy: "respect_windows_agent_mode",
       sourceOfTruth: "cloudflare_d1",
+      ...(context?.monitoringPlan?.length ? { monitoringPlan: context.monitoringPlan.slice(0, 12) } : {}),
     },
   });
   const now = new Date().toISOString();

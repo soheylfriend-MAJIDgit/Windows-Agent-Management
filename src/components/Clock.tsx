@@ -10,6 +10,8 @@ import {
 
 const BUILD_COMMIT_DATE = process.env.NEXT_PUBLIC_BUILD_COMMIT_DATE ?? "";
 const BUILD_COMMIT_SHA = process.env.NEXT_PUBLIC_BUILD_COMMIT_SHA ?? "";
+const BUILD_REPOSITORY = process.env.NEXT_PUBLIC_BUILD_REPOSITORY ?? "نامشخص";
+const BUILD_BRANCH = process.env.NEXT_PUBLIC_BUILD_BRANCH ?? "نامشخص";
 
 export function Clock() {
   const [now, setNow] = useState<Date | null>(null);
@@ -25,6 +27,17 @@ export function Clock() {
 
   return (
     <div className="clock-cluster">
+      <div className="build-identity" title={`ریپازیتوری: ${BUILD_REPOSITORY}\nشاخه: ${BUILD_BRANCH}`}>
+        <span className="build-identity-row">
+          <span className="build-identity-label">ریپازیتوری</span>
+          <bdi className="build-identity-value" dir="ltr">{BUILD_REPOSITORY}</bdi>
+        </span>
+        <span className="build-identity-row">
+          <span className="build-identity-label">شاخه</span>
+          <bdi className="build-identity-value" dir="ltr">{BUILD_BRANCH}</bdi>
+        </span>
+      </div>
+      <span className="clock-separator" aria-hidden="true" />
       <div
         className="commit-clock"
         title={shortSha ? `آخرین کامیت منتشرشده: ${shortSha}` : "آخرین کامیت منتشرشده"}

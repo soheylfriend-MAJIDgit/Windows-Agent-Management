@@ -3,7 +3,18 @@ import { AppError } from "./errors";
 export type TelegramReportMode = "off" | "final" | "start_final";
 
 export const ARENA_JOB_NAME = "job_arena.py";
-const BRIDGE_MARKER = "# management-arena-bridge: 7";
+const BRIDGE_MARKER = "# management-arena-bridge: 18";
+const BRIDGE_17_MARKER = "# management-arena-bridge: 17";
+const BRIDGE_16_MARKER = "# management-arena-bridge: 16";
+const BRIDGE_15_MARKER = "# management-arena-bridge: 15";
+const BRIDGE_14_MARKER = "# management-arena-bridge: 14";
+const BRIDGE_13_MARKER = "# management-arena-bridge: 13";
+const BRIDGE_12_MARKER = "# management-arena-bridge: 12";
+const BRIDGE_11_MARKER = "# management-arena-bridge: 11";
+const BRIDGE_10_MARKER = "# management-arena-bridge: 10";
+const BRIDGE_9_MARKER = "# management-arena-bridge: 9";
+const BRIDGE_8_MARKER = "# management-arena-bridge: 8";
+const BRIDGE_7_MARKER = "# management-arena-bridge: 7";
 const BRIDGE_6_MARKER = "# management-arena-bridge: 6";
 const BRIDGE_5_MARKER = "# management-arena-bridge: 5";
 const BRIDGE_4_MARKER = "# management-arena-bridge: 4";
@@ -30,19 +41,183 @@ function replaceAssignment(source: string, name: string, value: string): string 
 }
 
 const TELEGRAM_BRIDGE = `${BRIDGE_MARKER}
+import hashlib
+import shutil
+import tempfile
+
 # گزارش نتیجه از راه صف محلی رباتِ خود Windows Agent ارسال می‌شود؛
 # هیچ توکن تلگرامی داخل این فایل یا گیت‌هاب قرار نمی‌گیرد.
 TELEGRAM_REPORT_MODE = "final"
 PROMPT_REQUEST_ID = "initial"
-FAILURE_FEEDBACK_ATTEMPTS = 3
-ARENA_COMPLETION_TIMEOUT = 180
+FAILURE_INTERVENTION_REPORTED_FOR = None
+ARENA_COMPLETION_TIMEOUT = 3600
+ARENA_ASK_ON_COMPLETION_TIMEOUT = True
+ARENA_SHOW_CLICK_HIGHLIGHTS = True
 ARENA_COMPLETION_POLL_SECONDS = 3
 NETWORK_RECHECK_SECONDS = 60
+OCR_TIMEOUT_SECONDS = max(20, int(os.environ.get("WINDOWS_AGENT_OCR_TIMEOUT_SECONDS", "45")))
 OCR_PYTHON = os.environ.get("WINDOWS_AGENT_OCR_PYTHON", "")
 OCR_HELPER = os.environ.get("WINDOWS_AGENT_OCR_HELPER", "")
 BOT_API_CONFIG = os.path.join(
     os.environ.get("LOCALAPPDATA", ""), "Windows-Agent", "bot_api.json"
 )
+
+
+def run_hidden_powershell_file(script_text, *, extra_env=None, timeout=180, work_dir=None):
+    """PowerShell بلند را با -File اجرا می‌کند تا محدودیت ۳۲هزار نویسه‌ای CreateProcess دور زده شود."""
+    target_dir = work_dir or os.path.join(tempfile.gettempdir(), "windows-agent-ps")
+    os.makedirs(target_dir, exist_ok=True)
+    digest = hashlib.sha256(script_text.encode("utf-8")).hexdigest()[:16]
+    script_path = os.path.join(target_dir, "arena_" + digest + ".ps1")
+    env = os.environ.copy()
+    if extra_env:
+        env.update({str(key): str(value) for key, value in extra_env.items()})
+    payload = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\\n" + script_text
+    print(f"ARENA_POWERSHELL_FILE_TRANSPORT: chars={len(script_text)} pathLength={len(script_path)}")
+    try:
+        with open(script_path, "w", encoding="utf-8-sig", newline="\\n") as handle:
+            handle.write(payload)
+        completed = subprocess.run(
+            [
+                "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+                "-ExecutionPolicy", "Bypass", "-File", script_path,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            env=env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        stdout = completed.stdout or ""
+        stderr = completed.stderr or ""
+        print(f"ARENA_POWERSHELL_FILE_RESULT: exit={completed.returncode} stdoutChars={len(stdout)} stderrChars={len(stderr)}")
+        if completed.returncode != 0:
+            raise RuntimeError(
+                "اجرای فایل PowerShell Arena ناموفق شد؛ کد خروج: "
+                + str(completed.returncode) + "؛ stderr: " + stderr[-2000:]
+            )
+        return stdout
+    finally:
+        try:
+            os.remove(script_path)
+        except FileNotFoundError:
+            pass
+        except OSError as cleanup_error:
+            print("ARENA_POWERSHELL_FILE_CLEANUP_WARNING: " + str(cleanup_error))
+
+
+def register_step_artifact(path, stage, kind="screenshot", mime_type="image/png"):
+    """فقط metadata قطعی را می‌فرستد؛ بایت تصویر همچنان بیرون D1 و در Drive می‌ماند."""
+    if not path:
+        return
+    normalized = os.path.abspath(path)
+    digest = hashlib.sha256((PROMPT_REQUEST_ID + "|" + normalized).encode("utf-8")).hexdigest()[:28]
+    payload = {
+        "artifactId": "art_" + digest,
+        "kind": kind,
+        "stage": str(stage or "arena-step")[:80],
+        "name": os.path.basename(normalized),
+        "localPath": normalized,
+        "mimeType": mime_type,
+    }
+    print("SERVICE_ARTIFACT: " + json.dumps(payload, ensure_ascii=False))
+
+
+def capture_named_step(stage):
+    safe_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in PROMPT_REQUEST_ID)
+    safe_stage = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(stage))
+    step_dir = os.path.join(os.path.dirname(SCREENSHOT_DIR), "logs", "steps")
+    os.makedirs(step_dir, exist_ok=True)
+    path = os.path.join(step_dir, f"arena_step_{safe_id}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{safe_stage}.png")
+    take_screenshot(path)
+    register_step_artifact(path, safe_stage)
+    return path
+
+
+def describe_arena_action(marker):
+    """marker فنی PowerShell را به گزارش کوتاه و قابل‌فهم مدیریتی تبدیل می‌کند."""
+    exact = {
+        "ARENA_BROWSER_FG": "پنجره Arena فعال و آماده تعامل شد.",
+        "ARENA_COMPOSER_PLACEHOLDER": "کادر نوشتن پرامپت از روی متن راهنما پیدا شد.",
+        "ARENA_COMPOSER_PADDLEOCR": "کادر نوشتن پرامپت با OCR محلی پیدا شد.",
+        "ARENA_COMPOSER_GEOMETRY_FALLBACK": "کادر پرامپت با موقعیت هندسی امن پیدا شد.",
+        "ARENA_SENT_VERIFIED": "Enter ارسال شد و خروج پرامپت از کادر تأیید شد.",
+        "ARENA_SEND_UNCERTAIN": "ارسال قطعی تأیید نشد؛ اقدام ارسال دیگری انجام نمی‌شود.",
+        "ARENA_SUBMIT_BLOCKED_UNVERIFIED": "ارسال مسدود شد چون حضور متن هنوز تأیید نشده بود.",
+        "ARENA_SUBMIT_BLOCKED_UNSAFE_FOCUS": "ارسال مسدود شد چون فوکوس روی کادر امن نبود.",
+        "ARENA_SUBMIT_BLOCKED_MISSING_UNIQUE_PROBE": "ارسال مسدود شد چون قطعه یکتای انتهای همین پرامپت در composer پیدا نشد.",
+        "ARENA_SUBMIT_BLOCKED_TYPING_UNVERIFIED": "ارسال مسدود شد چون مرحله ورود متن تأیید نهایی نداشت.",
+        "ARENA_SUBMIT_BLOCKED_SHORT_UIA_EVIDENCE": "ارسال مسدود شد چون شاهد متنی UIA کوتاه‌تر از حد امن بود.",
+        "ARENA_SUBMIT_BLOCKED_MISSING_CURRENT_PROBE": "ارسال مسدود شد چون هیچ‌یک از قطعه‌های دقیق همین پرامپت در پنجره UIA دیده نشد.",
+        "ARENA_SUBMIT_FALLBACK_CTRL_ENTER": "یک قطعه دقیق از همان پرامپت پس از Enter باقی ماند؛ Ctrl+Enter ایمن فقط یک‌بار اجرا شد.",
+        "ARENA_SUBMIT_SEND_BUTTON_CLICKED": "پس از باقی‌ماندن قطعی پرامپت، دکمه ارسال Arena فقط یک‌بار کلیک شد.",
+    }
+    if marker in exact:
+        return exact[marker]
+    prefixes = [
+        ("ARENA_CLICK_HIGHLIGHT=", "دایره زرد محل کلیک روی کادر پرامپت نمایش داده شد: "),
+        ("ARENA_CLICK_COMPOSER=", "روی مختصات کادر پرامپت کلیک شد: "),
+        ("ARENA_INPUT_UNICODE=", "متن فارسی با ورودی Unicode وارد کادر شد؛ نتیجه فنی: "),
+        ("ARENA_INPUT_VALUEPATTERN=", "ورود متن با ValuePattern امتحان شد؛ نتیجه فنی: "),
+        ("ARENA_INPUT_SENDINPUT_PASTE=", "ورود متن با Clipboard امتحان شد؛ نتیجه فنی: "),
+        ("ARENA_PASTE_VERIFIED_TRY", "حضور متن در کادر در این تلاش تأیید شد: "),
+        ("ARENA_PASTE_UNVERIFIED_TRY", "حضور متن در کادر در این تلاش تأیید نشد: "),
+        ("ARENA_SUBMIT_SENDINPUT=", "کلید Enter برای ارسال زده شد؛ نتیجه فنی: "),
+        ("ARENA_SUBMIT_FALLBACK_SENDINPUT=", "اجرای فنی Ctrl+Enter کنترل‌شده: "),
+        ("ARENA_SUBMIT_FOCUS_SAFE=", "امن‌بودن فوکوس بلافاصله پیش از ارسال: "),
+        ("ARENA_SUBMIT_FOCUS_NEAR_COMPOSER=", "قرارداشتن عنصر فوکوس‌شده در محدوده composer: "),
+        ("ARENA_SUBMIT_FOCUSED_LENGTH=", "طول شاهد UIA بلافاصله پیش از ارسال: "),
+        ("ARENA_SUBMIT_MINIMUM_LENGTH=", "حداقل طول شاهد لازم برای ارسال: "),
+        ("ARENA_SUBMIT_PROBE_CANDIDATES=", "تعداد قطعه‌های دقیق بررسی‌شده پیش از ارسال: "),
+        ("ARENA_SUBMIT_PROBE_PRESENT=", "تطبیق یک قطعه دقیق از همین پرامپت پیش از ارسال: "),
+        ("ARENA_SUBMIT_MATCHED_OFFSET=", "موقعیت قطعه تطبیق‌یافته در پرامپت: "),
+        ("ARENA_SUBMIT_TAIL_PROBE_MATCHED=", "تطبیق مستقیم قطعه انتهایی پرامپت: "),
+        ("ARENA_SUBMIT_ELEMENT_NAME_LENGTH=", "طول Name عنصر فوکوس‌شده: "),
+        ("ARENA_SUBMIT_ELEMENT_AUTOMATION_ID=", "AutomationId عنصر فوکوس‌شده: "),
+        ("ARENA_SUBMIT_ELEMENT_CONTROL_TYPE=", "نوع UIA عنصر فوکوس‌شده: "),
+        ("ARENA_SUBMIT_ELEMENT_RECT=", "محدوده عنصر فوکوس‌شده: "),
+        ("ARENA_SUBMIT_READY=", "آمادگی نهایی و امن برای زدن Enter: "),
+        ("ARENA_SUBMIT_FOCUS_SAFE_AFTER_ENTER=", "امن‌بودن فوکوس پس از Enter اول: "),
+        ("ARENA_SUBMIT_FOCUS_NEAR_AFTER_ENTER=", "نزدیکی فوکوس به composer پس از Enter اول: "),
+        ("ARENA_SUBMIT_FOCUSED_LENGTH_AFTER_ENTER=", "طول شاهد UIA پس از Enter اول: "),
+        ("ARENA_SUBMIT_REMAINING_OFFSET_AFTER_ENTER=", "موقعیت قطعه باقی‌مانده پس از Enter اول: "),
+        ("ARENA_SUBMIT_PROBE_REMAINS_AFTER_ENTER=", "باقی‌ماندن یک قطعه دقیق در composer پس از Enter اول: "),
+        ("ARENA_SUBMIT_FALLBACK_USED=", "استفاده از fallback کنترل‌شده Ctrl+Enter: "),
+        ("ARENA_SUBMIT_MESSAGE_VISIBLE=", "مشاهده پرامپت به‌صورت پیام در گفتگو: "),
+        ("ARENA_SUBMIT_PLACEHOLDER_RETURNED=", "بازگشت متن راهنمای composer پس از ارسال: "),
+        ("ARENA_SUBMIT_FOCUS_SAFE_FINAL=", "امن‌بودن فوکوس در بررسی نهایی: "),
+        ("ARENA_SUBMIT_FOCUS_NEAR_FINAL=", "نزدیکی فوکوس نهایی به composer: "),
+        ("ARENA_SUBMIT_FOCUSED_LENGTH_FINAL=", "طول شاهد UIA در بررسی نهایی: "),
+        ("ARENA_SUBMIT_REMAINING_OFFSET_FINAL=", "موقعیت قطعه باقی‌مانده در بررسی نهایی: "),
+        ("ARENA_SUBMIT_PROBE_REMAINS_FINAL=", "باقی‌ماندن یک قطعه دقیق پس از پایان تلاش ارسال: "),
+        ("ARENA_SUBMIT_FOCUSED_COMPOSER_CLEARED=", "خالی‌شدن composer در فوکوس و محدوده امن پس از ارسال: "),
+        ("ARENA_SUBMIT_PROMPT_REMAINS_AFTER_KEYBOARD=", "باقی‌ماندن قطعی پرامپت پس از Enter: "),
+        ("ARENA_SUBMIT_REMAINING_OFFSET_AFTER_KEYBOARD=", "موقعیت قطعه باقی‌مانده پس از Enter: "),
+        ("ARENA_SUBMIT_BUTTON_CANDIDATE_COUNT=", "تعداد دکمه‌های ارسال احتمالی نزدیک composer: "),
+        ("ARENA_SUBMIT_BUTTON_CANDIDATE=", "مشخصات دکمه ارسال احتمالی: "),
+        ("ARENA_SUBMIT_BUTTON_SCAN_ERROR=", "خطای پیمایش دکمه‌های نزدیک composer: "),
+        ("ARENA_SUBMIT_BUTTON_SOURCE=", "روش انتخاب نقطه دکمه ارسال: "),
+        ("ARENA_SUBMIT_BUTTON_NAME=", "نام UIA دکمه ارسال منتخب: "),
+        ("ARENA_SUBMIT_BUTTON_AUTOMATION_ID=", "AutomationId دکمه ارسال منتخب: "),
+        ("ARENA_SUBMIT_BUTTON_RECT=", "محدوده دکمه ارسال منتخب: "),
+        ("ARENA_SUBMIT_BUTTON_POINT=", "مختصات کلیک دکمه ارسال: "),
+        ("ARENA_SUBMIT_SEND_BUTTON_USED=", "استفاده از کلیک کنترل‌شده دکمه ارسال: "),
+        ("ARENA_SUBMIT_ANY_ACTION_OK=", "انجام موفق حداقل یک اقدام ارسال پیش از تأیید UI: "),
+        ("ARENA_VERIFY_EXPECTED_LENGTH=", "طول پرامپت مورد انتظار: "),
+        ("ARENA_VERIFY_MINIMUM_LENGTH=", "حداقل شاهد متنی لازم از پنجره UIA: "),
+        ("ARENA_VERIFY_FOCUSED_LENGTH=", "طول متن خوانده‌شده از کادر فعال: "),
+        ("ARENA_VERIFY_COMPOSER_LENGTH=", "طول متن قابل‌خواندن از composer: "),
+        ("ARENA_VERIFY_COPIED_LENGTH=", "طول متن مستقل خوانده‌شده از Clipboard: "),
+        ("ARENA_VERIFY_FOCUSED_PROBE=", "تطبیق قطعه دقیق در کادر فعال: "),
+        ("ARENA_VERIFY_COMPOSER_PROBE=", "تطبیق قطعه دقیق در composer: "),
+        ("ARENA_VERIFY_COPIED_PROBE=", "تطبیق قطعه دقیق در Clipboard: "),
+    ]
+    for prefix, description in prefixes:
+        if marker.startswith(prefix):
+            return description + marker[len(prefix):]
+    return None
 
 
 def network_reachable():
@@ -83,7 +258,7 @@ def local_ocr_items(image_path):
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=45,
+        timeout=OCR_TIMEOUT_SECONDS,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if completed.returncode != 0:
@@ -95,28 +270,176 @@ def local_ocr_items(image_path):
 
 
 def find_text_with_ocr(phrases, stage="scan"):
-    """متن موردنظر را از اسکرین‌شات پیدا و مرکز آن را برمی‌گرداند."""
+    """OCR را روی فایل runtime محلی اجرا و نسخه شواهد را جداگانه در Drive نگه می‌دارد."""
     safe_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in PROMPT_REQUEST_ID)
-    ocr_dir = os.path.join(os.path.dirname(SCREENSHOT_DIR), "logs", "ocr")
-    os.makedirs(ocr_dir, exist_ok=True)
-    image_path = os.path.join(ocr_dir, f"ocr_{safe_id}_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png")
-    take_screenshot(image_path)
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    file_name = f"ocr_{safe_id}_{stage}_{stamp}.png"
+    runtime_dir = os.path.join(os.environ.get("LOCALAPPDATA", os.path.dirname(SCREENSHOT_DIR)), "Windows-Agent", "ocr-runtime")
+    evidence_dir = os.path.join(os.path.dirname(SCREENSHOT_DIR), "logs", "ocr")
+    os.makedirs(runtime_dir, exist_ok=True)
+    os.makedirs(evidence_dir, exist_ok=True)
+    runtime_path = os.path.join(runtime_dir, file_name)
+    image_path = os.path.join(evidence_dir, file_name)
+    take_screenshot(runtime_path)
+    try:
+        shutil.copyfile(runtime_path, image_path)
+        register_step_artifact(image_path, "ocr-" + str(stage))
+    except Exception as exc:
+        image_path = runtime_path
+        print(f"هشدار: کپی اسکرین‌شات OCR در Drive ممکن نشد: {exc}")
     wanted = [str(value).casefold().strip() for value in phrases if str(value).strip()]
-    for item in local_ocr_items(image_path):
+    try:
+        ocr_items = local_ocr_items(runtime_path)
+    finally:
+        if image_path != runtime_path:
+            try:
+                os.remove(runtime_path)
+            except OSError:
+                pass
+    for item in ocr_items:
         text = str(item.get("text", "")).casefold().strip()
         bounds = item.get("bounds")
         confidence = float(item.get("confidence", 0) or 0)
         if confidence < 0.45 or not isinstance(bounds, list) or len(bounds) != 4:
             continue
-        if any(phrase in text or text in phrase for phrase in wanted):
-            left, top, right, bottom = [float(value) for value in bounds]
-            return {"x": (left + right) / 2, "y": (top + bottom) / 2, "text": item.get("text"), "confidence": confidence}
+        for phrase in wanted:
+            # reverse containment فقط برای یک قطعه بلند و معنادار مجاز است.
+            # قبلاً OCR تک‌حرفی مثل «D» چون داخل عبارت انگلیسی وجود داشت، به‌اشتباه
+            # Security Verification تشخیص داده می‌شد و job برای همیشه pause می‌ماند.
+            meaningful_partial = len(text) >= 8 and text in phrase
+            if phrase in text or meaningful_partial:
+                left, top, right, bottom = [float(value) for value in bounds]
+                return {
+                    "x": (left + right) / 2,
+                    "y": (top + bottom) / 2,
+                    "text": item.get("text"),
+                    "confidence": confidence,
+                    "matched": phrase,
+                    "imagePath": image_path,
+                }
     return None
 
 
+SECURITY_VERIFICATION_PHRASES = [
+    "security verification",
+    "verify you are human",
+    "verification required",
+    "checking your browser",
+    "performing security verification",
+    "تأیید امنیتی",
+    "بررسی امنیتی",
+]
+SECURITY_UIA_PS_SCRIPT = r'''
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class ForegroundSecurityWindow {
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+}
+"@
+$handle = [ForegroundSecurityWindow]::GetForegroundWindow()
+if ($handle -eq [IntPtr]::Zero) { Write-Output 'ARENA_SECURITY_UIA_NOT_FOUND'; exit 0 }
+$root = [System.Windows.Automation.AutomationElement]::FromHandle($handle)
+if (-not $root -or ([string]$root.Current.Name).ToLowerInvariant() -notmatch 'arena') {
+    Write-Output 'ARENA_SECURITY_UIA_NOT_FOUND'
+    exit 0
+}
+$phrases = @('security verification', 'verify you are human', 'verification required', 'checking your browser', 'performing security verification')
+$all = $root.FindAll(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.Condition]::TrueCondition
+)
+foreach ($el in $all) {
+    try {
+        if ($el.Current.IsOffscreen) { continue }
+        $name = [string]$el.Current.Name
+        if (-not $name) { continue }
+        $lower = $name.ToLowerInvariant()
+        foreach ($phrase in $phrases) {
+            if ($lower.Contains($phrase)) {
+                Write-Output ('ARENA_SECURITY_UIA_FOUND=' + $name)
+                exit 0
+            }
+        }
+    } catch { }
+}
+Write-Output 'ARENA_SECURITY_UIA_NOT_FOUND'
+'''
+
+
+def security_verification_match(stage="security", ocr_fallback=True):
+    """چالش قابل مشاهده را با UIA و در صورت نیاز PaddleOCR محلی تشخیص می‌دهد."""
+    try:
+        output = run_hidden_powershell(SECURITY_UIA_PS_SCRIPT, timeout=30)
+    except Exception as exc:
+        print(f"هشدار: بررسی UIA چالش امنیتی ممکن نشد: {exc}")
+        output = ""
+    marker = "ARENA_SECURITY_UIA_FOUND="
+    if marker in output:
+        detected = output.split(marker, 1)[1].splitlines()[0].strip()
+        safe_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in PROMPT_REQUEST_ID)
+        target_dir = os.path.join(os.path.dirname(SCREENSHOT_DIR), "logs", "security")
+        os.makedirs(target_dir, exist_ok=True)
+        image_path = os.path.join(target_dir, f"security_{safe_id}_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png")
+        take_screenshot(image_path)
+        register_step_artifact(image_path, "security-" + str(stage))
+        return {"text": detected, "matched": "security verification", "imagePath": image_path, "detector": "uia"}
+    if not ocr_fallback:
+        return None
+    try:
+        match = find_text_with_ocr(SECURITY_VERIFICATION_PHRASES, stage=stage)
+    except subprocess.TimeoutExpired:
+        # کندی/گیرکردن OCR نباید مسیر امن UIA و بررسی composer را از کار بیندازد.
+        # PowerShell فقط روی editable composer با فوکوس امن اجازه تایپ/Enter می‌دهد.
+        print(f"ARENA_SECURITY_OCR_TIMEOUT: PaddleOCR پس از {OCR_TIMEOUT_SECONDS} ثانیه پاسخ نداد؛ ادامه با UIA و محافظ فوکوس composer")
+        return None
+    except Exception as exc:
+        print(f"ARENA_SECURITY_OCR_UNAVAILABLE: بررسی PaddleOCR ممکن نشد؛ ادامه با UIA و محافظ فوکوس composer: {exc}")
+        return None
+    if match:
+        match["detector"] = "paddleocr"
+    return match
+
+
+def wait_for_security_verification_clear(stage="security"):
+    """در چالش امنیتی هیچ کلیک/کلیدی نمی‌زند و تا مداخله انسان متوقف می‌ماند."""
+    match = security_verification_match(stage=stage)
+    if not match:
+        return False
+    payload = {
+        "reason": "security_verification",
+        "requestId": PROMPT_REQUEST_ID,
+        "message": "چالش ضدربات Arena دیده شد؛ مداخله انسانی لازم است.",
+        "artifactPath": match.get("imagePath"),
+        "detectedText": match.get("text"),
+        "matchedPhrase": match.get("matched"),
+        "detector": match.get("detector"),
+    }
+    print("SERVICE_HUMAN_INTERVENTION_REQUIRED: " + json.dumps(payload, ensure_ascii=False))
+    while True:
+        time.sleep(8)
+        wait_for_network()
+        match = security_verification_match(stage=stage + "-recheck")
+        if not match:
+            print("SERVICE_HUMAN_INTERVENTION_CLEARED: " + json.dumps({
+                "reason": "security_verification",
+                "requestId": PROMPT_REQUEST_ID,
+                "message": "چالش امنیتی رفع شد؛ ادامه از checkpoint امن.",
+            }, ensure_ascii=False))
+            return True
+        print("SERVICE_HUMAN_INTERVENTION_WAITING: " + json.dumps({
+            "reason": "security_verification",
+            "requestId": PROMPT_REQUEST_ID,
+            "artifactPath": match.get("imagePath"),
+        }, ensure_ascii=False))
+
+
 def type_and_submit_with_network_resilience():
-    """اگر شکست هم‌زمان با قطعی باشد، صبر می‌کند و فقط یک بار امن از نو تلاش می‌کند."""
+    """شبکه و Security Verification را پیش از هر تعامل تازه بررسی می‌کند."""
     wait_for_network()
+    wait_for_security_verification_clear(stage="before-input")
     try:
         return type_and_submit()
     except Exception:
@@ -127,6 +450,7 @@ def type_and_submit_with_network_resilience():
         open_site()
         time.sleep(PAGE_LOAD_WAIT)
         maximize_browser()
+        wait_for_security_verification_clear(stage="after-reconnect")
         handle_dialog_if_present()
         return type_and_submit()
 
@@ -164,7 +488,7 @@ def send_telegram_status(kind, detail):
 
 
 def save_failure_artifacts(detail):
-    """پیش از بازخورد، لاگ و اسکرین‌شات شکست را در Google Drive می‌گذارد."""
+    """پیش از توقف، لاگ و اسکرین‌شات شکست را برای Drive آماده و metadata را ثبت می‌کند."""
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in PROMPT_REQUEST_ID)
     base_dir = os.path.dirname(SCREENSHOT_DIR)
@@ -177,38 +501,24 @@ def save_failure_artifacts(detail):
         with open(report_path, "w", encoding="utf-8") as fh:
             fh.write(
                 "زمان: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " تهران\\n"
-                "موضوع: شکست job_arena.py و نیاز به بررسی ایجنت همکار\\n"
-                "نسخه برنامه: Arena Bridge 7\\n"
+                "موضوع: توقف امن اتوماسیون Arena و نیاز به مداخله انسانی\\n"
+                "نسخه برنامه: Arena Bridge 12\\n"
                 "شناسه درخواست: " + PROMPT_REQUEST_ID + "\\n"
                 "پرامپت: " + PROMPT_TEXT + "\\n\\n"
                 "جزئیات خطا:\\n" + str(detail)
             )
         saved.append(report_path)
+        register_step_artifact(report_path, "failure-report", kind="log", mime_type="text/plain")
     except Exception as exc:
         print(f"هشدار: ذخیره گزارش شکست ممکن نشد: {exc}")
     try:
         os.makedirs(SCREENSHOT_DIR, exist_ok=True)
         take_screenshot(screenshot_path)
         saved.append(screenshot_path)
+        register_step_artifact(screenshot_path, "failure-screenshot")
     except Exception as exc:
         print(f"هشدار: گرفتن اسکرین‌شات شکست ممکن نشد: {exc}")
     return saved
-
-
-def handle_failure_dialog_if_present():
-    """اگر پرسش نتیجه باز است، برای اجرای ناموفق گزینه No را انتخاب می‌کند."""
-    try:
-        failure_script = DIALOG_PS_SCRIPT.replace(
-            "$el.Current.Name -eq 'Yes'", "$el.Current.Name -eq 'No'"
-        )
-        output = run_hidden_powershell(failure_script, timeout=60)
-        if "ARENA_DIALOG_CLICKED" in output:
-            print("پنجره نتیجه پیدا شد؛ گزینه No برای اجرای ناموفق کلیک شد")
-            time.sleep(DIALOG_CLICK_WAIT)
-            return True
-    except Exception as exc:
-        print(f"هشدار: انتخاب No در پنجره نتیجه ممکن نشد: {exc}")
-    return False
 
 
 def wait_for_arena_completion():
@@ -227,73 +537,77 @@ def wait_for_arena_completion():
     detector_script = DIALOG_PS_SCRIPT.replace(detector_anchor, detector_exit, 1)
     deadline = time.monotonic() + ARENA_COMPLETION_TIMEOUT
     attempt = 0
-    while time.monotonic() < deadline:
+    completion_intervention_announced = False
+    while True:
+        if time.monotonic() >= deadline:
+            if not ARENA_ASK_ON_COMPLETION_TIMEOUT:
+                raise TimeoutError(
+                    f"تا {ARENA_COMPLETION_TIMEOUT} ثانیه پنجره «{DIALOG_PHRASE}» ظاهر نشد"
+                )
+            payload = {
+                "reason": "completion_wait_expired",
+                "requestId": PROMPT_REQUEST_ID,
+                "message": "زمان یادآوری انتظار پاسخ تمام شد، اما پایش بدون توقف ادامه دارد.",
+                "guidance": "در صورت طبیعی بودن طول کار، فقط ادامه پایش را انتخاب کنید؛ برای پایان دادن، توقف امن را بزنید.",
+                "waitedSeconds": ARENA_COMPLETION_TIMEOUT,
+            }
+            marker = "SERVICE_HUMAN_INTERVENTION_REQUIRED" if not completion_intervention_announced else "SERVICE_HUMAN_INTERVENTION_WAITING"
+            print(marker + ": " + json.dumps(payload, ensure_ascii=False))
+            completion_intervention_announced = True
+            deadline = time.monotonic() + ARENA_COMPLETION_TIMEOUT
+
         offline_started = time.monotonic()
         wait_for_network()
         # مدت قطعی از مهلت پاسخ کم نمی‌شود.
         deadline += max(0, time.monotonic() - offline_started)
         attempt += 1
-        print(f"پایش پایان Arena؛ انتظار برای «{DIALOG_PHRASE}» (بررسی {attempt})...")
+        print(f"پایش پاسخ Arena: هنوز منتظر پایان پرامپت هستیم (بررسی {attempt})")
+        security_match = security_verification_match(stage="completion-uia", ocr_fallback=False)
+        if security_match:
+            intervention_started = time.monotonic()
+            wait_for_security_verification_clear(stage="completion-security")
+            deadline += max(0, time.monotonic() - intervention_started)
+            continue
         try:
             output = run_hidden_powershell(detector_script, timeout=60)
         except Exception as exc:
             print(f"هشدار: بررسی پایان Arena موقتاً ناموفق بود: {exc}")
             output = ""
         if "ARENA_COMPLETION_DIALOG_FOUND" in output:
-            print("پنجره پایان Arena با UI Automation دیده شد؛ اجرای ایجنت همکار کامل شده است")
+            if completion_intervention_announced:
+                print("SERVICE_HUMAN_INTERVENTION_CLEARED: " + json.dumps({
+                    "reason": "completion_wait_expired",
+                    "requestId": PROMPT_REQUEST_ID,
+                    "message": "پاسخ Arena کامل شد و انتظار طولانی پایان یافت.",
+                }, ensure_ascii=False))
+            print("Arena پایان پاسخ را اعلام کرد؛ آماده تأیید نتیجه هستیم.")
             return True
         try:
-            ocr_match = find_text_with_ocr([DIALOG_PHRASE], stage="completion")
+            ocr_match = find_text_with_ocr([DIALOG_PHRASE] + SECURITY_VERIFICATION_PHRASES, stage="completion")
         except Exception as exc:
             print(f"هشدار: بررسی PaddleOCR پنجره پایان ممکن نشد: {exc}")
             ocr_match = None
+        if ocr_match and ocr_match.get("matched") in [value.casefold() for value in SECURITY_VERIFICATION_PHRASES]:
+            intervention_started = time.monotonic()
+            wait_for_security_verification_clear(stage="completion-security")
+            deadline += max(0, time.monotonic() - intervention_started)
+            continue
         if ocr_match:
-            print("پنجره پایان Arena با PaddleOCR دیده شد؛ اجرای ایجنت همکار کامل شده است")
+            if completion_intervention_announced:
+                print("SERVICE_HUMAN_INTERVENTION_CLEARED: " + json.dumps({
+                    "reason": "completion_wait_expired",
+                    "requestId": PROMPT_REQUEST_ID,
+                    "message": "پاسخ Arena کامل شد و انتظار طولانی پایان یافت.",
+                }, ensure_ascii=False))
+            print("Arena پایان پاسخ را نشان داد؛ آماده تأیید نتیجه هستیم.")
             return True
         remaining = deadline - time.monotonic()
         if remaining > 0:
             time.sleep(min(ARENA_COMPLETION_POLL_SECONDS, remaining))
-    raise TimeoutError(
-        f"تا {ARENA_COMPLETION_TIMEOUT} ثانیه پنجره «{DIALOG_PHRASE}» ظاهر نشد"
-    )
-
-
-def send_failure_feedback(detail, artifact_paths):
-    """حداکثر سه بار تلاش می‌کند شکست را به گفت‌وگوی ایجنت همکار برگرداند."""
-    global PROMPT_TEXT
-    original_prompt = PROMPT_TEXT
-    paths_text = "، ".join(artifact_paths) if artifact_paths else "پوشه‌های logs و ScreenShots"
-    feedback = (
-        "اجرای درخواست ناموفق بود. لطفاً گزارش‌ها و در صورت نیاز اسکرین‌شات‌ها را "
-        "در Google Drive بررسی کن، علت را پیدا کن و یک نسخه اصلاح‌شده یا بازنویسی‌شده در کاتالوگ D1 ثبت کن. "
-        f"شناسه درخواست: {PROMPT_REQUEST_ID}. مسیرهای مرتبط: {paths_text}"
-    )
-    last_error = None
-    try:
-        for attempt in range(1, FAILURE_FEEDBACK_ATTEMPTS + 1):
-            try:
-                print(f"تلاش {attempt} از {FAILURE_FEEDBACK_ATTEMPTS} برای ارسال بازخورد شکست...")
-                PROMPT_TEXT = feedback
-                open_site()
-                time.sleep(PAGE_LOAD_WAIT)
-                maximize_browser()
-                handle_failure_dialog_if_present()
-                type_and_submit()
-                wait_for_arena_completion()
-                print("بازخورد اجرای ناموفق به ایجنت همکار ارسال و پایان آن تأیید شد")
-                return True
-            except Exception as exc:
-                last_error = exc
-                print(f"ارسال بازخورد در تلاش {attempt} ناموفق بود: {exc}")
-                if attempt < FAILURE_FEEDBACK_ATTEMPTS:
-                    time.sleep(4)
-    finally:
-        PROMPT_TEXT = original_prompt
-    print(f"بازخورد شکست پس از سه تلاش ارسال نشد: {last_error}")
-    return False
 `;
 
 const WRAPPED_MAIN = `def main():
+    global FAILURE_INTERVENTION_REPORTED_FOR
     started_at = datetime.now()
     if TELEGRAM_REPORT_MODE == "start_final":
         send_telegram_status("شروع", "اجرای پرامپت در ویندوز آغاز شد.")
@@ -305,9 +619,16 @@ const WRAPPED_MAIN = `def main():
         summary = f"پس از {elapsed:.1f} ثانیه ناموفق شد: {type(exc).__name__}: {exc}"
         print(summary)
         artifacts = save_failure_artifacts(summary + "\\n" + trace)
-        feedback_sent = send_failure_feedback(summary, artifacts)
-        feedback_note = "بازخورد به ایجنت همکار ارسال شد." if feedback_sent else "ارسال بازخورد پس از سه تلاش ناموفق بود."
-        send_telegram_status("ناموفق", summary + "\\n" + feedback_note + "\\n" + trace[-1200:])
+        intervention = {
+            "reason": "arena_automation_failure",
+            "requestId": PROMPT_REQUEST_ID,
+            "message": summary,
+            "artifactPaths": artifacts,
+            "guidance": "اجرای خودکار متوقف شد؛ وضعیت Arena و تصاویر مرحله‌ای را بررسی کنید.",
+        }
+        print("SERVICE_HUMAN_INTERVENTION_REQUIRED: " + json.dumps(intervention, ensure_ascii=False))
+        FAILURE_INTERVENTION_REPORTED_FOR = PROMPT_REQUEST_ID
+        send_telegram_status("نیازمند مداخله انسانی", summary + "\\n" + trace[-1200:])
         raise
     else:
         elapsed = (datetime.now() - started_at).total_seconds()
@@ -426,6 +747,52 @@ function Save-StepShot([string]$stage) {
     }
 }
 
+if (-not ("ArenaClickPulse" -as [type])) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Drawing;
+using System.Windows.Forms;
+public class ArenaClickPulse : Form {
+    public ArenaClickPulse() {
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        TopMost = true;
+        Width = 88; Height = 88;
+        BackColor = Color.Magenta;
+        TransparencyKey = Color.Magenta;
+    }
+    protected override bool ShowWithoutActivation { get { return true; } }
+    protected override CreateParams CreateParams {
+        get { var cp = base.CreateParams; cp.ExStyle |= 0x08000000 | 0x20 | 0x80; return cp; }
+    }
+    protected override void OnPaint(PaintEventArgs e) {
+        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using (var fill = new SolidBrush(Color.FromArgb(175, 255, 220, 0))) e.Graphics.FillEllipse(fill, 8, 8, 72, 72);
+        using (var pen = new Pen(Color.FromArgb(245, 255, 145, 0), 7)) e.Graphics.DrawEllipse(pen, 8, 8, 72, 72);
+        using (var center = new SolidBrush(Color.FromArgb(245, 255, 80, 0))) e.Graphics.FillEllipse(center, 34, 34, 20, 20);
+    }
+}
+"@ -ReferencedAssemblies 'System.Windows.Forms','System.Drawing'
+}
+
+function Show-ClickPulse([double]$x, [double]$y, [string]$label) {
+    if ($env:ARENA_SHOW_CLICK_HIGHLIGHTS -ne '1') { return }
+    $pulse = $null
+    try {
+        $pulse = New-Object ArenaClickPulse
+        $pulse.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+        $pulse.Location = [System.Drawing.Point]::new([int]($x - 44), [int]($y - 44))
+        $pulse.Show()
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Milliseconds 320
+        Write-Output ("ARENA_CLICK_HIGHLIGHT=" + $label + "@" + [int]$x + "," + [int]$y)
+    } catch {
+        Write-Output ("ARENA_CLICK_HIGHLIGHT_FAILED=" + $_.Exception.Message)
+    } finally {
+        if ($pulse) { $pulse.Close(); $pulse.Dispose() }
+    }
+}
+
 function Try-SetPromptValue($startEl) {
     $el = $startEl
     for ($depth = 0; $depth -lt 7 -and $el; $depth++) {
@@ -446,75 +813,284 @@ function Try-SetPromptValue($startEl) {
 
 const VERIFIED_SUBMIT_BLOCK = `$sent = $false
 
-# Bridge 5: Enter تنها زمانی مجاز است که فوکوس هنوز داخل صفحه و خارج از نوار آدرس باشد.
+# Bridge 18: composer دوباره فوکوس می‌شود و یکی از probeهای دقیق همین پرامپت
+# در پنجره محدود UIA تأیید می‌شود. tail اولویت دارد اما تنها پنجره قابل‌خواندن نیست.
+if ($composer) { try { $composer.SetFocus() } catch {} }
+try { [WinApi]::SetForegroundWindow($browserWin.Current.NativeWindowHandle) | Out-Null } catch {}
+Left-Click $clickPoint.X $clickPoint.Y
+Start-Sleep -Milliseconds 300
+[void][WinApi]::SendChord(0x11, 0x23) # Ctrl+End؛ تلاش برای نمایش انتهای متن
+Start-Sleep -Milliseconds 350
 $focusedBeforeSubmit = [System.Windows.Automation.AutomationElement]::FocusedElement
 $submitFocusSafe = ($null -ne $focusedBeforeSubmit) -and -not (Test-Omnibox $focusedBeforeSubmit $winRect.Top)
+$submitPromptCanonical = (([string]$env:ARENA_PROMPT -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\\s+', ' ').Trim()
+$submitFocusedCanonical = ((([string](Get-ElText $focusedBeforeSubmit)) -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\\s+', ' ').Trim()
+$submitProbeLength = [Math]::Min(32, $submitPromptCanonical.Length)
+$submitMinimumEvidenceLength = [Math]::Min(64, [Math]::Max(24, [int]($submitPromptCanonical.Length * 0.02)))
+$submitMatchedProbe = ""
+$submitMatchedOffset = -1
+$submitProbeCandidates = @()
+if ($submitProbeLength -gt 0) {
+    $submitMaxOffset = [Math]::Max(0, $submitPromptCanonical.Length - $submitProbeLength)
+    # tail عمداً اول است؛ اگر Chrome فقط head/middle را بدهد probe دقیق دیگری پذیرفته می‌شود.
+    $submitOffsets = @($submitMaxOffset, [int](2 * $submitMaxOffset / 3), [int]($submitMaxOffset / 3), 0) | Select-Object -Unique
+    foreach ($submitOffset in $submitOffsets) {
+        $candidate = $submitPromptCanonical.Substring($submitOffset, $submitProbeLength)
+        $submitProbeCandidates += $candidate
+        if (-not $submitMatchedProbe -and $submitFocusedCanonical.Contains($candidate)) {
+            $submitMatchedProbe = $candidate
+            $submitMatchedOffset = $submitOffset
+        }
+    }
+}
+$submitEvidenceLengthOk = $submitFocusedCanonical.Length -ge $submitMinimumEvidenceLength
+$submitProbePresent = [bool]$submitMatchedProbe
+$submitTailProbeMatched = $submitProbePresent -and ($submitMatchedOffset -eq [Math]::Max(0, $submitPromptCanonical.Length - $submitProbeLength))
+$submitFocusNearComposer = $false
+$submitElementNameLength = 0
+$submitElementAutomationId = ""
+$submitElementControlType = ""
+$submitElementRect = "unavailable"
+try {
+    $submitRect = $focusedBeforeSubmit.Current.BoundingRectangle
+    $submitFocusNearComposer = (
+        $submitFocusSafe -and
+        ($clickPoint.X -ge ($submitRect.Left - 80)) -and ($clickPoint.X -le ($submitRect.Right + 80)) -and
+        ($clickPoint.Y -ge ($submitRect.Top - 80)) -and ($clickPoint.Y -le ($submitRect.Bottom + 80))
+    )
+    $submitElementNameLength = ([string]$focusedBeforeSubmit.Current.Name).Length
+    $submitElementAutomationId = [string]$focusedBeforeSubmit.Current.AutomationId
+    $submitElementControlType = [string]$focusedBeforeSubmit.Current.ControlType.ProgrammaticName
+    $submitElementRect = ([int]$submitRect.Left).ToString() + "," + ([int]$submitRect.Top).ToString() + "," + ([int]$submitRect.Width).ToString() + "," + ([int]$submitRect.Height).ToString()
+} catch {}
+$submitReady = $textConfirmed -and $submitFocusSafe -and $submitEvidenceLengthOk -and $submitProbePresent
 Write-Output ("ARENA_SUBMIT_FOCUS_SAFE=" + [bool]$submitFocusSafe)
+Write-Output ("ARENA_SUBMIT_FOCUS_NEAR_COMPOSER=" + [bool]$submitFocusNearComposer)
+Write-Output ("ARENA_SUBMIT_FOCUSED_LENGTH=" + $submitFocusedCanonical.Length)
+Write-Output ("ARENA_SUBMIT_MINIMUM_LENGTH=" + $submitMinimumEvidenceLength)
+Write-Output ("ARENA_SUBMIT_PROBE_CANDIDATES=" + $submitProbeCandidates.Count)
+Write-Output ("ARENA_SUBMIT_PROBE_PRESENT=" + [bool]$submitProbePresent)
+Write-Output ("ARENA_SUBMIT_MATCHED_OFFSET=" + $submitMatchedOffset)
+Write-Output ("ARENA_SUBMIT_TAIL_PROBE_MATCHED=" + [bool]$submitTailProbeMatched)
+Write-Output ("ARENA_SUBMIT_ELEMENT_NAME_LENGTH=" + $submitElementNameLength)
+Write-Output ("ARENA_SUBMIT_ELEMENT_AUTOMATION_ID=" + $submitElementAutomationId)
+Write-Output ("ARENA_SUBMIT_ELEMENT_CONTROL_TYPE=" + $submitElementControlType)
+Write-Output ("ARENA_SUBMIT_ELEMENT_RECT=" + $submitElementRect)
+Write-Output ("ARENA_SUBMIT_READY=" + [bool]$submitReady)
 
-if ($textConfirmed -and $submitFocusSafe) {
-    # ارسال فقط با SendInput انجام می‌شود؛ در حالت تأییدنشده/فوکوس ناامن Enter زده نمی‌شود.
+if ($submitReady) {
+    Save-StepShot '04-submit-refocused-verified'
     $enterOk = [WinApi]::PressKey(0x0D)
     Write-Output ("ARENA_SUBMIT_SENDINPUT=" + $enterOk)
-    Start-Sleep -Milliseconds 1800
+    Start-Sleep -Milliseconds 5000
+    Save-StepShot '04-after-enter-first'
 
-    # تأیید اول: پرامپت به‌صورت یک پیام بالاتر از کادر گفتگو در صفحه ظاهر شده باشد.
-    $messageVisible = $false
+    # fallback فقط وقتی مجاز است که همان probe دقیق هنوز در عنصر فوکوس‌شده و امن باشد؛
+    # تطبیق متن فعلی خودِ شاهد composer است و هندسه نیز جداگانه برای تشخیص ثبت می‌شود.
+    $focusedAfterEnter = [System.Windows.Automation.AutomationElement]::FocusedElement
+    $focusSafeAfterEnter = ($null -ne $focusedAfterEnter) -and -not (Test-Omnibox $focusedAfterEnter $winRect.Top)
+    $afterEnterCanonical = ((([string](Get-ElText $focusedAfterEnter)) -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\\s+', ' ').Trim()
+    $focusNearComposerAfterEnter = $false
     try {
-        $probeLength = [Math]::Min(80, $env:ARENA_PROMPT.Length)
-        $promptProbe = $env:ARENA_PROMPT.Substring(0, $probeLength)
-        $afterTexts = Get-Visible ($page.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCond))
-        foreach ($t in $afterTexts) {
-            $name = [string]$t.Current.Name
-            $rect = $t.Current.BoundingRectangle
-            if ($name -and $name.Contains($promptProbe) -and $rect.Bottom -lt ($clickPoint.Y - 20)) {
-                $messageVisible = $true
-                break
-            }
-        }
+        $afterEnterRect = $focusedAfterEnter.Current.BoundingRectangle
+        $focusNearComposerAfterEnter = (
+            $focusSafeAfterEnter -and
+            ($clickPoint.X -ge ($afterEnterRect.Left - 80)) -and ($clickPoint.X -le ($afterEnterRect.Right + 80)) -and
+            ($clickPoint.Y -ge ($afterEnterRect.Top - 80)) -and ($clickPoint.Y -le ($afterEnterRect.Bottom + 80))
+        )
     } catch {}
+    $probeRemainsAfterEnter = $false
+    $remainingOffsetAfterEnter = -1
+    for ($probeIndex = 0; $probeIndex -lt $submitProbeCandidates.Count; $probeIndex++) {
+        if ($afterEnterCanonical.Contains($submitProbeCandidates[$probeIndex])) {
+            $probeRemainsAfterEnter = $focusSafeAfterEnter -and $focusNearComposerAfterEnter
+            $remainingOffsetAfterEnter = $submitOffsets[$probeIndex]
+            break
+        }
+    }
+    Write-Output ("ARENA_SUBMIT_FOCUS_SAFE_AFTER_ENTER=" + [bool]$focusSafeAfterEnter)
+    Write-Output ("ARENA_SUBMIT_FOCUS_NEAR_AFTER_ENTER=" + [bool]$focusNearComposerAfterEnter)
+    Write-Output ("ARENA_SUBMIT_FOCUSED_LENGTH_AFTER_ENTER=" + $afterEnterCanonical.Length)
+    Write-Output ("ARENA_SUBMIT_REMAINING_OFFSET_AFTER_ENTER=" + $remainingOffsetAfterEnter)
+    Write-Output ("ARENA_SUBMIT_PROBE_REMAINS_AFTER_ENTER=" + [bool]$probeRemainsAfterEnter)
 
-    # تأیید دوم: placeholder برگشته و متن پرامپت دیگر داخل composer قابل Copy نباشد.
+    # Bridge 18 دیگر Ctrl+Enter را امتحان نمی‌کند؛ اجرای واقعی نشان داد آن هم متن را
+    # نگه می‌دارد. تنها fallback پس از Enter، یک کلیک کنترل‌شده روی دکمه ارسال است.
+    $fallbackUsed = $false
+    $fallbackOk = $false
+
+    # fallback مجاز: کلیک یک‌باره روی دکمه ارسال، فقط وقتی بعد از Enter
+    # یکی از probeهای دقیق هنوز در composer امن و نزدیک همان نقطه دیده می‌شود.
+    $sendClickUsed = $false
+    $sendClickSource = "none"
+    $sendCandidateCount = 0
+    $sendButtonName = ""
+    $sendButtonAutomationId = ""
+    $sendButtonRectText = "unavailable"
+    $focusedAfterKeyboard = [System.Windows.Automation.AutomationElement]::FocusedElement
+    $focusSafeAfterKeyboard = ($null -ne $focusedAfterKeyboard) -and -not (Test-Omnibox $focusedAfterKeyboard $winRect.Top)
+    $afterKeyboardCanonical = ((([string](Get-ElText $focusedAfterKeyboard)) -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\\s+', ' ').Trim()
+    $focusNearComposerAfterKeyboard = $false
+    $keyboardRect = $null
+    try {
+        $keyboardRect = $focusedAfterKeyboard.Current.BoundingRectangle
+        $focusNearComposerAfterKeyboard = (
+            $focusSafeAfterKeyboard -and
+            ($clickPoint.X -ge ($keyboardRect.Left - 80)) -and ($clickPoint.X -le ($keyboardRect.Right + 80)) -and
+            ($clickPoint.Y -ge ($keyboardRect.Top - 80)) -and ($clickPoint.Y -le ($keyboardRect.Bottom + 80))
+        )
+    } catch {}
+    $promptRemainsAfterKeyboard = $false
+    $remainingOffsetAfterKeyboard = -1
+    for ($probeIndex = 0; $probeIndex -lt $submitProbeCandidates.Count; $probeIndex++) {
+        if ($afterKeyboardCanonical.Contains($submitProbeCandidates[$probeIndex])) {
+            $promptRemainsAfterKeyboard = $focusSafeAfterKeyboard -and $focusNearComposerAfterKeyboard
+            $remainingOffsetAfterKeyboard = $submitOffsets[$probeIndex]
+            break
+        }
+    }
+    Write-Output ("ARENA_SUBMIT_PROMPT_REMAINS_AFTER_KEYBOARD=" + [bool]$promptRemainsAfterKeyboard)
+    Write-Output ("ARENA_SUBMIT_REMAINING_OFFSET_AFTER_KEYBOARD=" + $remainingOffsetAfterKeyboard)
+
+    if ($promptRemainsAfterKeyboard) {
+        $sendButton = $null
+        $sendButtonScore = [double]::NegativeInfinity
+        try {
+            $sendButtonCond = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::Button
+            )
+            $nearButtons = Get-Visible ($page.FindAll([System.Windows.Automation.TreeScope]::Descendants, $sendButtonCond))
+            foreach ($button in $nearButtons) {
+                try {
+                    if (-not $button.Current.IsEnabled) { continue }
+                    $buttonRect = $button.Current.BoundingRectangle
+                    if ($buttonRect.Width -lt 12 -or $buttonRect.Width -gt 100 -or $buttonRect.Height -lt 12 -or $buttonRect.Height -gt 100) { continue }
+                    $buttonX = $buttonRect.Left + ($buttonRect.Width / 2)
+                    $buttonY = $buttonRect.Top + ($buttonRect.Height / 2)
+                    if ($buttonX -lt ($keyboardRect.Left + ($keyboardRect.Width * 0.55)) -or $buttonX -gt ($keyboardRect.Right + 45)) { continue }
+                    if ($buttonY -lt ($keyboardRect.Top - 25) -or $buttonY -gt ($keyboardRect.Bottom + 35)) { continue }
+                    $sendCandidateCount += 1
+                    $buttonName = [string]$button.Current.Name
+                    $buttonAutomationId = [string]$button.Current.AutomationId
+                    $semanticBonus = if (($buttonName + " " + $buttonAutomationId) -match '(?i)send|submit|ارسال') { 100000 } else { 0 }
+                    $buttonScore = $semanticBonus + $buttonX + ($buttonY / 1000)
+                    Write-Output ("ARENA_SUBMIT_BUTTON_CANDIDATE=" + $sendCandidateCount + ";name=" + $buttonName + ";id=" + $buttonAutomationId + ";rect=" + ([int]$buttonRect.Left) + "," + ([int]$buttonRect.Top) + "," + ([int]$buttonRect.Width) + "," + ([int]$buttonRect.Height))
+                    if ($buttonScore -gt $sendButtonScore) {
+                        $sendButtonScore = $buttonScore
+                        $sendButton = $button
+                    }
+                } catch {}
+            }
+        } catch {
+            Write-Output ("ARENA_SUBMIT_BUTTON_SCAN_ERROR=" + $_.Exception.Message)
+        }
+
+        $sendX = 0
+        $sendY = 0
+        if ($sendButton) {
+            try {
+                $chosenRect = $sendButton.Current.BoundingRectangle
+                $sendX = $chosenRect.Left + ($chosenRect.Width / 2)
+                $sendY = $chosenRect.Top + ($chosenRect.Height / 2)
+                $sendButtonName = [string]$sendButton.Current.Name
+                $sendButtonAutomationId = [string]$sendButton.Current.AutomationId
+                $sendButtonRectText = ([int]$chosenRect.Left).ToString() + "," + ([int]$chosenRect.Top).ToString() + "," + ([int]$chosenRect.Width).ToString() + "," + ([int]$chosenRect.Height).ToString()
+                $sendClickSource = "uia-button"
+            } catch {}
+        }
+        if (($sendX -le 0 -or $sendY -le 0) -and $keyboardRect) {
+            # Arena دکمه فلش ارسال را در گوشه پایین راست composer نشان می‌دهد.
+            $sendX = $keyboardRect.Right - 28
+            $sendY = $keyboardRect.Bottom - 28
+            $sendButtonRectText = "geometry-from-composer"
+            $sendClickSource = "composer-bottom-right"
+        }
+        Write-Output ("ARENA_SUBMIT_BUTTON_CANDIDATE_COUNT=" + $sendCandidateCount)
+        Write-Output ("ARENA_SUBMIT_BUTTON_SOURCE=" + $sendClickSource)
+        Write-Output ("ARENA_SUBMIT_BUTTON_NAME=" + $sendButtonName)
+        Write-Output ("ARENA_SUBMIT_BUTTON_AUTOMATION_ID=" + $sendButtonAutomationId)
+        Write-Output ("ARENA_SUBMIT_BUTTON_RECT=" + $sendButtonRectText)
+        Write-Output ("ARENA_SUBMIT_BUTTON_POINT=" + [int]$sendX + "," + [int]$sendY)
+        if ($sendX -gt 0 -and $sendY -gt 0) {
+            Save-StepShot '04-before-send-button-click'
+            Show-ClickPulse $sendX $sendY 'دکمه ارسال'
+            Left-Click $sendX $sendY
+            $sendClickUsed = $true
+            Write-Output 'ARENA_SUBMIT_SEND_BUTTON_CLICKED'
+            Start-Sleep -Milliseconds 5000
+            Save-StepShot '04-after-send-button-click'
+        }
+    }
+    Write-Output ("ARENA_SUBMIT_SEND_BUTTON_USED=" + [bool]$sendClickUsed)
+
+    $focusedAfterSubmit = [System.Windows.Automation.AutomationElement]::FocusedElement
+    $focusSafeAfterSubmit = ($null -ne $focusedAfterSubmit) -and -not (Test-Omnibox $focusedAfterSubmit $winRect.Top)
+    $afterSubmitCanonical = ((([string](Get-ElText $focusedAfterSubmit)) -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\\s+', ' ').Trim()
+    $focusNearComposerAfterSubmit = $false
+    try {
+        $afterRect = $focusedAfterSubmit.Current.BoundingRectangle
+        $focusNearComposerAfterSubmit = (
+            $focusSafeAfterSubmit -and
+            ($clickPoint.X -ge ($afterRect.Left - 80)) -and ($clickPoint.X -le ($afterRect.Right + 80)) -and
+            ($clickPoint.Y -ge ($afterRect.Top - 80)) -and ($clickPoint.Y -le ($afterRect.Bottom + 80))
+        )
+    } catch {}
+    $probeRemainsAfterSubmit = $false
+    $remainingOffsetFinal = -1
+    for ($probeIndex = 0; $probeIndex -lt $submitProbeCandidates.Count; $probeIndex++) {
+        if ($afterSubmitCanonical.Contains($submitProbeCandidates[$probeIndex])) {
+            $probeRemainsAfterSubmit = $focusSafeAfterSubmit -and $focusNearComposerAfterSubmit
+            $remainingOffsetFinal = $submitOffsets[$probeIndex]
+            break
+        }
+    }
+    $focusedComposerCleared = $focusNearComposerAfterSubmit -and -not $probeRemainsAfterSubmit -and ($afterSubmitCanonical.Length -lt $submitProbeLength)
+
+    # شواهد مستقل نهایی: پیام بالای composer یا برگشت placeholder یا composer خالی.
+    $messageVisible = $false
     $placeholderReturned = $false
     try {
         $afterTexts = Get-Visible ($page.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCond))
+        $headProbeLength = [Math]::Min(80, $env:ARENA_PROMPT.Length)
+        $headProbe = $env:ARENA_PROMPT.Substring(0, $headProbeLength)
         foreach ($t in $afterTexts) {
             $name = [string]$t.Current.Name
-            if ($name -and ($name -match 'What would you like')) { $placeholderReturned = $true; break }
+            $rect = $t.Current.BoundingRectangle
+            if ($name -and $name.Contains($headProbe) -and $rect.Bottom -lt ($clickPoint.Y - 20)) { $messageVisible = $true }
+            if ($name -and ($name -match 'What would you like')) { $placeholderReturned = $true }
         }
     } catch {}
 
-    $promptStillInComposer = $false
-    try {
-        $sentinel = "__ARENA_AFTER_SEND_$([Guid]::NewGuid().ToString('N'))__"
-        Set-Clipboard -Value $sentinel
-        [void][WinApi]::SendChord(0x11, 0x41)
-        Start-Sleep -Milliseconds 120
-        [void][WinApi]::SendChord(0x11, 0x43)
-        Start-Sleep -Milliseconds 350
-        $afterCopied = [string](Get-Clipboard -Raw)
-        $afterNormalized = $afterCopied.Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
-        $promptNormalized = ([string]$env:ARENA_PROMPT).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
-        $promptStillInComposer = ($afterNormalized -eq $promptNormalized)
-        [void][WinApi]::PressKey(0x23)
-    } catch {}
-
+    Write-Output ("ARENA_SUBMIT_FALLBACK_USED=" + [bool]$fallbackUsed)
     Write-Output ("ARENA_SUBMIT_MESSAGE_VISIBLE=" + [bool]$messageVisible)
     Write-Output ("ARENA_SUBMIT_PLACEHOLDER_RETURNED=" + [bool]$placeholderReturned)
-    Write-Output ("ARENA_SUBMIT_PROMPT_STILL_IN_COMPOSER=" + [bool]$promptStillInComposer)
-    $sent = $enterOk -and ($messageVisible -or ($placeholderReturned -and -not $promptStillInComposer))
+    Write-Output ("ARENA_SUBMIT_FOCUS_SAFE_FINAL=" + [bool]$focusSafeAfterSubmit)
+    Write-Output ("ARENA_SUBMIT_FOCUS_NEAR_FINAL=" + [bool]$focusNearComposerAfterSubmit)
+    Write-Output ("ARENA_SUBMIT_FOCUSED_LENGTH_FINAL=" + $afterSubmitCanonical.Length)
+    Write-Output ("ARENA_SUBMIT_REMAINING_OFFSET_FINAL=" + $remainingOffsetFinal)
+    Write-Output ("ARENA_SUBMIT_PROBE_REMAINS_FINAL=" + [bool]$probeRemainsAfterSubmit)
+    Write-Output ("ARENA_SUBMIT_FOCUSED_COMPOSER_CLEARED=" + [bool]$focusedComposerCleared)
+    $submissionActionOk = $enterOk -or $fallbackOk -or $sendClickUsed
+    Write-Output ("ARENA_SUBMIT_ANY_ACTION_OK=" + [bool]$submissionActionOk)
+    $sent = $submissionActionOk -and -not $probeRemainsAfterSubmit -and ($messageVisible -or $placeholderReturned -or $focusedComposerCleared)
 } else {
+    if (-not $textConfirmed) { Write-Output 'ARENA_SUBMIT_BLOCKED_TYPING_UNVERIFIED' }
     if (-not $submitFocusSafe) { Write-Output 'ARENA_SUBMIT_BLOCKED_UNSAFE_FOCUS' }
+    if (-not $submitEvidenceLengthOk) { Write-Output 'ARENA_SUBMIT_BLOCKED_SHORT_UIA_EVIDENCE' }
+    if (-not $submitProbePresent) { Write-Output 'ARENA_SUBMIT_BLOCKED_MISSING_CURRENT_PROBE' }
     Write-Output 'ARENA_SUBMIT_BLOCKED_UNVERIFIED'
 }
 
 `;
-
 const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پیش و پس از تایپ، خروج فوکوس به omnibox را رد می‌کند.
     Save-StepShot '02-composer-ready'
     for ($try = 1; $try -le 3 -and -not $textConfirmed; $try++) {
         if ($composer) { try { $composer.SetFocus() } catch {} }
         Start-Sleep -Milliseconds 250
+        Show-ClickPulse $clickPoint.X $clickPoint.Y 'کادر پرامپت'
         Left-Click $clickPoint.X $clickPoint.Y
+        Write-Output ("ARENA_CLICK_COMPOSER=" + [int]$clickPoint.X + "," + [int]$clickPoint.Y)
         Start-Sleep -Milliseconds 400
         Save-StepShot ("03-try" + $try + "-focused")
 
@@ -559,11 +1135,37 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پی�
         $focusSafeAfterInput = ($null -ne $focused) -and -not (Test-Omnibox $focused $winRect.Top)
         $focusedText = Get-ElText $focused
         $composerText = Get-ElText $composer
-        $promptNormalized = ([string]$env:ARENA_PROMPT).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
-        $focusedNormalized = ([string]$focusedText).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
-        $composerNormalized = ([string]$composerText).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
-        $okFocused = $focusSafeAfterInput -and $focusedText -and $focusedNormalized.Contains($promptNormalized)
-        $okComposer = $focusSafeAfterInput -and $composerText -and $composerNormalized.Contains($promptNormalized)
+        # contenteditable ممکن است line-break و ZWNJ را در UIA متفاوت برگرداند و برای
+        # متن بلند فقط یک پنجره ۱۰۰۰ نویسه‌ای (نه الزاماً ابتدای متن) بدهد. بنابراین
+        # متن را canonical و چند probe از ابتدا/میانه/انتها را length-aware بررسی می‌کنیم.
+        $promptCanonical = (([string]$env:ARENA_PROMPT -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\\s+', ' ').Trim()
+        $focusedCanonical = (([string]$focusedText -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\\s+', ' ').Trim()
+        $composerCanonical = (([string]$composerText -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\\s+', ' ').Trim()
+        $probeLength = [Math]::Min(32, $promptCanonical.Length)
+        $promptProbes = @()
+        if ($probeLength -gt 0) {
+            $maxOffset = [Math]::Max(0, $promptCanonical.Length - $probeLength)
+            $offsets = @(0, [int]($maxOffset / 3), [int](2 * $maxOffset / 3), $maxOffset) | Select-Object -Unique
+            foreach ($offset in $offsets) { $promptProbes += $promptCanonical.Substring($offset, $probeLength) }
+        }
+        $focusedProbeHit = $false
+        $composerProbeHit = $false
+        foreach ($probe in $promptProbes) {
+            if ($focusedCanonical.Contains($probe)) { $focusedProbeHit = $true }
+            if ($composerCanonical.Contains($probe)) { $composerProbeHit = $true }
+        }
+        # Chrome/Arena ممکن است برای contenteditable بلند فقط حدود ۶۵ نویسه از پنجره
+        # قابل‌مشاهده را در UIA برگرداند. probe دقیق ۳۲ نویسه‌ای، ورودی موفق و فوکوس
+        # امن شواهد مستقل‌اند؛ آستانه باید پایین‌تر از پنجره واقعی UIA بماند.
+        $minimumEvidenceLength = [Math]::Min(64, [Math]::Max(24, [int]($promptCanonical.Length * 0.02)))
+        $okFocused = $focusSafeAfterInput -and $inputOk -and $focusedProbeHit -and ($focusedCanonical.Length -ge $minimumEvidenceLength)
+        $okComposer = $focusSafeAfterInput -and $inputOk -and $composerProbeHit -and ($composerCanonical.Length -ge $minimumEvidenceLength)
+        Write-Output ("ARENA_VERIFY_EXPECTED_LENGTH=" + $promptCanonical.Length)
+        Write-Output ("ARENA_VERIFY_MINIMUM_LENGTH=" + $minimumEvidenceLength)
+        Write-Output ("ARENA_VERIFY_FOCUSED_LENGTH=" + $focusedCanonical.Length)
+        Write-Output ("ARENA_VERIFY_COMPOSER_LENGTH=" + $composerCanonical.Length)
+        Write-Output ("ARENA_VERIFY_FOCUSED_PROBE=" + [bool]$focusedProbeHit)
+        Write-Output ("ARENA_VERIFY_COMPOSER_PROBE=" + [bool]$composerProbeHit)
 
         # تأیید دوم: Select All + Copy فقط با فوکوس امن و sentinel مستقل.
         $okCopied = $false
@@ -576,8 +1178,14 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پی�
                 [void][WinApi]::SendChord(0x11, 0x43)
                 Start-Sleep -Milliseconds 400
                 $copiedText = [string](Get-Clipboard -Raw)
-                $copiedNormalized = $copiedText.Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")
-                $okCopied = ($copiedNormalized -eq $promptNormalized)
+                $copiedCanonical = (($copiedText -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\\s+', ' ').Trim()
+                $copiedProbeHit = $false
+                foreach ($probe in $promptProbes) {
+                    if ($copiedCanonical.Contains($probe)) { $copiedProbeHit = $true; break }
+                }
+                $okCopied = $inputOk -and $copiedProbeHit -and ($copiedCanonical.Length -ge $minimumEvidenceLength)
+                Write-Output ("ARENA_VERIFY_COPIED_LENGTH=" + $copiedCanonical.Length)
+                Write-Output ("ARENA_VERIFY_COPIED_PROBE=" + [bool]$copiedProbeHit)
                 [void][WinApi]::PressKey(0x23) # End؛ برداشتن selection بدون تغییر متن
             } catch {
                 Write-Output ("ARENA_COPY_VERIFY_ERROR=" + $_.Exception.Message)
@@ -601,6 +1209,87 @@ const VERIFIED_PASTE_LOOP = `    # Bridge 5: هر مسیر ورود متن پی�
 
 /** Bridgeهای قبلی و فایل پایه را به موتور امن ورود متن و تصویربرداری Bridge 5 ارتقا می‌دهد. */
 function hardenArenaTyping(source: string): string {
+  // Bridge 15: contenteditable در اجرای واقعی برای پرامپت ۲۴۵۹ نویسه‌ای فقط ۶۵ نویسه
+  // از انتهای قابل‌مشاهده را به UIA داد. probe یکتای دقیق ۳۲ نویسه‌ای، فوکوس امن و
+  // موفقیت API همچنان اجباری‌اند؛ آستانه صرفاً با پنجره محدود UIA هماهنگ می‌شود.
+  const boundedEvidenceThreshold = "        $minimumEvidenceLength = [Math]::Min(64, [Math]::Max(24, [int]($promptCanonical.Length * 0.02)))\n";
+  const evidenceThresholdPattern = /^[ \t]*\$minimumEvidenceLength\s*=.*(?:\r?\n|$)/m;
+  if (evidenceThresholdPattern.test(source)) {
+    source = source.replace(evidenceThresholdPattern, boundedEvidenceThreshold);
+  }
+
+  // وجود نام marker در مترجم گزارش Bridge به معنی وجود verifier در PowerShell نیست؛
+  // فقط خط واقعی Write-Output داخل اسکریپت تایپ، نشانه ارتقای verifier محسوب می‌شود.
+  const focusedProbeOutputMarker = `Write-Output ("ARENA_VERIFY_FOCUSED_PROBE="`;
+
+  // Bridge 7 پرامپت‌های بلند را با متن UIA محدودشده به ۱۰۰۰ نویسه به‌طور کامل
+  // مقایسه می‌کرد و با وجود حضور واقعی متن false-negative می‌ساخت.
+  if (!source.includes("$promptProbe =") && !source.includes(focusedProbeOutputMarker)) {
+    const normalizedAnchor = `        $promptNormalized = ([string]$env:ARENA_PROMPT).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")\n`;
+    const probeBlock = `${normalizedAnchor}        $probeLength = [Math]::Min(240, $promptNormalized.Length)\n        $promptProbe = if ($probeLength -gt 0) { $promptNormalized.Substring(0, $probeLength) } else { "" }\n`;
+    const oldFocused = `        $okFocused = $focusSafeAfterInput -and $focusedText -and $focusedNormalized.Contains($promptNormalized)\n`;
+    const newFocused = `        $okFocused = $focusSafeAfterInput -and $inputOk -and $focusedText -and $promptProbe -and $focusedNormalized.Contains($promptProbe)\n`;
+    const oldComposer = `        $okComposer = $focusSafeAfterInput -and $composerText -and $composerNormalized.Contains($promptNormalized)\n`;
+    const newComposer = `        $okComposer = $focusSafeAfterInput -and $inputOk -and $composerText -and $promptProbe -and $composerNormalized.Contains($promptProbe)\n`;
+    const oldCopied = `                $okCopied = ($copiedNormalized -eq $promptNormalized)\n`;
+    const newCopied = `                $okCopied = $inputOk -and $promptProbe -and $copiedNormalized.Contains($promptProbe)\n`;
+    if (!source.includes(normalizedAnchor) || !source.includes(oldFocused) || !source.includes(oldComposer) || !source.includes(oldCopied)) {
+      throw new AppError("بخش تأیید پرامپت بلند Arena برای ارتقای Bridge 8 پیدا نشد.", {
+        status: 409,
+        code: "arena_long_prompt_verifier_upgrade_failed",
+      });
+    }
+    source = source
+      .replace(normalizedAnchor, probeBlock)
+      .replace(oldFocused, newFocused)
+      .replace(oldComposer, newComposer)
+      .replace(oldCopied, newCopied);
+  }
+
+  if (!source.includes(focusedProbeOutputMarker)) {
+    const stableStart = VERIFIED_PASTE_LOOP.indexOf("        # contenteditable ممکن است");
+    const stableEnd = VERIFIED_PASTE_LOOP.indexOf("\n\n        # تأیید دوم:", stableStart);
+    const legacyStartAnchor = `        $promptNormalized = ([string]$env:ARENA_PROMPT).Replace("\`r\`n", "\`n").TrimEnd([char[]]"\`r\`n")`;
+    const legacyStart = source.indexOf(legacyStartAnchor);
+    const legacyEnd = source.indexOf("\n\n        # تأیید دوم:", legacyStart);
+    if (stableStart < 0 || stableEnd < 0 || legacyStart < 0 || legacyEnd < 0) {
+      throw new AppError("بخش تأیید پایدار پرامپت چندخطی Arena پیدا نشد.", {
+        status: 409,
+        code: "arena_multiline_verifier_upgrade_failed",
+      });
+    }
+    source = source.slice(0, legacyStart)
+      + VERIFIED_PASTE_LOOP.slice(stableStart, stableEnd)
+      + source.slice(legacyEnd);
+
+    const stableCopyStart = VERIFIED_PASTE_LOOP.indexOf("                $copiedText = [string](Get-Clipboard -Raw)");
+    const stableCopyEnd = VERIFIED_PASTE_LOOP.indexOf("                [void][WinApi]::PressKey(0x23)", stableCopyStart);
+    const legacyCopyStart = source.indexOf("                $copiedText = [string](Get-Clipboard -Raw)");
+    const legacyCopyEnd = source.indexOf("                [void][WinApi]::PressKey(0x23)", legacyCopyStart);
+    if (stableCopyStart < 0 || stableCopyEnd < 0 || legacyCopyStart < 0 || legacyCopyEnd < 0) {
+      throw new AppError("بخش تأیید Clipboard پرامپت چندخطی پیدا نشد.", {
+        status: 409,
+        code: "arena_multiline_clipboard_upgrade_failed",
+      });
+    }
+    source = source.slice(0, legacyCopyStart)
+      + VERIFIED_PASTE_LOOP.slice(stableCopyStart, stableCopyEnd)
+      + source.slice(legacyCopyEnd);
+  }
+
+  // فایل فعال D1 ممکن است markerهای Bridge 11/12 را داشته باشد اما بلوک verifier آن
+  // با فاصله‌گذاری یا آستانه‌ای متفاوت ذخیره شده باشد. به‌جای اتکا به تطبیق یک خط،
+  // کل بلوک canonical/probe را بین دو anchor پایدار با نسخه Bridge 13 جایگزین می‌کنیم.
+  const latestVerifierStart = VERIFIED_PASTE_LOOP.indexOf("        # contenteditable ممکن است");
+  const latestVerifierEnd = VERIFIED_PASTE_LOOP.indexOf("\n\n        # تأیید دوم:", latestVerifierStart);
+  const sourceVerifierStart = source.indexOf("        # contenteditable ممکن است");
+  const sourceVerifierEnd = source.indexOf("\n\n        # تأیید دوم:", sourceVerifierStart);
+  if (latestVerifierStart >= 0 && latestVerifierEnd >= 0 && sourceVerifierStart >= 0 && sourceVerifierEnd >= 0) {
+    source = source.slice(0, sourceVerifierStart)
+      + VERIFIED_PASTE_LOOP.slice(latestVerifierStart, latestVerifierEnd)
+      + source.slice(sourceVerifierEnd);
+  }
+
   if (!source.includes("import urllib.error\n")) {
     if (!source.includes("import urllib.request\n")) {
       throw new AppError("import شبکه Arena برای افزودن پایش اتصال پیدا نشد.", {
@@ -687,6 +1376,23 @@ function hardenArenaTyping(source: string): string {
     }
     source = `${source.slice(0, start)}${VERIFIED_PASTE_LOOP}${source.slice(end)}`;
   }
+  if (!source.includes(boundedEvidenceThreshold)) {
+    throw new AppError("آستانه تأیید پرامپت بلند Arena به Bridge 15 ارتقا نیافت.", {
+      status: 409,
+      code: "arena_bounded_evidence_upgrade_failed",
+    });
+  }
+  const expectedLengthOutput = `        Write-Output ("ARENA_VERIFY_EXPECTED_LENGTH=" + $promptCanonical.Length)\n`;
+  const minimumLengthOutput = `        Write-Output ("ARENA_VERIFY_MINIMUM_LENGTH=" + $minimumEvidenceLength)\n`;
+  if (!source.includes(minimumLengthOutput)) {
+    if (!source.includes(expectedLengthOutput)) {
+      throw new AppError("محل ثبت آستانه تأیید UIA در Arena پیدا نشد.", {
+        status: 409,
+        code: "arena_evidence_diagnostic_upgrade_failed",
+      });
+    }
+    source = source.replace(expectedLengthOutput, expectedLengthOutput + minimumLengthOutput);
+  }
 
   if (!source.includes("Save-StepShot '01-browser-foreground'")) {
     source = source.replace(
@@ -694,29 +1400,30 @@ function hardenArenaTyping(source: string): string {
       "    Write-Output 'ARENA_BROWSER_FG'\n    Save-StepShot '01-browser-foreground'\n",
     );
   }
-  if (!source.includes("Bridge 5: Enter تنها زمانی مجاز است")) {
-    const submitStartAnchors = [
-      "$sent = $false\n\nif ($textConfirmed) {",
-      "$sent = $false\nif ($textConfirmed) {",
-    ];
-    const submitEndAnchor = "\nif ($sent) { Write-Output 'ARENA_SENT_VERIFIED' }";
-    const submitStart = submitStartAnchors
-      .map((anchor) => source.indexOf(anchor))
-      .find((index) => index >= 0) ?? -1;
-    const submitEnd = source.indexOf(submitEndAnchor, submitStart);
-    if (submitStart < 0 || submitEnd < 0) {
-      throw new AppError("بخش ارسال و تأیید نهایی Arena برای ارتقای Bridge 5 پیدا نشد.", {
-        status: 409,
-        code: "arena_submit_upgrade_failed",
-      });
-    }
-    source = `${source.slice(0, submitStart)}${VERIFIED_SUBMIT_BLOCK}${source.slice(submitEnd + 1)}`;
+  // Bridge 18: بلوک ارسال در همه نسخه‌های قبلی بدون اتکا به متن comment تعویض می‌شود.
+  // این کار نسخه فعال D1 را نیز که Bridge 17 در marker و Bridge 5 در بدنه دارد واقعاً ارتقا می‌دهد.
+  const submitEndAnchor = "\nif ($sent) { Write-Output 'ARENA_SENT_VERIFIED' }";
+  const submitStart = source.indexOf("$sent = $false");
+  const submitEnd = source.indexOf(submitEndAnchor, submitStart);
+  if (submitStart < 0 || submitEnd < 0) {
+    throw new AppError("بخش ارسال و تأیید نهایی Arena برای ارتقای Bridge 18 پیدا نشد.", {
+      status: 409,
+      code: "arena_submit_upgrade_failed",
+    });
   }
-  if (!source.includes("Save-StepShot '05-after-submit'")) {
-    source = source.replace(
-      "if ($sent) { Write-Output 'ARENA_SENT_VERIFIED' } else { Write-Output 'ARENA_SEND_UNCERTAIN' }",
-      "Save-StepShot '05-after-submit'\nif ($sent) { Write-Output 'ARENA_SENT_VERIFIED' } else { Write-Output 'ARENA_SEND_UNCERTAIN' }",
-    );
+  source = `${source.slice(0, submitStart)}${VERIFIED_SUBMIT_BLOCK}${source.slice(submitEnd + 1)}`;
+  const plainSubmitResult = "if ($sent) { Write-Output 'ARENA_SENT_VERIFIED' } else { Write-Output 'ARENA_SEND_UNCERTAIN' }";
+  const legacySubmitShot = `Save-StepShot '05-after-submit'\n${plainSubmitResult}`;
+  const previousSubmitShots = "if ($sent) { Save-StepShot '05-after-submit'; Write-Output 'ARENA_SENT_VERIFIED' } else { Save-StepShot '05-submit-blocked'; Write-Output 'ARENA_SEND_UNCERTAIN' }";
+  const accurateSubmitShots = "if ($sent) { Save-StepShot '05-after-submit'; Write-Output 'ARENA_SENT_VERIFIED' } else { Save-StepShot '05-submit-unconfirmed'; Write-Output 'ARENA_SEND_UNCERTAIN' }";
+  if (source.includes(legacySubmitShot)) source = source.replace(legacySubmitShot, accurateSubmitShots);
+  else if (source.includes(previousSubmitShots)) source = source.replace(previousSubmitShots, accurateSubmitShots);
+  else if (source.includes(plainSubmitResult)) source = source.replace(plainSubmitResult, accurateSubmitShots);
+  if (!source.includes("Save-StepShot '05-submit-unconfirmed'")) {
+    throw new AppError("بخش تصویربرداری نتیجه ارسال Arena قابل ارتقا نیست.", {
+      status: 409,
+      code: "arena_submit_evidence_upgrade_failed",
+    });
   }
 
   const directOpenBlock = `    # ۱) باز کردن لینک
@@ -777,7 +1484,7 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
     time.sleep(AFTER_ENTER_WAIT)
 `;
     const completionWaitBlock = `    # ۶) پایان واقعی فقط با ظهور پنجره نتیجه Arena تأیید می‌شود.
-    print("ارسال انجام شد؛ منتظر پایان کار ایجنت همکار و پنجره نتیجه Arena هستیم...")
+    print("پرامپت ارسال شد؛ اکنون منتظر کامل‌شدن پاسخ و نمایش پنجره نتیجه Arena هستیم.")
     wait_for_arena_completion()
 `;
     if (!source.includes(fixedWaitBlock)) {
@@ -811,22 +1518,95 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
     diagnostic_dir = os.path.join(os.path.dirname(SCREENSHOT_DIR), "logs", "errors")
     os.makedirs(diagnostic_dir, exist_ok=True)
     trace_id = safe_id + "_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    output = run_hidden_powershell(
+    # UIA داخل PowerShell مسیر اصلی یافتن composer است؛ OCR امنیتی پیش‌تر یک‌بار اجرا شده
+    # و نباید با اجرای تکراری helper تایپ را ده‌ها ثانیه دیگر معطل کند.
+    ocr_point = None
+    output = run_hidden_powershell_file(
         TYPE_PS_SCRIPT,
         extra_env={
             "ARENA_PROMPT": PROMPT_TEXT,
             "ARENA_URL": URL,
             "ARENA_DIAGNOSTIC_DIR": diagnostic_dir,
             "ARENA_TRACE_ID": trace_id,
+            "ARENA_OCR_X": str(ocr_point["x"]) if ocr_point else "",
+            "ARENA_OCR_Y": str(ocr_point["y"]) if ocr_point else "",
+            "ARENA_SHOW_CLICK_HIGHLIGHTS": "1" if ARENA_SHOW_CLICK_HIGHLIGHTS else "0",
         },
         timeout=180,
     )
     markers = [line.strip() for line in output.splitlines() if line.strip()]
-    if markers:
-        print("گزارش فنی Arena: " + " | ".join(markers))
+    technical_warnings = []
+    for marker in markers:
+        if marker.startswith("ARENA_STEP_SCREENSHOT="):
+            step_path = marker.split("=", 1)[1]
+            step_name = os.path.splitext(os.path.basename(step_path))[0].rsplit("_", 1)[-1]
+            register_step_artifact(step_path, "prompt-" + step_name)
+        description = describe_arena_action(marker)
+        if description:
+            print("اقدام Arena: " + description)
+        if "ERROR" in marker or "FAILED" in marker or "UNVERIFIED" in marker or "UNSAFE" in marker:
+            technical_warnings.append(marker)
+    if technical_warnings:
+        print("جزئیات فنی هشدار Arena: " + " | ".join(technical_warnings))
 `;
   if (source.includes(oldRunner)) source = source.replace(oldRunner, diagnosticRunner);
   else if (source.includes(currentRunner)) source = source.replace(currentRunner, diagnosticRunner);
+
+  // Bridge 17: TYPE_PS_SCRIPT دیگر نباید به‌عنوان آرگومان -Command وارد CreateProcess شود؛
+  // طول Bridge 16 از سقف command line ویندوز عبور کرد و WinError 206 ساخت.
+  const commandLineTypeTransport = `    output = run_hidden_powershell(\n        TYPE_PS_SCRIPT,\n        extra_env={`;
+  const fileTypeTransport = `    output = run_hidden_powershell_file(\n        TYPE_PS_SCRIPT,\n        extra_env={`;
+  if (source.includes(commandLineTypeTransport)) {
+    source = source.replace(commandLineTypeTransport, fileTypeTransport);
+  }
+  if (!source.includes(fileTypeTransport)) {
+    throw new AppError("مسیر اجرای فایل PowerShell برای عبور از محدودیت طول Windows فعال نشد.", {
+      status: 409,
+      code: "arena_powershell_file_transport_upgrade_failed",
+    });
+  }
+
+  if (!source.includes('register_step_artifact(step_path, "prompt-" + step_name)')) {
+    const markersAnchor = `    markers = [line.strip() for line in output.splitlines() if line.strip()]\n`;
+    const artifactMarkers = `${markersAnchor}    for marker in markers:\n        if marker.startswith("ARENA_STEP_SCREENSHOT="):\n            step_path = marker.split("=", 1)[1]\n            step_name = os.path.splitext(os.path.basename(step_path))[0].rsplit("_", 1)[-1]\n            register_step_artifact(step_path, "prompt-" + step_name)\n`;
+    if (!source.includes(markersAnchor)) {
+      throw new AppError("خروجی اسکرین‌شات‌های مرحله‌ای Arena برای ثبت artifact پیدا نشد.", {
+        status: 409,
+        code: "arena_artifact_marker_upgrade_failed",
+      });
+    }
+    source = source.replace(markersAnchor, artifactMarkers);
+  }
+
+  if (!source.includes("technical_warnings = []")) {
+    const reportStart = source.indexOf("    for marker in markers:\n", source.indexOf("\ndef type_and_submit():"));
+    const reportEndAnchor = `    if markers:\n        print("گزارش فنی Arena: " + " | ".join(markers))\n`;
+    const reportEnd = source.indexOf(reportEndAnchor, reportStart);
+    const readableReportStart = diagnosticRunner.indexOf("    technical_warnings = []\n");
+    const readableReportEnd = diagnosticRunner.length;
+    if (reportStart < 0 || reportEnd < 0 || readableReportStart < 0) {
+      throw new AppError("بخش گزارش اقدامات Arena برای ارتقای متن فارسی پیدا نشد.", {
+        status: 409,
+        code: "arena_action_report_upgrade_failed",
+      });
+    }
+    source = source.slice(0, reportStart)
+      + diagnosticRunner.slice(readableReportStart, readableReportEnd)
+      + source.slice(reportEnd + reportEndAnchor.length);
+  }
+
+  const typeRunnerStart = source.indexOf("\ndef type_and_submit():");
+  const typeRunnerTrace = source.indexOf(`    trace_id = safe_id + "_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")\n`, typeRunnerStart);
+  const typeRunnerOutput = source.indexOf("    output = run_hidden_powershell(\n", typeRunnerTrace);
+  if (typeRunnerStart >= 0 && typeRunnerTrace >= 0 && typeRunnerOutput > typeRunnerTrace) {
+    const traceLineEnd = source.indexOf("\n", typeRunnerTrace) + 1;
+    const preOutputBlock = source.slice(traceLineEnd, typeRunnerOutput);
+    if (preOutputBlock.includes("find_text_with_ocr([COMPOSER_PLACEHOLDER]")) {
+      source = source.slice(0, traceLineEnd)
+        + "    # OCR امنیتی پیش‌تر اجرا شده؛ UIA و focus guard مسیر اصلی composer هستند.\n    ocr_point = None\n"
+        + source.slice(typeRunnerOutput);
+    }
+  }
 
   if (!source.includes('"ARENA_OCR_X"')) {
     const traceAnchor = `    trace_id = safe_id + "_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")\n`;
@@ -841,12 +1621,30 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
     }
     source = source.replace(traceAnchor, traceWithOcr).replace(envAnchor, envWithOcr);
   }
+  if (!source.includes('"ARENA_SHOW_CLICK_HIGHLIGHTS"')) {
+    const clickEnvAnchor = `            "ARENA_OCR_Y": str(ocr_point["y"]) if ocr_point else "",\n`;
+    if (!source.includes(clickEnvAnchor)) {
+      throw new AppError("محل افزودن تنظیم نمایش کلیک Arena پیدا نشد.", {
+        status: 409,
+        code: "arena_click_highlight_upgrade_failed",
+      });
+    }
+    source = source.replace(
+      clickEnvAnchor,
+      `${clickEnvAnchor}            "ARENA_SHOW_CLICK_HIGHLIGHTS": "1" if ARENA_SHOW_CLICK_HIGHLIGHTS else "0",\n`,
+    );
+  }
   if (!source.includes("ARENA_DIAGNOSTIC_DIR")) {
     throw new AppError("تابع اجرای PowerShell برای ثبت تصاویر مرحله‌ای قابل ارتقا نیست.", {
       status: 409,
       code: "arena_runner_upgrade_failed",
     });
   }
+
+  source = source.replace(
+    "    print(\"ارسال انجام شد؛ منتظر پایان کار ایجنت همکار و پنجره نتیجه Arena هستیم...\")\n",
+    "    print(\"پرامپت ارسال شد؛ اکنون منتظر کامل‌شدن پاسخ و نمایش پنجره نتیجه Arena هستیم.\")\n",
+  );
 
   // گزارش فنی باید حتی پیش از raise شدن خطای تأیید در لاگ مادر دیده شود.
   source = source.replace(
@@ -860,7 +1658,7 @@ $candidates = $dialogWindow.FindAll([System.Windows.Automation.TreeScope]::Desce
 }
 
 
-/** ارتقای درجا از Bridge 1 تا 6؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
+/** ارتقای درجا از Bridge 1 تا 17؛ پرامپت و بدنه‌ی اصلی Arena دست‌نخورده می‌مانند. */
 function upgradeLegacyBridge(source: string, oldMarker: string): string {
   const bridgeStart = source.indexOf(oldMarker);
   const openSiteStart = source.indexOf("\ndef open_site():", bridgeStart);
@@ -903,6 +1701,17 @@ export function buildArenaJobFile(options: {
     return source.endsWith("\n") ? source : `${source}\n`;
   }
   if (
+    source.includes(BRIDGE_17_MARKER) ||
+    source.includes(BRIDGE_16_MARKER) ||
+    source.includes(BRIDGE_15_MARKER) ||
+    source.includes(BRIDGE_14_MARKER) ||
+    source.includes(BRIDGE_13_MARKER) ||
+    source.includes(BRIDGE_12_MARKER) ||
+    source.includes(BRIDGE_11_MARKER) ||
+    source.includes(BRIDGE_10_MARKER) ||
+    source.includes(BRIDGE_9_MARKER) ||
+    source.includes(BRIDGE_8_MARKER) ||
+    source.includes(BRIDGE_7_MARKER) ||
     source.includes(BRIDGE_6_MARKER) ||
     source.includes(BRIDGE_5_MARKER) ||
     source.includes(BRIDGE_4_MARKER) ||
@@ -910,9 +1719,31 @@ export function buildArenaJobFile(options: {
     source.includes(BRIDGE_2_MARKER) ||
     source.includes(LEGACY_BRIDGE_MARKER)
   ) {
-    const oldMarker = source.includes(BRIDGE_6_MARKER)
-      ? BRIDGE_6_MARKER
-      : source.includes(BRIDGE_5_MARKER)
+    const oldMarker = source.includes(BRIDGE_17_MARKER)
+      ? BRIDGE_17_MARKER
+      : source.includes(BRIDGE_16_MARKER)
+        ? BRIDGE_16_MARKER
+        : source.includes(BRIDGE_15_MARKER)
+        ? BRIDGE_15_MARKER
+        : source.includes(BRIDGE_14_MARKER)
+        ? BRIDGE_14_MARKER
+        : source.includes(BRIDGE_13_MARKER)
+        ? BRIDGE_13_MARKER
+        : source.includes(BRIDGE_12_MARKER)
+        ? BRIDGE_12_MARKER
+        : source.includes(BRIDGE_11_MARKER)
+        ? BRIDGE_11_MARKER
+        : source.includes(BRIDGE_10_MARKER)
+        ? BRIDGE_10_MARKER
+        : source.includes(BRIDGE_9_MARKER)
+        ? BRIDGE_9_MARKER
+        : source.includes(BRIDGE_8_MARKER)
+        ? BRIDGE_8_MARKER
+        : source.includes(BRIDGE_7_MARKER)
+        ? BRIDGE_7_MARKER
+        : source.includes(BRIDGE_6_MARKER)
+        ? BRIDGE_6_MARKER
+        : source.includes(BRIDGE_5_MARKER)
         ? BRIDGE_5_MARKER
         : source.includes(BRIDGE_4_MARKER)
           ? BRIDGE_4_MARKER
@@ -931,7 +1762,7 @@ export function buildArenaJobFile(options: {
     throw new AppError("نسخه‌ی Arena Bridge شناخته‌شده نیست.", {
       status: 409,
       code: "arena_bridge_upgrade_required",
-      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 7 به‌صورت خودکار پشتیبانی می‌شوند.",
+      hint: "نسخه‌ی job_arena.py را بررسی کنید؛ Bridgeهای 1 تا 18 به‌صورت خودکار پشتیبانی می‌شوند.",
     });
   }
 
