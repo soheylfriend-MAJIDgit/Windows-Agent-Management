@@ -589,6 +589,27 @@ export async function createManagedCommand(input: {
   return mapCommand((await commandRow(id))!);
 }
 
+async function finalizePreProcessCancellation(row: CommandRow): Promise<CommandRow> {
+  if (!row.cancel_requested_at || !(["pending", "claimed", "waiting_confirmation"] as CommandStatus[]).includes(row.status)) return row;
+  const now = new Date().toISOString();
+  const reason = row.cancel_reason ?? "توقف پیش از شروع Process ویندوز ثبت شد.";
+  const stopped = await dbRun(
+    `UPDATE commands SET status = 'cancelled', completed_at = ?, last_event_at = ?
+     WHERE id = ? AND cancel_requested_at IS NOT NULL AND status IN ('pending', 'claimed', 'waiting_confirmation')`,
+    [now, now, row.id],
+  );
+  if (stopped.meta?.changes !== 0) {
+    await dbRun(
+      `INSERT INTO command_events (command_id, seq, stage, level, message, data, created_at)
+       VALUES (?, (SELECT COALESCE(MAX(seq), 1000000) + 1 FROM command_events WHERE command_id = ?),
+               'cancelled', 'warning', ?, '{}', ?)`,
+      [row.id, row.id, `فرمان پیش از شروع Process ویندوز متوقف شد: ${reason}`, now],
+    );
+    if (row.prompt_id) await dbRun("UPDATE prompts SET status = 'cancelled', error = ? WHERE id = ?", [reason, row.prompt_id]);
+  }
+  return (await commandRow(row.id))!;
+}
+
 async function applyAutomaticStop(row: CommandRow): Promise<CommandRow> {
   if (!isActive(row.status) || row.auto_stop_on_anomaly !== 1 || row.cancel_requested_at) return row;
   const nowMs = Date.now();
@@ -619,6 +640,7 @@ export async function getCommandDetail(idValue: unknown, enforceOwnerKeyId?: str
   if (!row || (enforceOwnerKeyId && row.agent_key_id !== enforceOwnerKeyId)) {
     throw new AppError("فرمان پیدا نشد.", { status: 404, code: "command_not_found" });
   }
+  row = await finalizePreProcessCancellation(row);
   row = await applyAutomaticStop(row);
   const [eventRows, artifactRows] = await Promise.all([
     dbAll<CommandEventRow>("SELECT * FROM command_events WHERE command_id = ? ORDER BY created_at ASC, id ASC", [id]),
@@ -684,9 +706,10 @@ export async function requestCommandCancellation(idValue: unknown, reasonValue?:
   if (!isActive(row.status)) return getCommandDetail(id);
   const reason = text(reasonValue, "علت توقف", 300, false) ?? "توقف دستی از سایت ایجنت مدیریت";
   const now = new Date().toISOString();
-  if (row.status === "pending") {
+  if ((["pending", "claimed", "waiting_confirmation"] as CommandStatus[]).includes(row.status)) {
     const stopped = await dbRun(
-      "UPDATE commands SET status = 'cancelled', cancel_requested_at = ?, cancel_reason = ?, completed_at = ?, last_event_at = ? WHERE id = ? AND status = 'pending'",
+      `UPDATE commands SET status = 'cancelled', cancel_requested_at = ?, cancel_reason = ?, completed_at = ?, last_event_at = ?
+       WHERE id = ? AND status IN ('pending', 'claimed', 'waiting_confirmation')`,
       [now, reason, now, now, id],
     );
     if (stopped.meta?.changes !== 0) {

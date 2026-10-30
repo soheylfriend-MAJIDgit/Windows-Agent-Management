@@ -454,7 +454,7 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
                 <button className="button secondary" type="button" disabled={busy} onClick={() => setConfirmStop(false)}>انصراف</button>
               </div>
             ) : <button className="button danger" type="button" onClick={() => setConfirmStop(true)}>توقف اجرای ویندوز</button>
-          ) : command?.cancelRequestedAt && !isFinal ? <span className="command-cancel-pending">درخواست توقف ثبت شد؛ منتظر تأیید Windows Agent…</span> : null}
+          ) : command?.cancelRequestedAt && !isFinal ? <span className="command-cancel-pending">{command.status === "running" ? "توقف برای Process و فرزندانش ارسال شد؛ تا ثبت cancelled از Windows Agent وضعیت نهایی نمی‌شود. اگر گزارش‌ها متوقف مانده‌اند، توقف محلی Agent یا راه‌اندازی دوباره برنامه ویندوز لازم است." : "فرمان هنوز Process ویندوز را شروع نکرده است و باید فوراً به وضعیت متوقف‌شده نهایی شود…"}</span> : null}
           <button className="button secondary" type="button" disabled={!detail} onClick={downloadEvidence}>دانلود گزارش شواهد</button>
           <button className="button secondary" type="button" onClick={onClose}>{isFinal ? "بستن" : "بستن و ادامه در پس‌زمینه"}</button>
         </footer>
