@@ -386,7 +386,7 @@ if read_state().get("chainStatus") != "continue":
     write_state(paste="skipped", message="decision.action اجازه ادامه نمی‌دهد؛ هیچ Paste انجام نمی‌شود.")
     print("ARENA_PASTE_SKIPPED: decision does not allow continuation", flush=True)
     raise SystemExit(0)
-write_state(paste="running", message="در حال Paste یک‌باره با Clipboard و کلیدهای واقعی Windows…")
+write_state(paste="running", message="در حال یافتن امن composer با UI Automation و Paste دقیقاً یک‌باره…")
 
 class RECT(ctypes.Structure):
     _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG), ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
@@ -405,27 +405,202 @@ def find_chrome_window():
                 if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
                     area = max(0, rect.right-rect.left) * max(0, rect.bottom-rect.top)
                     if area > 100000:
-                        windows.append((area, hwnd, rect))
+                        windows.append((area, hwnd, rect, title.value))
         return True
     user32.EnumWindows(callback_type(callback), 0)
-    return max(windows, default=None, key=lambda item: item[0])
+    # اگر چند پنجره Chrome باز باشد، پنجره‌ای که عنوان Arena دارد بر پنجره صرفاً بزرگ‌تر مقدم است.
+    return max(windows, default=None, key=lambda item: (1 if "arena" in item[3].lower() else 0, item[0]))
 
-def key(vk, down):
-    ctypes.windll.user32.keybd_event(vk, 0, 0 if down else 2, 0)
-def chord(modifier, key_code):
-    key(modifier, True); key(key_code, True); key(key_code, False); key(modifier, False)
-def read_clipboard():
-    verify_path = os.path.join(ROOT, "clipboard-verify.txt")
-    env = os.environ.copy(); env["VERIFY_PATH"] = verify_path
-    command = "$v=Get-Clipboard -Raw; [IO.File]::WriteAllText($env:VERIFY_PATH,[string]$v,[Text.UTF8Encoding]::new($false))"
-    result = subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", command], env=env, text=True, capture_output=True, timeout=15)
-    if result.returncode:
-        raise RuntimeError((result.stderr or result.stdout).strip())
-    with open(verify_path, "r", encoding="utf-8") as handle:
-        return handle.read()
+UIA_PASTE_SCRIPT = r'''$ErrorActionPreference = "Stop"
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class Stage5Native {
+    [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public UIntPtr dwExtraInfo; }
+    [StructLayout(LayoutKind.Explicit)] public struct INPUTUNION { [FieldOffset(0)] public KEYBDINPUT ki; }
+    [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public INPUTUNION U; }
+    [DllImport("user32.dll", SetLastError=true)] static extern uint SendInput(uint count, INPUT[] inputs, int size);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+    static INPUT Key(ushort vk, uint flags) { INPUT i = new INPUT(); i.type = 1; i.U.ki.wVk = vk; i.U.ki.dwFlags = flags; return i; }
+    public static bool Chord(ushort modifier, ushort key) {
+        INPUT[] values = new INPUT[] { Key(modifier, 0), Key(key, 0), Key(key, 2), Key(modifier, 2) };
+        return SendInput((uint)values.Length, values, Marshal.SizeOf(typeof(INPUT))) == values.Length;
+    }
+    public static bool Press(ushort key) {
+        INPUT[] values = new INPUT[] { Key(key, 0), Key(key, 2) };
+        return SendInput((uint)values.Length, values, Marshal.SizeOf(typeof(INPUT))) == values.Length;
+    }
+    public static void Click(int x, int y) { SetCursorPos(x, y); mouse_event(2, 0, 0, 0, UIntPtr.Zero); mouse_event(4, 0, 0, 0, UIntPtr.Zero); }
+}
+"@
 
-def normalized(value):
-    return value.replace("\r\n", "\n").replace("\r", "\n")
+function Canonical([string]$value) {
+    return (([string]$value -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\s+', ' ').Trim()
+}
+function Element-Text($element) {
+    if (-not $element) { return "" }
+    try {
+        $pattern = $null
+        if ($element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+            $value = [string]$pattern.Current.Value
+            if ($value) { return $value }
+        }
+    } catch {}
+    try {
+        $pattern = $null
+        if ($element.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$pattern)) {
+            $value = [string]$pattern.DocumentRange.GetText(-1)
+            if ($value) { return $value }
+        }
+    } catch {}
+    try { return [string]$element.Current.Name } catch { return "" }
+}
+function Is-Omnibox($element, $windowTop) {
+    if (-not $element) { return $true }
+    try {
+        $rect = $element.Current.BoundingRectangle
+        $identity = (([string]$element.Current.Name) + " " + ([string]$element.Current.AutomationId)).ToLowerInvariant()
+        if ($identity -match 'address and search|omnibox|نوار نشانی|جستجو یا نشانی') { return $true }
+        return $rect.Bottom -le ($windowTop + 145)
+    } catch { return $true }
+}
+function Focus-Belongs-To($focused, $candidate, $x, $y) {
+    if (-not $focused -or -not $candidate) { return $false }
+    try {
+        $rect = $focused.Current.BoundingRectangle
+        if ($x -ge ($rect.Left - 20) -and $x -le ($rect.Right + 20) -and $y -ge ($rect.Top - 20) -and $y -le ($rect.Bottom + 20)) { return $true }
+    } catch {}
+    $node = $focused
+    for ($depth = 0; $depth -lt 8 -and $node; $depth++) {
+        try { if ([System.Windows.Automation.Automation]::Compare($node, $candidate)) { return $true } } catch {}
+        try { $node = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($node) } catch { $node = $null }
+    }
+    $node = $candidate
+    for ($depth = 0; $depth -lt 8 -and $node; $depth++) {
+        try { if ([System.Windows.Automation.Automation]::Compare($node, $focused)) { return $true } } catch {}
+        try { $node = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($node) } catch { $node = $null }
+    }
+    return $false
+}
+function Save-Shot([string]$path) {
+    $bitmap = $null; $graphics = $null
+    try {
+        $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+        $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bitmap.Size)
+        $bitmap.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    } finally {
+        if ($graphics) { $graphics.Dispose() }
+        if ($bitmap) { $bitmap.Dispose() }
+    }
+}
+
+$hwnd = [IntPtr]::new([long]$env:ARENA_HWND)
+[void][Stage5Native]::SetForegroundWindow($hwnd)
+Start-Sleep -Milliseconds 500
+if ([Stage5Native]::GetForegroundWindow() -ne $hwnd) { throw "Chrome could not be confirmed as the foreground window; paste was not attempted" }
+$window = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+if (-not $window) { throw "Chrome UI Automation root was not available; paste was not attempted" }
+$windowRect = $window.Current.BoundingRectangle
+$all = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+$candidates = @()
+foreach ($element in $all) {
+    try {
+        if (-not $element.Current.IsEnabled -or $element.Current.IsOffscreen -or -not $element.Current.IsKeyboardFocusable) { continue }
+        $rect = $element.Current.BoundingRectangle
+        if ($rect.Width -lt 220 -or $rect.Height -lt 28 -or $rect.Height -gt 420) { continue }
+        if ($rect.Left -lt ($windowRect.Left - 5) -or $rect.Right -gt ($windowRect.Right + 5)) { continue }
+        if ($rect.Top -lt ($windowRect.Top + 145) -or $rect.Bottom -gt ($windowRect.Bottom + 5)) { continue }
+        if ($rect.Top -lt ($windowRect.Top + ($windowRect.Height * 0.42))) { continue }
+        $type = [string]$element.Current.ControlType.ProgrammaticName
+        $name = [string]$element.Current.Name
+        $id = [string]$element.Current.AutomationId
+        $hasEditablePattern = $false
+        $pattern = $null
+        if ($element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { $hasEditablePattern = -not $pattern.Current.IsReadOnly }
+        $textPattern = $null
+        $hasTextPattern = $element.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$textPattern)
+        if ($type -notmatch 'ControlType\.(Edit|Document)$' -and -not $hasEditablePattern -and -not $hasTextPattern) { continue }
+        $identity = ($name + " " + $id).ToLowerInvariant()
+        if ($identity -match 'address and search|omnibox|نوار نشانی') { continue }
+        $score = 0.0
+        if ($type -match 'ControlType\.Edit$') { $score += 500 }
+        if ($hasEditablePattern) { $score += 220 }
+        if ($identity -match 'what would you like|message|prompt|ask|chat|پرامپت|پیام') { $score += 450 }
+        $score += 300 * (($rect.Bottom - $windowRect.Top) / [Math]::Max(1, $windowRect.Height))
+        $score += [Math]::Min(180, $rect.Width / 8)
+        $candidates += [pscustomobject]@{ Element=$element; Rect=$rect; Score=$score; Type=$type; Name=$name; Id=$id }
+    } catch {}
+}
+$candidates = @($candidates | Sort-Object Score -Descending)
+Write-Output ("ARENA_STAGE5_UIA_CANDIDATES=" + $candidates.Count)
+if ($candidates.Count -eq 0) { throw "No safe editable Arena composer candidate was found; paste was not attempted" }
+$chosen = $candidates[0]
+if ($candidates.Count -gt 1 -and [Math]::Abs($chosen.Score - $candidates[1].Score) -lt 12) {
+    throw "Composer detection was ambiguous; paste was not attempted"
+}
+$composer = $chosen.Element
+$composerRect = $chosen.Rect
+$x = [int]($composerRect.Left + ($composerRect.Width / 2))
+$y = [int]($composerRect.Top + ([Math]::Min($composerRect.Height - 10, [Math]::Max(14, $composerRect.Height / 2))))
+Write-Output ("ARENA_STAGE5_COMPOSER_TYPE=" + $chosen.Type)
+Write-Output ("ARENA_STAGE5_COMPOSER_RECT=" + [int]$composerRect.Left + "," + [int]$composerRect.Top + "," + [int]$composerRect.Width + "," + [int]$composerRect.Height)
+try { $composer.SetFocus() } catch {}
+Start-Sleep -Milliseconds 250
+[Stage5Native]::Click($x, $y)
+Start-Sleep -Milliseconds 450
+$focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+$focusSafe = (-not (Is-Omnibox $focused $windowRect.Top)) -and (Focus-Belongs-To $focused $composer $x $y)
+Write-Output ("ARENA_STAGE5_FOCUS_SAFE_BEFORE_PASTE=" + [bool]$focusSafe)
+if (-not $focusSafe) { throw "The focused element could not be proven to belong to the Arena composer; paste was not attempted" }
+
+Get-Content -Raw -LiteralPath $env:PROMPT_FILE | Set-Clipboard
+Start-Sleep -Milliseconds 250
+if (-not [Stage5Native]::Chord(0x11, 0x56)) { throw "The single native Ctrl+V operation failed" }
+Write-Output "ARENA_STAGE5_SINGLE_PASTE_SENT"
+Start-Sleep -Milliseconds 1200
+$focusedAfter = [System.Windows.Automation.AutomationElement]::FocusedElement
+$focusSafeAfter = (-not (Is-Omnibox $focusedAfter $windowRect.Top)) -and (Focus-Belongs-To $focusedAfter $composer $x $y)
+Write-Output ("ARENA_STAGE5_FOCUS_SAFE_AFTER_PASTE=" + [bool]$focusSafeAfter)
+if (-not $focusSafeAfter) { throw "Focus left the verified Arena composer after the single paste; paste was not repeated" }
+
+$prompt = [IO.File]::ReadAllText($env:PROMPT_FILE)
+$promptCanonical = Canonical $prompt
+$uiaCanonical = Canonical ((Element-Text $focusedAfter) + " " + (Element-Text $composer))
+$probeLength = [Math]::Min(32, $promptCanonical.Length)
+$probeHit = $false
+if ($probeLength -gt 0) {
+    $maxOffset = [Math]::Max(0, $promptCanonical.Length - $probeLength)
+    foreach ($offset in @(0, [int]($maxOffset / 3), [int](2 * $maxOffset / 3), $maxOffset) | Select-Object -Unique) {
+        if ($uiaCanonical.Contains($promptCanonical.Substring($offset, $probeLength))) { $probeHit = $true; break }
+    }
+}
+Write-Output ("ARENA_STAGE5_UIA_PROBE=" + [bool]$probeHit)
+
+$sentinel = "__ARENA_STAGE5_VERIFY_$([Guid]::NewGuid().ToString('N'))__"
+Set-Clipboard -Value $sentinel
+if (-not [Stage5Native]::Chord(0x11, 0x41)) { throw "Safe Select All verification failed after paste" }
+Start-Sleep -Milliseconds 120
+if (-not [Stage5Native]::Chord(0x11, 0x43)) { throw "Safe Copy verification failed after paste" }
+Start-Sleep -Milliseconds 450
+$copied = [string](Get-Clipboard -Raw)
+$expectedNormalized = $prompt -replace '\r', ''
+$copiedNormalized = $copied -replace '\r', ''
+$exactCopy = $copiedNormalized -eq $expectedNormalized
+Write-Output ("ARENA_STAGE5_EXACT_COPY=" + [bool]$exactCopy)
+if (-not $exactCopy) { throw "The composer selection did not exactly match the prompt after the single paste; paste was not repeated" }
+[void][Stage5Native]::Press(0x23)
+Save-Shot $env:SHOT_PATH
+Write-Output "ARENA_STAGE5_PASTE_VERIFIED"
+'''
 
 try:
     prompt_path = os.path.join(ROOT, "next-prompt.txt")
@@ -437,38 +612,27 @@ try:
     target = find_chrome_window()
     if not target:
         raise RuntimeError("پنجره واقعی Chrome پیدا نشد؛ هیچ Paste انجام نشد")
-    _, hwnd, rect = target
-    user32 = ctypes.windll.user32
-    user32.ShowWindow(hwnd, 9)
-    if not user32.SetForegroundWindow(hwnd):
-        raise RuntimeError("فعال‌کردن پنجره Chrome ممکن نشد؛ هیچ Paste انجام نشد")
-    # یک کلیک واقعی در محل composer پایین پنجره؛ در صورت عدم تطبیق، کلیک/Paste تکرار نمی‌شود.
-    x = rect.left + (rect.right - rect.left) // 2
-    y = rect.bottom - 135
-    user32.SetCursorPos(x, y)
-    user32.mouse_event(0x0002, 0, 0, 0, 0); user32.mouse_event(0x0004, 0, 0, 0, 0)
-    time.sleep(0.8)
-    env = os.environ.copy(); env["PROMPT_FILE"] = prompt_path
-    result = subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", "Get-Content -Raw -LiteralPath $env:PROMPT_FILE | Set-Clipboard"], env=env, text=True, capture_output=True, timeout=15)
-    if result.returncode:
-        raise RuntimeError((result.stderr or result.stdout).strip())
-    chord(0x11, 0x56)
-    time.sleep(1.2)
-    chord(0x11, 0x41); chord(0x11, 0x43)
-    time.sleep(0.5)
-    actual = read_clipboard()
-    if normalized(actual) != normalized(prompt):
-        write_state(paste="failed", message="Paste فقط یک بار انجام شد اما متن کنترل فعال با Prompt تطبیق ندارد؛ عملیات بدون تکرار متوقف شد.")
-        raise RuntimeError("native clipboard verification mismatch after the single allowed paste")
-    key(0x23, True); key(0x23, False)
-    write_state(paste="done", pasteVerified=True, message="Ctrl+V واقعی Windows دقیقاً یک بار انجام شد و متن کنترل فعال با Prompt تطبیق داشت.")
+    _, hwnd, _rect, title = target
+    script_path = os.path.join(ROOT, "stage5-uia-paste.ps1")
+    with open(script_path, "w", encoding="utf-8-sig", newline="\n") as handle:
+        handle.write(UIA_PASTE_SCRIPT)
+    shot_path = os.path.join(ROOT, "stage5-after-paste.png")
+    env = os.environ.copy()
+    env.update({"ARENA_HWND": str(hwnd), "PROMPT_FILE": prompt_path, "SHOT_PATH": shot_path})
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File", script_path], env=env, text=True, capture_output=True, timeout=60)
+    diagnostics = " | ".join(line.strip() for line in result.stdout.splitlines() if line.strip())[-3000:]
+    if result.returncode or "ARENA_STAGE5_PASTE_VERIFIED" not in result.stdout:
+        error = (result.stderr or diagnostics or "UI Automation paste verification failed").strip()
+        raise RuntimeError(error[-1800:])
+    if not os.path.isfile(shot_path):
+        raise RuntimeError("Paste تأیید شد اما تصویر مرحله پس از Paste ذخیره نشد")
+    write_state(paste="done", pasteVerified=True, pasteMethod="uia-composer-single-ctrl-v", pasteScreenshot=shot_path, browserWindowTitle=title, message="composer واقعی Arena با UI Automation پیدا و فوکوس آن پیش و پس از Ctrl+V تأیید شد؛ Paste دقیقاً یک بار انجام و متن با Copy مستقل تطبیق داده شد. Enter ارسال نشد.")
     print("ARENA_NATIVE_PROMPT_PASTED_ONCE: sha256=" + expected_hash + " chars=" + str(len(prompt)), flush=True)
+    print("ARENA_STAGE5_DIAGNOSTICS: " + diagnostics, flush=True)
 except Exception as exc:
-    if read_state().get("paste") != "failed":
-        write_state(paste="failed", message="مرحله Paste واقعی متوقف شد: " + str(exc))
+    write_state(paste="failed", pasteVerified=False, message="مرحله Paste امن متوقف شد (Paste هرگز تکرار نشد): " + str(exc))
     raise
 `;
-
 const SUBMIT_CODE = String.raw`${ROOT_SETUP}
 import ctypes, hashlib, subprocess
 from ctypes import wintypes
@@ -564,7 +728,7 @@ export function arenaApiNotebookCells(): ArenaApiNotebookCellTemplate[] {
     { id: "arena-api-credentials", title: "۲. دریافت امن API Key از Python", language: "python", content: CREDENTIALS_CODE, notes: "دامنه https://salitest.ir ثابت است و فقط Key در خود دسکتاپ گرفته می‌شود. Key با Windows DPAPI رمز می‌شود و در stdout یا PostgreSQL قرار نمی‌گیرد.", transition: "manual", executionMode: "blocking", executable: true },
     { id: "arena-fetch-next-prompt", title: "۳. خواندن decision از GET /handoff", language: "python", content: FETCH_PROMPT_CODE, notes: "فقط GET https://salitest.ir/api/agent/v1/handoff با Bearer اجرا می‌شود. decision.action ملاک قطعی است؛ Prompt تنها در run_next پذیرفته و از ارسال تکراری جلوگیری می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
     { id: "arena-open-and-stabilize", title: "۴. بازکردن Chrome واقعی و انتظار برای پایداری", language: "python", content: BROWSER_CODE, notes: "Chrome واقعی کاربر با پروفایل عادی Windows باز می‌شود؛ بدون Playwright، CDP، remote-debugging یا user-data-dir. پایداری با سه تصویر یکسان از پنجره سنجیده می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
-    { id: "arena-paste-once", title: "۵. Paste یک‌باره از Clipboard واقعی", language: "python", content: PASTE_CODE, notes: "با یک کلیک و Ctrl+V واقعی Windows انجام می‌شود؛ سپس Ctrl+A/C متن کنترل فعال را تطبیق می‌دهد. در خطا Paste تکرار نمی‌شود.", transition: "manual", executionMode: "blocking", executable: true },
+    { id: "arena-paste-once", title: "۵. Paste یک‌باره از Clipboard واقعی", language: "python", content: PASTE_CODE, notes: "composer واقعی Arena با UI Automation و محافظ فوکوس پیدا می‌شود؛ Ctrl+V دقیقاً یک بار اجرا و با UIA و Copy مستقل تأیید می‌شود. این مرحله Enter نمی‌زند و در خطا Paste را تکرار نمی‌کند.", transition: "manual", executionMode: "blocking", executable: true },
     { id: "arena-submit-enter", title: "۶. Enter واقعی برای Send / Submit", language: "python", content: SUBMIT_CODE, notes: "متن کنترل فعال دوباره با Clipboard واقعی بررسی می‌شود و Enter بدون Shift/Ctrl/Alt دقیقاً یک بار ارسال می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
   ];
 }
