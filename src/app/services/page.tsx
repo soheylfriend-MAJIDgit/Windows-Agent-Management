@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CommandMonitorModal } from "@/components/CommandMonitorModal";
 import { Icon } from "@/components/icons";
@@ -24,6 +25,7 @@ interface ServiceDefinition {
   summary: string;
   category: string;
   caution: string;
+  href?: string;
   fields: ServiceField[];
 }
 
@@ -261,12 +263,19 @@ export default function ServicesPage() {
             </div>
             <div className="service-input-count">
               <Icon name="settings" size={14} />
-              {service.fields.length} ورودی تعاملی
+              {service.href ? "فضای کاری مستقل و ذخیره‌شونده" : `${service.fields.length.toLocaleString("fa-IR")} ورودی تعاملی`}
             </div>
-            <button type="button" className="btn btn-primary" onClick={() => openService(service)}>
-              <Icon name="play" size={14} />
-              تنظیم و اجرا
-            </button>
+            {service.href ? (
+              <Link className="btn btn-primary" href={service.href}>
+                <Icon name="code" size={14} />
+                باز کردن دفترچه
+              </Link>
+            ) : (
+              <button type="button" className="btn btn-primary" onClick={() => openService(service)}>
+                <Icon name="play" size={14} />
+                تنظیم و اجرا
+              </button>
+            )}
           </article>
         ))}
       </div>
