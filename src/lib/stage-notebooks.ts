@@ -298,9 +298,8 @@ def capture(stage, suffix="result"):
 def command_for(stage, background=False):
     language, code = stage["language"], stage["code"]
     if language == "python":
-        if not background:
-            return None
-        script = os.path.join(ROOT, "background_" + stage["id"] + ".py")
+        prefix = "background_" if background else "cell_"
+        script = os.path.join(ROOT, prefix + stage["id"] + ".py")
         with open(script, "w", encoding="utf-8") as handle:
             handle.write(code)
         return [sys.executable, "-u", script]
@@ -321,14 +320,11 @@ def execute(stage):
         print("STAGE_BACKGROUND_STARTED: " + stage["id"] + " · PID=" + str(process.pid) + " · LOG=" + log_path, flush=True)
         capture(stage, "background-started")
         return
-    if stage["language"] == "python":
-        exec(compile(stage["code"], "<stage-cell>", "exec"), {"__name__": "__main__"})
-    else:
-        result = subprocess.run(command_for(stage), text=True, capture_output=True, encoding="utf-8", errors="replace")
-        print(result.stdout, end="", flush=True)
-        print(result.stderr, end="", file=sys.stderr, flush=True)
-        if result.returncode:
-            raise RuntimeError(f"stage exited with code {result.returncode}")
+    result = subprocess.run(command_for(stage), text=True, capture_output=True, encoding="utf-8", errors="replace")
+    print(result.stdout, end="", flush=True)
+    print(result.stderr, end="", file=sys.stderr, flush=True)
+    if result.returncode:
+        raise RuntimeError(f"stage exited with code {result.returncode}")
     print("STAGE_COMPLETED: " + stage["id"], flush=True)
     capture(stage)
 
