@@ -223,7 +223,7 @@ export default function DatabasePage() {
                 </h2>
               </div>
               <ul className="db-check-list">
-                <li><Icon name="check-circle" size={15} /> binding واقعی PostgreSQL با نام <span className="mono">DB</span> در Worker موجود است.</li>
+                <li><Icon name="check-circle" size={15} /> اتصال واقعی PostgreSQL با متغیر <span className="mono">DATABASE_URL</span> در Vercel آماده است.</li>
                 <li><Icon name="check-circle" size={15} /> یک Query واقعی روی PostgreSQL اجرا و پاسخ آن خوانده شده است.</li>
                 <li><Icon name="check-circle" size={15} /> جدول‌ها با <span className="mono">ensureSchema</span> بررسی و در صورت نیاز ساخته شده‌اند.</li>
                 <li><Icon name="lock" size={15} /> هیچ توکن، شناسه یا محتوای حساس در این صفحه نمایش داده نمی‌شود.</li>
