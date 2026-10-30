@@ -13,6 +13,14 @@ def read_state():
 
 def write_state(**changes):
     state = read_state()
+    message = str(changes.get("message") or "").strip()
+    for stage_key in ("dashboard", "credentials", "prompt", "browser", "paste", "submit"):
+        if stage_key not in changes:
+            continue
+        if changes[stage_key] == "waiting":
+            changes[stage_key + "Report"] = "هنوز گزارشی ثبت نشده است."
+        elif message:
+            changes[stage_key + "Report"] = message
     state.update(changes)
     state["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     fd, temporary = tempfile.mkstemp(prefix="state-", suffix=".json", dir=ROOT)
@@ -43,8 +51,8 @@ write_state(dashboard="running", credentials="waiting", prompt="waiting", browse
 
 window = tk.Tk()
 window.title("Arena · اجرای پرامپت بعدی")
-window.geometry("720x520")
-window.minsize(620, 460)
+window.geometry("820x620")
+window.minsize(700, 540)
 window.configure(bg="#0f172a")
 window.attributes("-topmost", True)
 window.after(1800, lambda: window.attributes("-topmost", False))
@@ -62,10 +70,14 @@ rows = {}
 for key, title in STAGES:
     row = tk.Frame(body, bg="#172033", highlightthickness=1, highlightbackground="#26334a")
     row.pack(fill="x", pady=4)
-    badge = tk.Label(row, text="منتظر", width=13, bg="#334155", fg="white", font=("Segoe UI", 9, "bold"), pady=9)
+    badge = tk.Label(row, text="منتظر", width=13, bg="#334155", fg="white", font=("Segoe UI", 9, "bold"), pady=12)
     badge.pack(side="left", padx=8, pady=7)
-    tk.Label(row, text=title, bg="#172033", fg="#e2e8f0", font=("Segoe UI", 11), anchor="e").pack(side="right", fill="x", expand=True, padx=14)
-    rows[key] = badge
+    details = tk.Frame(row, bg="#172033")
+    details.pack(side="right", fill="both", expand=True, padx=14, pady=7)
+    tk.Label(details, text=title, bg="#172033", fg="#e2e8f0", font=("Segoe UI", 11, "bold"), anchor="e").pack(fill="x")
+    report = tk.Label(details, text="هنوز گزارشی ثبت نشده است.", bg="#172033", fg="#94a3b8", font=("Segoe UI", 9), anchor="e", justify="right", wraplength=600)
+    report.pack(fill="x", pady=(4, 0))
+    rows[key] = (badge, report)
 footer_text = tk.StringVar(value="پنجره وضعیت فعال است…")
 tk.Label(window, textvariable=footer_text, bg="#0f172a", fg="#7dd3fc", font=("Segoe UI", 9), anchor="e").pack(fill="x", padx=24, pady=14)
 
@@ -75,7 +87,9 @@ def refresh():
         status = str(state.get(key, "waiting"))
         if key == "dashboard" and status == "running":
             status = "done"
-        rows[key].configure(text=LABELS.get(status, status), bg=COLORS.get(status, "#334155"))
+        badge, report = rows[key]
+        badge.configure(text=LABELS.get(status, status), bg=COLORS.get(status, "#334155"))
+        report.configure(text=str(state.get(key + "Report") or "هنوز گزارشی ثبت نشده است."), fg="#86efac" if status == "done" else "#fca5a5" if status == "failed" else "#94a3b8")
     footer_text.set(str(state.get("message") or "در انتظار مرحله بعد…"))
     window.after(700, refresh)
 refresh()
@@ -266,15 +280,18 @@ except Exception as exc:
 `;
 
 const BROWSER_CODE = String.raw`${ROOT_SETUP}
-import shutil, subprocess, urllib.request
+import ctypes, hashlib, shutil, subprocess
+from ctypes import wintypes
 
 ARENA_URL = "https://arena.ai/agent/01a18017-9552-70af-b937-b790a82b79b3"
-PORT = 9222
 if read_state().get("chainStatus") != "continue":
     write_state(browser="skipped", message="decision.action اجازه ادامه نمی‌دهد؛ Chrome باز نمی‌شود.")
-    print("ARENA_BROWSER_SKIPPED: chain status does not allow continuation", flush=True)
+    print("ARENA_BROWSER_SKIPPED: decision does not allow continuation", flush=True)
     raise SystemExit(0)
-write_state(browser="running", message="در حال بازکردن Chrome و انتظار برای توقف نشانگر بارگذاری…")
+write_state(browser="running", message="در حال بازکردن Chrome واقعی با پروفایل عادی Windows…")
+
+class RECT(ctypes.Structure):
+    _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG), ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
 
 def chrome_path():
     candidates = [
@@ -285,122 +302,130 @@ def chrome_path():
     ]
     return next((path for path in candidates if path and os.path.isfile(path)), None)
 
-PS_HELPER = r'''param([int]$Port = 9222)
-$ErrorActionPreference = "Stop"
-$targets = Invoke-RestMethod -Uri ("http://127.0.0.1:" + $Port + "/json/list") -TimeoutSec 5
-$target = $targets | Where-Object { $_.type -eq "page" -and $_.url -like "https://arena.ai/agent/*" } | Select-Object -First 1
-if (-not $target) { throw "Arena page target not found" }
-$expr = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:CDP_EXPRESSION_B64))
-$socket = [Net.WebSockets.ClientWebSocket]::new()
-$socket.ConnectAsync([Uri]$target.webSocketDebuggerUrl, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
-try {
-  $request = @{id=71;method="Runtime.evaluate";params=@{expression=$expr;returnByValue=$true;awaitPromise=$true}} | ConvertTo-Json -Depth 8 -Compress
-  $bytes = [Text.Encoding]::UTF8.GetBytes($request)
-  $socket.SendAsync([ArraySegment[byte]]::new($bytes), [Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
-  $stream = [IO.MemoryStream]::new()
-  do {
-    $buffer = New-Object byte[] 65536
-    $read = $socket.ReceiveAsync([ArraySegment[byte]]::new($buffer), [Threading.CancellationToken]::None).GetAwaiter().GetResult()
-    $stream.Write($buffer, 0, $read.Count)
-  } while (-not $read.EndOfMessage)
-  $response = [Text.Encoding]::UTF8.GetString($stream.ToArray()) | ConvertFrom-Json
-  if ($response.error) { throw ($response.error | ConvertTo-Json -Compress) }
-  $response.result.result.value | ConvertTo-Json -Depth 8 -Compress
-} finally {
-  if ($socket.State -eq [Net.WebSockets.WebSocketState]::Open) { $socket.CloseAsync([Net.WebSockets.WebSocketCloseStatus]::NormalClosure, "done", [Threading.CancellationToken]::None).GetAwaiter().GetResult() }
-  $socket.Dispose()
-}'''
-helper_path = os.path.join(ROOT, "cdp-evaluate.ps1")
-with open(helper_path, "w", encoding="utf-8-sig") as handle:
-    handle.write(PS_HELPER)
+def find_chrome_window():
+    user32 = ctypes.windll.user32
+    windows = []
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    def callback(hwnd, _):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        title = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, title, length + 1)
+        if "Chrome" not in title.value:
+            return True
+        rect = RECT()
+        if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            area = max(0, rect.right - rect.left) * max(0, rect.bottom - rect.top)
+            if area > 100000:
+                windows.append((area, hwnd, rect, title.value))
+        return True
+    user32.EnumWindows(callback_type(callback), 0)
+    return max(windows, default=None, key=lambda item: item[0])
 
-def evaluate(expression):
-    import base64
+def window_hash(rect, path):
+    width, height = rect.right - rect.left, rect.bottom - rect.top
     env = os.environ.copy()
-    env["CDP_EXPRESSION_B64"] = base64.b64encode(expression.encode("utf-8")).decode("ascii")
-    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", helper_path, "-Port", str(PORT)], env=env, text=True, capture_output=True, timeout=20)
-    if result.returncode:
-        raise RuntimeError((result.stderr or result.stdout).strip())
-    return json.loads(result.stdout.strip() or "null")
+    env.update({"SHOT_X": str(rect.left), "SHOT_Y": str(rect.top), "SHOT_W": str(width), "SHOT_H": str(height), "SHOT_PATH": path})
+    script = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Drawing; $b=New-Object Drawing.Bitmap([int]$env:SHOT_W,[int]$env:SHOT_H); $g=[Drawing.Graphics]::FromImage($b); try{$g.CopyFromScreen([int]$env:SHOT_X,[int]$env:SHOT_Y,0,0,$b.Size);$b.Save($env:SHOT_PATH,[Drawing.Imaging.ImageFormat]::Png)}finally{$g.Dispose();$b.Dispose()}"
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], env=env, text=True, capture_output=True, timeout=30)
+    if result.returncode or not os.path.isfile(path):
+        raise RuntimeError((result.stderr or result.stdout or "window screenshot failed").strip())
+    with open(path, "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+
 try:
     chrome = chrome_path()
     if not chrome:
         raise RuntimeError("Google Chrome روی ویندوز پیدا نشد")
-    profile = os.path.join(os.environ.get("LOCALAPPDATA", ROOT), "Windows-Agent", "ArenaAutomationChrome")
-    subprocess.Popen([chrome, "--remote-debugging-port=" + str(PORT), "--user-data-dir=" + profile, "--new-window", ARENA_URL], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    deadline = time.monotonic() + 180
-    stable = 0
-    last_signature = None
-    expression = r'''(() => {
-      const visible = e => { const s=getComputedStyle(e), r=e.getBoundingClientRect(); return s.display!=="none" && s.visibility!=="hidden" && r.width>3 && r.height>3; };
-      const busy = [...document.querySelectorAll('[aria-busy="true"],[role="progressbar"],[class*="spinner" i],[class*="loading" i],[data-loading="true"]')].some(visible);
-      const composer = [...document.querySelectorAll('textarea,[contenteditable="true"]')].find(visible);
-      return {ready: document.readyState === "complete" && !busy && !!composer, busy, title: document.title, signature: document.body.innerText.slice(0,1200).length + ":" + location.pathname};
-    })()'''
+    # هیچ پروفایل تازه یا پروتکل کنترل مرورگر ساخته نمی‌شود؛ همان Chrome واقعی کاربر باز می‌شود.
+    subprocess.Popen([chrome, "--new-window", ARENA_URL], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline = time.monotonic() + 150
+    target = None
     while time.monotonic() < deadline:
-        try:
-            check = evaluate(expression)
-            signature = check.get("signature") if isinstance(check, dict) else None
-            if isinstance(check, dict) and check.get("ready") and signature == last_signature:
-                stable += 1
-            else:
-                stable = 0
-            last_signature = signature
-            if stable >= 3:
-                write_state(browser="done", message="صفحه Arena پایدار است؛ نشانگر بارگذاری دیده نمی‌شود و composer آماده است.")
-                print("ARENA_PAGE_STABLE: three consecutive CDP checks; composer ready", flush=True)
-                break
-        except Exception:
+        target = find_chrome_window()
+        if target:
+            break
+        time.sleep(1)
+    if not target:
+        raise RuntimeError("پنجره واقعی Google Chrome پس از بازکردن لینک پیدا نشد")
+    _, hwnd, rect, title = target
+    ctypes.windll.user32.ShowWindow(hwnd, 9)
+    ctypes.windll.user32.SetForegroundWindow(hwnd)
+    shot_path = os.path.join(ROOT, "chrome-stability.png")
+    stable = 0
+    previous = None
+    while time.monotonic() < deadline:
+        target = find_chrome_window()
+        if not target:
             stable = 0
-        time.sleep(2)
+            time.sleep(2)
+            continue
+        _, hwnd, rect, title = target
+        digest = window_hash(rect, shot_path)
+        stable = stable + 1 if digest == previous else 1
+        previous = digest
+        if stable >= 3:
+            write_state(browser="done", browserWindowTitle=title, message="Chrome واقعی با پروفایل عادی باز شد و تصویر پنجره در سه بررسی متوالی پایدار بود.")
+            print("ARENA_REAL_CHROME_STABLE: native window screenshots stable", flush=True)
+            break
+        time.sleep(3)
     else:
-        raise RuntimeError("صفحه Arena طی سه دقیقه پایدار نشد؛ اگر پروفایل اختصاصی Chrome وارد حساب نیست، یک‌بار ورود را دستی کامل کنید")
+        raise RuntimeError("تصویر پنجره Chrome طی زمان مجاز پایدار نشد")
 except Exception as exc:
-    write_state(browser="failed", message="آماده‌سازی Chrome متوقف شد: " + str(exc))
+    write_state(browser="failed", message="بازکردن Chrome واقعی متوقف شد: " + str(exc))
     raise
 `;
 
 const PASTE_CODE = String.raw`${ROOT_SETUP}
-import base64, ctypes, hashlib, subprocess
+import ctypes, hashlib, subprocess
+from ctypes import wintypes
 
-PORT = 9222
 if read_state().get("chainStatus") != "continue":
     write_state(paste="skipped", message="decision.action اجازه ادامه نمی‌دهد؛ هیچ Paste انجام نمی‌شود.")
     print("ARENA_PASTE_SKIPPED: decision does not allow continuation", flush=True)
     raise SystemExit(0)
-write_state(paste="running", message="در حال قراردادن Prompt در Clipboard و Paste دقیقاً یک‌باره…")
+write_state(paste="running", message="در حال Paste یک‌باره با Clipboard و کلیدهای واقعی Windows…")
 
-def evaluate(expression):
-    env = os.environ.copy()
-    env["CDP_EXPRESSION_B64"] = base64.b64encode(expression.encode("utf-8")).decode("ascii")
-    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", os.path.join(ROOT, "cdp-evaluate.ps1"), "-Port", str(PORT)], env=env, text=True, capture_output=True, timeout=20)
-    if result.returncode:
-        raise RuntimeError((result.stderr or result.stdout).strip())
-    return json.loads(result.stdout.strip() or "null")
-def activate_chrome():
+class RECT(ctypes.Structure):
+    _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG), ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+
+def find_chrome_window():
     user32 = ctypes.windll.user32
-    found = []
-    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    windows = []
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
     def callback(hwnd, _):
         if user32.IsWindowVisible(hwnd):
             length = user32.GetWindowTextLengthW(hwnd)
             title = ctypes.create_unicode_buffer(length + 1)
             user32.GetWindowTextW(hwnd, title, length + 1)
-            if "Chrome" in title.value and ("Arena" in title.value or "arena" in title.value.lower()):
-                found.append(hwnd)
-                return False
+            if "Chrome" in title.value:
+                rect = RECT()
+                if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                    area = max(0, rect.right-rect.left) * max(0, rect.bottom-rect.top)
+                    if area > 100000:
+                        windows.append((area, hwnd, rect))
         return True
     user32.EnumWindows(callback_type(callback), 0)
-    if not found:
-        raise RuntimeError("پنجره Chrome مربوط به Arena پیدا نشد")
-    user32.ShowWindow(found[0], 9)
-    if not user32.SetForegroundWindow(found[0]):
-        raise RuntimeError("فعال‌کردن پنجره Chrome ممکن نشد")
+    return max(windows, default=None, key=lambda item: item[0])
 
-def keys(*values):
-    user32 = ctypes.windll.user32
-    for key, down in values:
-        user32.keybd_event(key, 0, 0 if down else 2, 0)
+def key(vk, down):
+    ctypes.windll.user32.keybd_event(vk, 0, 0 if down else 2, 0)
+def chord(modifier, key_code):
+    key(modifier, True); key(key_code, True); key(key_code, False); key(modifier, False)
+def read_clipboard():
+    verify_path = os.path.join(ROOT, "clipboard-verify.txt")
+    env = os.environ.copy(); env["VERIFY_PATH"] = verify_path
+    command = "$v=Get-Clipboard -Raw; [IO.File]::WriteAllText($env:VERIFY_PATH,[string]$v,[Text.UTF8Encoding]::new($false))"
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", command], env=env, text=True, capture_output=True, timeout=15)
+    if result.returncode:
+        raise RuntimeError((result.stderr or result.stdout).strip())
+    with open(verify_path, "r", encoding="utf-8") as handle:
+        return handle.read()
+
+def normalized(value):
+    return value.replace("\r\n", "\n").replace("\r", "\n")
+
 try:
     prompt_path = os.path.join(ROOT, "next-prompt.txt")
     with open(prompt_path, "r", encoding="utf-8") as handle:
@@ -408,70 +433,116 @@ try:
     expected_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     if expected_hash != read_state().get("promptSha256"):
         raise RuntimeError("هش Prompt ذخیره‌شده با پاسخ API تطبیق ندارد")
-    focus_expression = r'''(() => { const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=="none"&&s.visibility!=="hidden"&&r.width>20&&r.height>20}; const all=[...document.querySelectorAll('textarea,[contenteditable="true"]')].filter(visible); const e=all.at(-1); if(!e)return false; e.focus(); return document.activeElement===e || e.contains(document.activeElement); })()'''
-    if evaluate(focus_expression) is not True:
-        raise RuntimeError("composer قابل مشاهده پیدا یا Focus نشد؛ هیچ Paste انجام نشد")
-    subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", "Get-Content -Raw -LiteralPath $env:PROMPT_FILE | Set-Clipboard"], env={**os.environ, "PROMPT_FILE": prompt_path}, check=True, capture_output=True, timeout=15)
-    activate_chrome()
+    target = find_chrome_window()
+    if not target:
+        raise RuntimeError("پنجره واقعی Chrome پیدا نشد؛ هیچ Paste انجام نشد")
+    _, hwnd, rect = target
+    user32 = ctypes.windll.user32
+    user32.ShowWindow(hwnd, 9)
+    if not user32.SetForegroundWindow(hwnd):
+        raise RuntimeError("فعال‌کردن پنجره Chrome ممکن نشد؛ هیچ Paste انجام نشد")
+    # یک کلیک واقعی در محل composer پایین پنجره؛ در صورت عدم تطبیق، کلیک/Paste تکرار نمی‌شود.
+    x = rect.left + (rect.right - rect.left) // 2
+    y = rect.bottom - 135
+    user32.SetCursorPos(x, y)
+    user32.mouse_event(0x0002, 0, 0, 0, 0); user32.mouse_event(0x0004, 0, 0, 0, 0)
     time.sleep(0.8)
-    keys((0x11, True), (0x56, True), (0x56, False), (0x11, False))
-    time.sleep(1.5)
-    value_expression = r'''(() => { const e=document.activeElement; if(!e)return null; return typeof e.value==="string" ? e.value : e.innerText; })()'''
-    actual = evaluate(value_expression)
-    if actual != prompt:
-        write_state(paste="failed", message="Paste فقط یک بار انجام شد اما متن composer تطبیق ندارد؛ برای جلوگیری از تکرار، عملیات متوقف شد.")
-        raise RuntimeError("composer content mismatch after the single allowed paste")
-    write_state(paste="done", pasteVerified=True, message="Paste یک‌باره انجام شد و متن composer دقیقاً با Prompt API تطبیق دارد.")
-    print("ARENA_PROMPT_PASTED_ONCE: sha256=" + expected_hash + " chars=" + str(len(prompt)), flush=True)
+    env = os.environ.copy(); env["PROMPT_FILE"] = prompt_path
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", "Get-Content -Raw -LiteralPath $env:PROMPT_FILE | Set-Clipboard"], env=env, text=True, capture_output=True, timeout=15)
+    if result.returncode:
+        raise RuntimeError((result.stderr or result.stdout).strip())
+    chord(0x11, 0x56)
+    time.sleep(1.2)
+    chord(0x11, 0x41); chord(0x11, 0x43)
+    time.sleep(0.5)
+    actual = read_clipboard()
+    if normalized(actual) != normalized(prompt):
+        write_state(paste="failed", message="Paste فقط یک بار انجام شد اما متن کنترل فعال با Prompt تطبیق ندارد؛ عملیات بدون تکرار متوقف شد.")
+        raise RuntimeError("native clipboard verification mismatch after the single allowed paste")
+    key(0x23, True); key(0x23, False)
+    write_state(paste="done", pasteVerified=True, message="Ctrl+V واقعی Windows دقیقاً یک بار انجام شد و متن کنترل فعال با Prompt تطبیق داشت.")
+    print("ARENA_NATIVE_PROMPT_PASTED_ONCE: sha256=" + expected_hash + " chars=" + str(len(prompt)), flush=True)
 except Exception as exc:
     if read_state().get("paste") != "failed":
-        write_state(paste="failed", message="مرحله Paste پیش از ارسال متوقف شد: " + str(exc))
+        write_state(paste="failed", message="مرحله Paste واقعی متوقف شد: " + str(exc))
     raise
 `;
 
 const SUBMIT_CODE = String.raw`${ROOT_SETUP}
-import base64, ctypes, hashlib, subprocess
+import ctypes, hashlib, subprocess
+from ctypes import wintypes
 
-PORT = 9222
 if read_state().get("chainStatus") != "continue":
     write_state(submit="skipped", message="decision.action اجازه ادامه نمی‌دهد؛ Enter ارسال نمی‌شود.")
     print("ARENA_SUBMIT_SKIPPED: decision does not allow continuation", flush=True)
     raise SystemExit(0)
-write_state(submit="running", message="در حال بررسی نهایی و ارسال Enter بدون Shift/Ctrl/Alt…")
-def evaluate(expression):
-    env = os.environ.copy()
-    env["CDP_EXPRESSION_B64"] = base64.b64encode(expression.encode("utf-8")).decode("ascii")
-    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", os.path.join(ROOT, "cdp-evaluate.ps1"), "-Port", str(PORT)], env=env, text=True, capture_output=True, timeout=20)
+write_state(submit="running", message="در حال بررسی متن و ارسال Enter واقعی Windows بدون modifier…")
+
+class RECT(ctypes.Structure):
+    _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG), ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+def find_chrome_window():
+    user32 = ctypes.windll.user32
+    windows = []
+    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    def callback(hwnd, _):
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            title = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, title, length + 1)
+            if "Chrome" in title.value:
+                rect = RECT()
+                if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                    area = max(0, rect.right-rect.left) * max(0, rect.bottom-rect.top)
+                    if area > 100000:
+                        windows.append((area, hwnd, rect))
+        return True
+    user32.EnumWindows(callback_type(callback), 0)
+    return max(windows, default=None, key=lambda item: item[0])
+def key(vk, down):
+    ctypes.windll.user32.keybd_event(vk, 0, 0 if down else 2, 0)
+def chord(modifier, key_code):
+    key(modifier, True); key(key_code, True); key(key_code, False); key(modifier, False)
+def read_clipboard():
+    verify_path = os.path.join(ROOT, "clipboard-submit-verify.txt")
+    env = os.environ.copy(); env["VERIFY_PATH"] = verify_path
+    command = "$v=Get-Clipboard -Raw; [IO.File]::WriteAllText($env:VERIFY_PATH,[string]$v,[Text.UTF8Encoding]::new($false))"
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", command], env=env, text=True, capture_output=True, timeout=15)
     if result.returncode:
         raise RuntimeError((result.stderr or result.stdout).strip())
-    return json.loads(result.stdout.strip() or "null")
+    with open(verify_path, "r", encoding="utf-8") as handle:
+        return handle.read()
+def normalized(value):
+    return value.replace("\r\n", "\n").replace("\r", "\n")
+
 try:
     state = read_state()
     if state.get("paste") != "done" or state.get("pasteVerified") is not True:
         raise RuntimeError("Paste تأیید نشده است؛ Enter ارسال نمی‌شود")
     with open(os.path.join(ROOT, "next-prompt.txt"), "r", encoding="utf-8") as handle:
         prompt = handle.read()
-    value_expression = r'''(() => { const e=document.activeElement; if(!e)return null; return typeof e.value==="string" ? e.value : e.innerText; })()'''
-    if evaluate(value_expression) != prompt:
-        raise RuntimeError("متن composer پیش از Enter تغییر کرده است؛ ارسال لغو شد")
+    target = find_chrome_window()
+    if not target:
+        raise RuntimeError("پنجره واقعی Chrome پیدا نشد؛ Enter ارسال نمی‌شود")
+    _, hwnd, rect = target
     user32 = ctypes.windll.user32
+    user32.ShowWindow(hwnd, 9); user32.SetForegroundWindow(hwnd)
+    x = rect.left + (rect.right - rect.left) // 2; y = rect.bottom - 135
+    user32.SetCursorPos(x, y)
+    user32.mouse_event(0x0002, 0, 0, 0, 0); user32.mouse_event(0x0004, 0, 0, 0, 0)
+    time.sleep(0.5)
+    chord(0x11, 0x41); chord(0x11, 0x43); time.sleep(0.5)
+    if normalized(read_clipboard()) != normalized(prompt):
+        raise RuntimeError("متن کنترل فعال پیش از Enter با Prompt API تطبیق ندارد؛ ارسال لغو شد")
+    key(0x23, True); key(0x23, False)
     if user32.GetKeyState(0x10) < 0 or user32.GetKeyState(0x11) < 0 or user32.GetKeyState(0x12) < 0:
-        raise RuntimeError("یکی از کلیدهای Shift/Ctrl/Alt پایین است؛ Enter برای جلوگیری از رفتار اشتباه ارسال نشد")
-    user32.keybd_event(0x0D, 0, 0, 0)
-    user32.keybd_event(0x0D, 0, 2, 0)
-    deadline = time.monotonic() + 20
-    while time.monotonic() < deadline:
-        current = evaluate(value_expression)
-        if current in ("", None) or current != prompt:
-            digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-            write_state(submit="done", lastSubmittedPromptSha256=digest, submittedAt=time.strftime("%Y-%m-%dT%H:%M:%S%z"), message="Enter ساده برای Send/Submit ارسال شد؛ هیچ Shift+Enter استفاده نشد.")
-            print("ARENA_PROMPT_SUBMITTED_WITH_ENTER: sha256=" + digest, flush=True)
-            break
-        time.sleep(1)
-    else:
-        raise RuntimeError("پس از Enter، composer تغییری نکرد؛ موفقیت Submit قابل اثبات نیست")
+        raise RuntimeError("یکی از Shift/Ctrl/Alt پایین است؛ Enter ارسال نشد")
+    key(0x0D, True); key(0x0D, False)
+    time.sleep(3)
+    digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    write_state(submit="done", lastSubmittedPromptSha256=digest, submittedAt=time.strftime("%Y-%m-%dT%H:%M:%S%z"), message="Enter واقعی Windows بدون Shift/Ctrl/Alt یک بار برای Send/Submit ارسال شد.")
+    print("ARENA_NATIVE_PROMPT_SUBMITTED_WITH_ENTER: sha256=" + digest, flush=True)
 except Exception as exc:
-    write_state(submit="failed", message="ارسال Enter متوقف شد: " + str(exc))
+    write_state(submit="failed", message="ارسال Enter واقعی متوقف شد: " + str(exc))
     raise
 `;
 
@@ -491,8 +562,8 @@ export function arenaApiNotebookCells(): ArenaApiNotebookCellTemplate[] {
     { id: "arena-status-dashboard", title: "۱. نمایش رابط وضعیت منظم", language: "python", content: DASHBOARD_CODE, notes: "یک پنجره پایش مستقل باز می‌کند و وضعیت هر شش مرحله را از فایل state محلی نمایش می‌دهد.", transition: "manual", executionMode: "background", executable: true },
     { id: "arena-api-credentials", title: "۲. دریافت امن API Key از Python", language: "python", content: CREDENTIALS_CODE, notes: "دامنه https://salitest.ir ثابت است و فقط Key در خود دسکتاپ گرفته می‌شود. Key با Windows DPAPI رمز می‌شود و در stdout یا PostgreSQL قرار نمی‌گیرد.", transition: "manual", executionMode: "blocking", executable: true },
     { id: "arena-fetch-next-prompt", title: "۳. خواندن decision از GET /handoff", language: "python", content: FETCH_PROMPT_CODE, notes: "فقط GET https://salitest.ir/api/agent/v1/handoff با Bearer اجرا می‌شود. decision.action ملاک قطعی است؛ Prompt تنها در run_next پذیرفته و از ارسال تکراری جلوگیری می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
-    { id: "arena-open-and-stabilize", title: "۴. بازکردن Chrome و انتظار برای پایداری", language: "python", content: BROWSER_CODE, notes: "Chrome با پروفایل اختصاصی پایدار باز می‌شود؛ سه بررسی متوالی CDP باید نبود spinner/loading و وجود composer را تأیید کنند.", transition: "manual", executionMode: "blocking", executable: true },
-    { id: "arena-paste-once", title: "۵. Paste یک‌باره از Clipboard", language: "python", content: PASTE_CODE, notes: "پس از Focus تأییدشده، Ctrl+V دقیقاً یک بار زده می‌شود. عدم تطبیق متن باعث توقف می‌شود، نه Paste دوباره.", transition: "manual", executionMode: "blocking", executable: true },
-    { id: "arena-submit-enter", title: "۶. Enter برای Send / Submit", language: "python", content: SUBMIT_CODE, notes: "فقط Enter ساده و بدون Shift/Ctrl/Alt ارسال می‌شود؛ پیش از آن متن composer دوباره با Prompt API تطبیق داده می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
+    { id: "arena-open-and-stabilize", title: "۴. بازکردن Chrome واقعی و انتظار برای پایداری", language: "python", content: BROWSER_CODE, notes: "Chrome واقعی کاربر با پروفایل عادی Windows باز می‌شود؛ بدون Playwright، CDP، remote-debugging یا user-data-dir. پایداری با سه تصویر یکسان از پنجره سنجیده می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
+    { id: "arena-paste-once", title: "۵. Paste یک‌باره از Clipboard واقعی", language: "python", content: PASTE_CODE, notes: "با یک کلیک و Ctrl+V واقعی Windows انجام می‌شود؛ سپس Ctrl+A/C متن کنترل فعال را تطبیق می‌دهد. در خطا Paste تکرار نمی‌شود.", transition: "manual", executionMode: "blocking", executable: true },
+    { id: "arena-submit-enter", title: "۶. Enter واقعی برای Send / Submit", language: "python", content: SUBMIT_CODE, notes: "متن کنترل فعال دوباره با Clipboard واقعی بررسی می‌شود و Enter بدون Shift/Ctrl/Alt دقیقاً یک بار ارسال می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
   ];
 }
