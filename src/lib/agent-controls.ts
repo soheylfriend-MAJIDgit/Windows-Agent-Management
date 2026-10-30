@@ -1,5 +1,5 @@
 import { bytesToBase64Url } from "./crypto";
-import { dbBatch, dbFirst, dbRun } from "./db";
+import { dbAll, dbBatch, dbFirst, dbRun } from "./db";
 import { AppError } from "./errors";
 import type { AuthenticatedAgentKey } from "./agent-keys";
 
@@ -166,13 +166,49 @@ export async function completeEmergencyControl(key: AuthenticatedAgentKey, id: s
   const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
   const status = body.status === "succeeded" ? "succeeded" : body.status === "failed" ? "failed" : null;
   if (!status) throw new AppError("نتیجه کنترل باید succeeded یا failed باشد.", { status: 422, code: "agent_control_status_invalid" });
-  const resultValue = body.result && typeof body.result === "object" && !Array.isArray(body.result) ? body.result : {};
-  const result = JSON.stringify(resultValue);
+  const resultValue = body.result && typeof body.result === "object" && !Array.isArray(body.result) ? body.result as Record<string, unknown> : {};
+  const remainingPids = Array.isArray(resultValue.remainingPids)
+    ? resultValue.remainingPids.map(Number).filter((value) => Number.isInteger(value) && value > 0)
+    : [];
+  if (status === "succeeded" && (resultValue.verified !== true || remainingPids.length > 0)) {
+    throw new AppError("تأیید توقف همه بدون راستی‌آزمایی registry یا با PID باقی‌مانده پذیرفته نمی‌شود.", {
+      status: 422,
+      code: "agent_control_verification_required",
+      hint: "result.verified=true و remainingPids=[] را فقط پس از بررسی واقعی Processهای متعلق ارسال کنید.",
+    });
+  }
+  const result = JSON.stringify({ ...resultValue, remainingPids });
   if (new TextEncoder().encode(result).length > 24_000) throw new AppError("گزارش توقف اضطراری بیش از حد بزرگ است.", { status: 413, code: "agent_control_result_too_large" });
   const now = new Date().toISOString();
-  await dbBatch([
+  const queries: Array<{ sql: string; params?: unknown[] }> = [
     { sql: "UPDATE agent_control_requests SET status = ?, result = ?, completed_at = ? WHERE id = ?", params: [status, result, now, id] },
     { sql: "INSERT INTO events (kind, title, detail, created_at) VALUES ('agent_emergency_control_completed', ?, ?, ?)", params: [status === "succeeded" ? "توقف فوری همه اجراها تأیید شد" : "توقف فوری همه اجراها کامل نشد", `${row.agent_id} · ${id}`, now] },
-  ]);
+  ];
+  if (status === "succeeded") {
+    const staleCommands = await dbAll<{ id: string }>(
+      `SELECT id FROM commands
+       WHERE agent_id = ? AND cancel_requested_at IS NOT NULL
+         AND status IN ('pending', 'claimed', 'waiting_confirmation', 'running')`,
+      [row.agent_id],
+    );
+    for (const command of staleCommands) {
+      queries.push(
+        {
+          sql: `UPDATE commands SET status = 'cancelled', completed_at = ?, last_event_at = ?,
+                  error = COALESCE(error, 'توقف همه اجراها توسط Windows Agent تأیید شد.')
+                WHERE id = ? AND cancel_requested_at IS NOT NULL
+                  AND status IN ('pending', 'claimed', 'waiting_confirmation', 'running')`,
+          params: [now, now, command.id],
+        },
+        {
+          sql: `INSERT INTO command_events (command_id, seq, stage, level, message, data, created_at)
+                VALUES (?, (SELECT COALESCE(MAX(seq), 1000000) + 1 FROM command_events WHERE command_id = ?),
+                        'emergency_stop_verified', 'warning', ?, ?, ?)`,
+          params: [command.id, command.id, "Windows Agent خالی‌بودن registry و نبود PID متعلق باقی‌مانده را تأیید کرد؛ فرمان متوقف شد.", JSON.stringify({ controlId: id, verified: true, remainingPids: [] }), now],
+        },
+      );
+    }
+  }
+  await dbBatch(queries);
   return view((await dbFirst<AgentControlRow>("SELECT * FROM agent_control_requests WHERE id = ?", [id]))!);
 }
