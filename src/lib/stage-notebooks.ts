@@ -2,11 +2,13 @@ import { AppError } from "./errors";
 import { dbAll, dbFirst, dbRun } from "./db";
 import { findOnlineCommandAgent, requestCommandCancellation } from "./commands";
 import { requestAutomationRun, saveAutomationVersion } from "./automations";
+import { arenaApiNotebookCells } from "./arena-api-notebook-template";
 
 const STORE_KEY = "stage-notebooks.v1";
 const ATTEMPT_STORE_KEY = "stage-notebook-attempts.v1";
 const CONTROLLED_TEMPLATE_MARKER = "stage-notebook-controlled-template.v1";
 const CONTROLLED_NOTEBOOK_ID = "controlled-windows-ui-diagnostic-v1";
+const ARENA_API_NOTEBOOK_ID = "arena-api-prompt-submit-v1";
 const MAX_NOTEBOOKS = 30;
 const MAX_CELLS = 100;
 const MAX_ATTEMPTS = 60;
@@ -145,10 +147,9 @@ print("CONTROLLED_APPS_PASSED", flush=True)
 
 async function ensureControlledNotebook(): Promise<StageNotebook[]> {
   const items = await load();
-  const marker = await dbFirst<{ value: string }>("SELECT value FROM settings WHERE key = ?", [CONTROLLED_TEMPLATE_MARKER]);
-  if (marker?.value === "seeded") return items;
+  const now = new Date().toISOString();
+  let changed = false;
   if (!items.some((item) => item.id === CONTROLLED_NOTEBOOK_ID)) {
-    const now = new Date().toISOString();
     items.unshift({
       id: CONTROLLED_NOTEBOOK_ID,
       title: "تست کنترل‌شده رابط ویندوز",
@@ -161,14 +162,29 @@ async function ensureControlledNotebook(): Promise<StageNotebook[]> {
         { id: "controlled-apps", title: "۲. بازکردن Notepad و Microsoft", language: "python", content: CONTROLLED_APPS_CODE, notes: "پس از موفقیت سلول اول اجرا شود. به API Key، pyautogui یا فوکوس دستی نیاز ندارد.", transition: "manual", executionMode: "blocking", executable: true, commandId: null, createdAt: now, updatedAt: now },
       ],
     });
-    await persist(items);
+    changed = true;
   }
-  const markerTime = new Date().toISOString();
-  await dbRun(
-    `INSERT INTO settings (key, value, updated_at) VALUES (?, 'seeded', ?)
-     ON CONFLICT(key) DO UPDATE SET value = 'seeded', updated_at = excluded.updated_at`,
-    [CONTROLLED_TEMPLATE_MARKER, markerTime],
-  );
+  if (!items.some((item) => item.id === ARENA_API_NOTEBOOK_ID)) {
+    items.unshift({
+      id: ARENA_API_NOTEBOOK_ID,
+      title: "ارسال پرامپت بعدی API به Arena",
+      goal: "دریافت امن API Key در دسکتاپ، خواندن nextPrompt، بازکردن لینک مشخص Arena در Chrome، انتظار برای توقف loading، Paste یک‌باره و Enter ساده برای Send/Submit.",
+      chatbotGuide: "این دفترچه ایمنی سخت‌گیرانه دارد: API Key هرگز داخل کد یا لاگ قرار نگیرد؛ Prompt هنگام جست‌وجوی composer تکرار نشود؛ Ctrl+V فقط یک بار و Enter فقط بدون Shift/Ctrl/Alt اجرا شود. وضعیت‌های human و stop باید زنجیره را پیش از مرورگر متوقف کنند.",
+      createdAt: now,
+      updatedAt: now,
+      cells: arenaApiNotebookCells().map((cell) => ({ ...cell, commandId: null, createdAt: now, updatedAt: now })),
+    });
+    changed = true;
+  }
+  if (changed) await persist(items);
+  const marker = await dbFirst<{ value: string }>("SELECT value FROM settings WHERE key = ?", [CONTROLLED_TEMPLATE_MARKER]);
+  if (marker?.value !== "seeded") {
+    await dbRun(
+      `INSERT INTO settings (key, value, updated_at) VALUES (?, 'seeded', ?)
+       ON CONFLICT(key) DO UPDATE SET value = 'seeded', updated_at = excluded.updated_at`,
+      [CONTROLLED_TEMPLATE_MARKER, now],
+    );
+  }
   return items;
 }
 
@@ -336,8 +352,8 @@ export async function updateStageNotebook(id: string, input: unknown): Promise<S
 }
 
 export async function deleteStageNotebook(id: string): Promise<void> {
-  if (id === CONTROLLED_NOTEBOOK_ID) {
-    throw new AppError("دفترچه تشخیصی کنترل‌شده برای استفاده دوباره حذف نمی‌شود.", { status: 422, code: "controlled_notebook_protected" });
+  if (id === CONTROLLED_NOTEBOOK_ID || id === ARENA_API_NOTEBOOK_ID) {
+    throw new AppError("دفترچه داخلی کنترل‌شده برای استفاده دوباره حذف نمی‌شود.", { status: 422, code: "controlled_notebook_protected" });
   }
   const items = await load();
   const next = items.filter((item) => item.id !== id);
