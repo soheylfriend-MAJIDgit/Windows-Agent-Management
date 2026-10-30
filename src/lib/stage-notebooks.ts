@@ -440,6 +440,8 @@ export async function runStageNotebookCell(notebookId: string, cellId: string, r
     phase = "notebook_validated";
     await updateAttempt(attemptId, { phase, message: "دفترچه، سلول و محتوای اجرایی معتبر است." }, { phase, level: "success", message: `سلول «${cell.title}» با زبان ${cell.language} معتبر است.` });
 
+    phase = "agent_selection";
+    await updateAttempt(attemptId, { phase, message: "در حال یافتن Windows Agent با Heartbeat تازه و قابلیت D1 است." }, { phase, level: "info", message: "جست‌وجوی Agent آنلاین با Heartbeat کمتر از ۹۰ ثانیه آغاز شد." });
     const target = await findOnlineCommandAgent(["d1_automations"]);
     phase = "agent_selected";
     await updateAttempt(attemptId, { phase, message: "Windows Agent سازگار و آنلاین انتخاب شد.", agentName: target.agentName, agentVersion: target.agentVersion }, { phase, level: "success", message: `${target.agentName} نسخه ${target.agentVersion ?? "نامشخص"} · ${target.autoMode ? "Automatic" : "Manual"}${target.busy ? ` · مشغول: ${target.busy}` : " · آزاد"}` });

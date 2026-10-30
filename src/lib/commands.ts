@@ -391,6 +391,18 @@ function parseScopes(value: string): string[] {
   }
 }
 
+function tehranHeartbeatTime(value: string): string {
+  try {
+    return new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+      timeZone: "Asia/Tehran",
+      dateStyle: "medium",
+      timeStyle: "medium",
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
 export async function findOnlineCommandAgent(requiredCapability: string | string[] = "command_plane"): Promise<{ keyId: string; agentId: string; agentName: string; agentVersion: string | null; heartbeatAt: string; autoMode: boolean; busy: string | null }> {
   const requiredCapabilities = Array.isArray(requiredCapability) ? requiredCapability : [requiredCapability];
   const cutoff = new Date(Date.now() - 90_000).toISOString();
@@ -433,10 +445,19 @@ export async function findOnlineCommandAgent(requiredCapability: string | string
         hint: reasons || "وضعیت capabilityها و scopeهای کلید را در تب کلید ایجنت بررسی کنید.",
       });
     }
+    const latest = await dbFirst<{ agent_name: string; agent_version: string | null; last_seen_at: string; key_status: string; expires_at: string | null }>(
+      `SELECT a.name AS agent_name, a.version AS agent_version, a.last_seen_at, k.status AS key_status, k.expires_at
+       FROM managed_agents a
+       JOIN agent_keys k ON k.id = a.agent_key_id
+       ORDER BY a.last_seen_at DESC LIMIT 1`,
+    );
+    const lastSeenHint = latest
+      ? `آخرین Heartbeat از ${latest.agent_name}${latest.agent_version ? ` نسخه ${latest.agent_version}` : ""} در ${tehranHeartbeatTime(latest.last_seen_at)} ثبت شده است${latest.key_status !== "active" ? `؛ وضعیت کلید: ${latest.key_status}` : latest.expires_at && latest.expires_at <= new Date().toISOString() ? "؛ کلید منقضی شده است" : ""}.`
+      : "هنوز هیچ Heartbeat ثبت‌شده‌ای در D1 وجود ندارد.";
     throw new AppError("Windows Agent آنلاین و آماده‌ی دریافت فرمان پیدا نشد.", {
       status: 409,
       code: "command_agent_offline",
-      hint: "Windows Agent را اجرا کنید و پس از ثبت Heartbeat دوباره تلاش کنید.",
+      hint: `${lastSeenHint} برنامه Windows Agent را باز نگه دارید، وضعیت اتصال مدیریت را روی «وصل» بررسی کنید و پس از حداکثر ۳۰ ثانیه دوباره تلاش کنید.`,
     });
   }
   const runtimeState = parseObject(match.state);
@@ -493,6 +514,7 @@ export async function commandAgentPreflight(requiredCapability: string | string[
       { key: "command_plane", ok: true, label: "مسیر دریافت فرمان فعال" },
       { key: "d1_automations", ok: true, label: "دریافت اتوماسیون immutable از D1" },
       { key: "scopes", ok: true, label: "scopeهای خواندن فرمان و ثبت نتیجه کامل" },
+      { key: "mode", ok: true, label: agent.autoMode ? "حالت محلی Automatic؛ بدون پنجره Yes/No" : "حالت محلی Manual؛ نیازمند تأیید Yes/No" },
       { key: "availability", ok: !agent.busy, label: agent.busy ? `ایجنت مشغول است: ${agent.busy}` : "ایجنت برای claim فرمان آزاد است" },
       { key: "queue", ok: activeCommands === 0, label: activeCommands ? `${activeCommands} فرمان فعال یا در صف وجود دارد` : "صف فرمان فعال خالی است" },
     ],
