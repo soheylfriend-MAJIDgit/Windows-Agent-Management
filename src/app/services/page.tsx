@@ -37,19 +37,6 @@ interface ArenaSavedTarget {
 
 type InputState = Record<string, string | number | boolean>;
 type PromptInputMode = "cells" | "text";
-type PromptSourceMode = "manual" | "next_file";
-
-const AUTO_FIELD_NAMES = new Set([
-  "autoGoal",
-  "autoNextPromptInstruction",
-  "autoDetails",
-  "autoMaxIterations",
-  "nextPromptPath",
-  "nextPromptDriveUrl",
-]);
-
-const MANUAL_FIELD_NAMES = new Set(["prompts", "rounds"]);
-
 function defaults(service: ServiceDefinition): InputState {
   return Object.fromEntries(service.fields.map((field) => [field.name, field.defaultValue ?? (field.type === "checkbox" ? false : "")]));
 }
@@ -109,7 +96,6 @@ export default function ServicesPage() {
   const notify = useToast();
   const [selected, setSelected] = useState<ServiceDefinition | null>(null);
   const [input, setInput] = useState<InputState>({});
-  const [promptSourceMode, setPromptSourceMode] = useState<PromptSourceMode>("manual");
   const [promptInputMode, setPromptInputMode] = useState<PromptInputMode>("cells");
   const [promptCells, setPromptCells] = useState<string[]>([""]);
   const [arenaTargetName, setArenaTargetName] = useState("");
@@ -120,12 +106,12 @@ export default function ServicesPage() {
 
   const services = useMemo(() => servicesApi.data?.services ?? [], [servicesApi.data]);
   const promptCount = useMemo(
-    () => promptSourceMode === "next_file"
+    () => selected?.slug === "arena-next-prompt"
       ? Number(input.autoMaxIterations || 0)
       : promptInputMode === "cells"
         ? promptCells.filter((item) => item.trim()).length
         : promptBlockCount(input.prompts),
-    [input.autoMaxIterations, input.prompts, promptCells, promptInputMode, promptSourceMode],
+    [input.autoMaxIterations, input.prompts, promptCells, promptInputMode, selected?.slug],
   );
 
   useEffect(() => {
@@ -140,7 +126,6 @@ export default function ServicesPage() {
   function openService(service: ServiceDefinition) {
     setSelected(service);
     setInput(defaults(service));
-    setPromptSourceMode("manual");
     setPromptInputMode("cells");
     setPromptCells([""]);
     setArenaTargetName("");
@@ -227,12 +212,9 @@ export default function ServicesPage() {
       const serviceInput = selected.slug === "arena-batch"
         ? {
             ...input,
-            promptSourceMode,
-            promptItems: promptSourceMode === "manual"
-              ? (promptInputMode === "cells" ? promptCells : parsePromptBlocks(input.prompts))
-                .map((item) => item.trim())
-                .filter(Boolean)
-              : [],
+            promptItems: (promptInputMode === "cells" ? promptCells : parsePromptBlocks(input.prompts))
+              .map((item) => item.trim())
+              .filter(Boolean),
           }
         : input;
       const result = await postJson<{ commandId: string; version: number }>(
@@ -306,45 +288,9 @@ export default function ServicesPage() {
                 <Banner tone="warn" title="پیش از اجرا">{selected.caution}</Banner>
                 <ErrorBanner error={submitError} />
 
-                {selected.slug === "arena-batch" ? (
-                  <section className="prompt-source-panel" aria-labelledby="prompt-source-title">
-                    <div className="service-field-heading">
-                      <div>
-                        <span className="field-label" id="prompt-source-title">منبع پرامپت‌ها</span>
-                        <span className="field-helper">در هر دو حالت، کنترل، پیام زنده و گزارش Markdown پایش می‌شوند.</span>
-                      </div>
-                      <div className="prompt-source-toggle" role="group" aria-label="انتخاب منبع پرامپت‌ها">
-                        <button
-                          type="button"
-                          className={promptSourceMode === "manual" ? "active" : ""}
-                          aria-pressed={promptSourceMode === "manual"}
-                          onClick={() => setPromptSourceMode("manual")}
-                        >
-                          فهرست دستی
-                        </button>
-                        <button
-                          type="button"
-                          className={promptSourceMode === "next_file" ? "active" : ""}
-                          aria-pressed={promptSourceMode === "next_file"}
-                          onClick={() => setPromptSourceMode("next_file")}
-                        >
-                          فایل خودکار NextPrompt
-                        </button>
-                      </div>
-                    </div>
-                    <div className="prompt-source-notice">
-                      {promptSourceMode === "next_file"
-                        ? "Windows Agent پیش از شروع، محتوای قدیمی NextPrompt را حذف می‌کند؛ سپس هر تغییر را تا سه خواندن پایدار بررسی، یک‌بار مصرف و دوباره از فایل پاک می‌کند. محتوای ناقص، بدون تغییر یا تکراری ارسال نمی‌شود."
-                        : "متن اصلی هر پرامپت دستی حفظ می‌شود و قرارداد کنترل play/pause/stop، پیام کوتاه و گزارش Markdown به انتهای آن افزوده می‌شود؛ NextPrompt در این حالت استفاده نمی‌شود."}
-                    </div>
-                  </section>
-                ) : null}
-
                 {selected.fields
                   .filter((field) => field.name !== "unrecoverableAcceptance" || Boolean(input.networkAcceptance))
-                  .filter((field) => selected.slug !== "arena-batch" || !["completionTimeoutMinutes", "askOnCompletionTimeout", "showClickHighlights", "stopOnError"].includes(field.name))
-                  .filter((field) => selected.slug !== "arena-batch"
-                    || (promptSourceMode === "manual" ? !AUTO_FIELD_NAMES.has(field.name) : !MANUAL_FIELD_NAMES.has(field.name)))
+                  .filter((field) => !["arena-batch", "arena-next-prompt"].includes(selected.slug) || !["completionTimeoutMinutes", "askOnCompletionTimeout", "showClickHighlights", "stopOnError"].includes(field.name))
                   .map((field) => (
                   <div className="field" key={field.name}>
                     {field.type === "checkbox" ? (
@@ -392,7 +338,7 @@ export default function ServicesPage() {
                             </div>
                           ) : null}
                         </div>
-                        {selected.slug === "arena-batch" && field.name === "url" ? (
+                        {["arena-batch", "arena-next-prompt"].includes(selected.slug) && field.name === "url" ? (
                           <div className="arena-url-compact-row">
                             <input
                               id={`service-${field.name}`}
@@ -514,7 +460,7 @@ export default function ServicesPage() {
                           />
                         )}
                         {field.helper ? <span className="field-helper">{field.helper}</span> : null}
-                        {selected.slug === "arena-batch" && field.name === "url" && arenaTargetsApi.error ? (
+                        {["arena-batch", "arena-next-prompt"].includes(selected.slug) && field.name === "url" && arenaTargetsApi.error ? (
                           <ErrorBanner error={arenaTargetsApi.error} onRetry={() => void arenaTargetsApi.reload()} />
                         ) : null}
                         {field.name === "prompts" ? (
@@ -532,7 +478,7 @@ export default function ServicesPage() {
                   </div>
                 ))}
 
-                {selected.slug === "arena-batch" ? (
+                {["arena-batch", "arena-next-prompt"].includes(selected.slug) ? (
                   <details className="service-advanced-options">
                     <summary>تنظیمات پیشرفته انتظار و نمایش کلیک</summary>
                     <div className="service-advanced-grid">

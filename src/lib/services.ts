@@ -3,7 +3,7 @@ import { ARENA_JOB_NAME, buildArenaJobFile } from "./arena-job";
 import { getAutomation, requestAutomationRun, saveAutomationVersion } from "./automations";
 import { findOnlineCommandAgent } from "./commands";
 
-export type ServiceSlug = "close-folders" | "arena-batch" | "director-monitor" | "drive-control";
+export type ServiceSlug = "close-folders" | "arena-batch" | "arena-next-prompt" | "director-monitor" | "drive-control";
 
 export interface ServiceDefinition {
   slug: ServiceSlug;
@@ -70,62 +70,38 @@ export const SERVICE_CATALOG: ServiceDefinition[] = [
   {
     slug: "arena-batch",
     title: "اجرای ترتیبی پرامپت‌ها",
-    summary: "یک فهرست پرامپت را به‌ترتیب روی صفحه Arena اجرا و تا پایان هر پاسخ صبر می‌کند.",
+    summary: "فهرست دستی پرامپت‌ها را به‌ترتیب در یک گفت‌وگوی Arena اجرا می‌کند.",
     category: "Arena و مدل",
-    caution: "صفحه Arena یک‌بار باز می‌شود؛ پس از پایان هر پاسخ، گزینه Yes تأیید و پرامپت بعدی در همان گفت‌وگو ارسال می‌شود. سقف مجموع اجراها ۲۰ است.",
+    caution: "این سرویس فقط فهرست دستی را اجرا می‌کند؛ NextPrompt و ادامه خودکار در سرویس جداگانه قرار دارند.",
     fields: [
       { name: "url", label: "لینک صفحه مدل", type: "url", required: true, defaultValue: "https://arena.ai/", helper: "فقط لینک HTTPS" },
-      {
-        name: "prompts",
-        label: "فهرست پرامپت‌ها",
-        type: "textarea",
-        required: true,
-        helper: "هر پرامپت می‌تواند چندخطی باشد؛ پرامپت‌ها را با یک خط شامل --- جدا کنید. حداکثر ۲۰ مورد.",
-      },
-      {
-        name: "autoGoal",
-        label: "هدف پرامپت اول",
-        type: "textarea",
-        required: true,
-        helper: "کاری که Agent همکار باید از پرامپت اول آغاز کند.",
-      },
-      {
-        name: "autoNextPromptInstruction",
-        label: "دستور ساخت پرامپت بعدی",
-        type: "textarea",
-        required: true,
-        defaultValue: "در پایان هر مرحله، اگر ادامه کار لازم است پرامپت کامل مرحله بعد را بساز و فایل NextPrompt.txt را با آن جایگزین و ذخیره کن. محتوای قبلی فایل را کاملاً حذف کن؛ هرگز متن جدید را به متن قبلی اضافه نکن. فایل باید فقط متن قابل‌ارسالِ پرامپت بعدی را داشته باشد و هیچ عنوان، توضیح، تاریخ یا قالب Markdown دیگری در آن نباشد. اگر کار تمام شده است NextPrompt.txt را تغییر نده و فایل play-puase-stop.txt را روی stop بگذار.",
-        helper: "این متن داخل پرامپت اول قرار می‌گیرد؛ قرارداد جایگزینی کامل فایل را حذف نکنید.",
-      },
-      {
-        name: "autoDetails",
-        label: "جزئیات تکمیلی",
-        type: "textarea",
-        defaultValue: "",
-        helper: "محدودیت‌ها، معیار پذیرش یا اطلاعاتی که Agent همکار برای ادامه خودکار نیاز دارد.",
-      },
-      { name: "autoMaxIterations", label: "حداکثر تعداد اجرا (با احتساب پرامپت اول)", type: "number", required: true, min: 1, max: 20, defaultValue: 10 },
-      {
-        name: "nextPromptPath",
-        label: "مسیر همگام‌شده فایل در ویندوز",
-        type: "text",
-        required: true,
-        defaultValue: "C:\\Users\\alibatel\\My Drive\\Windows-Agent-DB\\NextPrompt.txt",
-        helper: "اگر پسوند نوشته نشود، .txt افزوده می‌شود. Windows Agent فقط همین فایل محلی همگام‌شده را می‌خواند.",
-      },
-      {
-        name: "nextPromptDriveUrl",
-        label: "لینک فایل NextPrompt در Google Drive",
-        type: "url",
-        required: true,
-        defaultValue: "https://drive.google.com/file/d/1KNLgiTPqwJeKOxXDUguRPV3cHofWRzFY/view",
-        helper: "این لینک داخل پرامپت اول به Agent همکار داده می‌شود؛ کلید یا اعتبارنامه‌ای به Windows Agent ارسال نمی‌شود.",
-      },
+      { name: "prompts", label: "فهرست پرامپت‌ها", type: "textarea", required: true, helper: "هر پرامپت می‌تواند چندخطی باشد؛ حداکثر ۲۰ مورد." },
       { name: "rounds", label: "تعداد دور", type: "number", required: true, min: 1, max: 20, defaultValue: 1 },
       { name: "delaySeconds", label: "فاصله بین دو پرامپت (ثانیه)", type: "number", required: true, min: 3, max: 300, defaultValue: 10 },
-      { name: "completionTimeoutMinutes", label: "زمان یادآوری انتظار پاسخ (دقیقه)", type: "number", required: true, min: 5, max: 720, defaultValue: 60, helper: "پیش‌فرض یک ساعت؛ در حالت درخواست تصمیم، پایان این زمان اجرای Arena را متوقف نمی‌کند." },
-      { name: "askOnCompletionTimeout", label: "پس از پایان زمان، از مدیر سؤال شود و پایش ادامه یابد", type: "checkbox", defaultValue: true },
-      { name: "showClickHighlights", label: "محل کلیک روی کادر پرامپت با دایره زرد نمایش داده شود", type: "checkbox", defaultValue: true },
+      { name: "completionTimeoutMinutes", label: "زمان یادآوری انتظار پاسخ (دقیقه)", type: "number", required: true, min: 5, max: 720, defaultValue: 60 },
+      { name: "askOnCompletionTimeout", label: "پس از پایان زمان، سؤال شود و پایش ادامه یابد", type: "checkbox", defaultValue: true },
+      { name: "showClickHighlights", label: "محل کلیک با دایره زرد نمایش داده شود", type: "checkbox", defaultValue: true },
+      { name: "stopOnError", label: "در اولین خطا متوقف شود", type: "checkbox", defaultValue: true },
+    ],
+  },
+  {
+    slug: "arena-next-prompt",
+    title: "اجرای خودکار پرامپت بعدی",
+    summary: "از هدف اولیه شروع می‌کند و هر نسخه تازه NextPrompt.txt را پایدار، یک‌بار و به‌ترتیب اجرا می‌کند.",
+    category: "Arena و مدل",
+    caution: "این سرویس مستقل از فهرست دستی است؛ فایل قدیمی را پاک می‌کند و فقط تغییر تازه و پایدار را مصرف می‌کند.",
+    fields: [
+      { name: "url", label: "لینک صفحه مدل", type: "url", required: true, defaultValue: "https://arena.ai/", helper: "فقط لینک HTTPS" },
+      { name: "autoGoal", label: "هدف پرامپت اول", type: "textarea", required: true, helper: "کاری که Agent همکار باید آغاز کند." },
+      { name: "autoNextPromptInstruction", label: "دستور ساخت پرامپت بعدی", type: "textarea", required: true, defaultValue: "در پایان هر مرحله، اگر ادامه کار لازم است پرامپت کامل مرحله بعد را بساز و فایل NextPrompt.txt را با آن جایگزین و ذخیره کن. محتوای قبلی فایل را کاملاً حذف کن؛ هرگز متن جدید را به متن قبلی اضافه نکن. فایل باید فقط متن قابل‌ارسال پرامپت بعدی را داشته باشد. اگر کار تمام شده است NextPrompt.txt را تغییر نده و فایل play-puase-stop.txt را روی stop بگذار." },
+      { name: "autoDetails", label: "جزئیات تکمیلی", type: "textarea", defaultValue: "" },
+      { name: "autoMaxIterations", label: "حداکثر تعداد اجرا", type: "number", required: true, min: 1, max: 20, defaultValue: 10 },
+      { name: "nextPromptPath", label: "مسیر همگام‌شده NextPrompt در ویندوز", type: "text", required: true, defaultValue: "C:\\Users\\alibatel\\My Drive\\Windows-Agent-DB\\NextPrompt.txt" },
+      { name: "nextPromptDriveUrl", label: "لینک NextPrompt در Google Drive", type: "url", required: true, defaultValue: "https://drive.google.com/file/d/1KNLgiTPqwJeKOxXDUguRPV3cHofWRzFY/view" },
+      { name: "delaySeconds", label: "فاصله بین مراحل (ثانیه)", type: "number", required: true, min: 3, max: 300, defaultValue: 10 },
+      { name: "completionTimeoutMinutes", label: "زمان یادآوری انتظار پاسخ (دقیقه)", type: "number", required: true, min: 5, max: 720, defaultValue: 60 },
+      { name: "askOnCompletionTimeout", label: "پس از پایان زمان، سؤال شود و پایش ادامه یابد", type: "checkbox", defaultValue: true },
+      { name: "showClickHighlights", label: "محل کلیک با دایره زرد نمایش داده شود", type: "checkbox", defaultValue: true },
       { name: "stopOnError", label: "در اولین خطا متوقف شود", type: "checkbox", defaultValue: true },
     ],
   },
@@ -634,7 +610,7 @@ export function directorMonitorSource(url: string, durationMinutes: number, inte
   return `# generated-management-service: director-monitor\nimport time\nimport urllib.error\nimport urllib.request\nimport webbrowser\n\nURL = ${pythonString(url)}\nDURATION_SECONDS = ${durationMinutes * 60}\nINTERVAL_SECONDS = ${intervalSeconds}\nREOPEN_AFTER_RECONNECT = ${reopen ? "True" : "False"}\n\ndef reachable():\n    try:\n        request = urllib.request.Request(URL, method=\"HEAD\", headers={\"User-Agent\": \"Windows-Agent/service\"})\n        with urllib.request.urlopen(request, timeout=12) as response:\n            response.read(1)\n        return True\n    except urllib.error.HTTPError:\n        return True\n    except Exception:\n        return False\n\nprint(\"SERVICE_OPENING_URL: \" + URL)\nwebbrowser.open(URL, new=2)\ndeadline = time.monotonic() + DURATION_SECONDS\nwas_offline = False\ncheck = 0\nwhile time.monotonic() < deadline:\n    check += 1\n    online = reachable()\n    if online:\n        print(f\"SERVICE_MONITOR_OK: بررسی {check}\")\n        if was_offline and REOPEN_AFTER_RECONNECT:\n            webbrowser.open(URL, new=2)\n            print(\"SERVICE_URL_REOPENED: اتصال برگشت\")\n        was_offline = False\n    else:\n        if not was_offline:\n            print(\"SERVICE_NETWORK_PAUSED: سایت یا اینترنت در دسترس نیست\")\n        else:\n            print(\"SERVICE_NETWORK_STILL_PAUSED: پایش ادامه دارد\")\n        was_offline = True\n    time.sleep(min(INTERVAL_SECONDS, max(0, deadline - time.monotonic())))\nprint(\"SERVICE_COMPLETED: مدت پایش تمام شد\")\n`;
 }
 
-async function arenaBatchSource(input: Record<string, unknown>): Promise<{
+async function arenaBatchSource(input: Record<string, unknown>, sourceMode: "manual" | "next_file"): Promise<{
   source: string;
   total: number;
   delay: number;
@@ -643,7 +619,6 @@ async function arenaBatchSource(input: Record<string, unknown>): Promise<{
   sourceMode: "manual" | "next_file";
 }> {
   const url = httpsUrl(input.url);
-  const sourceMode = input.promptSourceMode === "next_file" ? "next_file" : "manual";
   const delay = numberField(input, "delaySeconds", 3, 300);
   const completionTimeoutSeconds = numberField(input, "completionTimeoutMinutes", 5, 720) * 60;
   const askOnCompletionTimeout = boolField(input, "askOnCompletionTimeout", true);
@@ -817,7 +792,7 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
   let summary: string;
   const acceptanceMode = boolField(input, "networkAcceptance", false);
   const unrecoverableAcceptance = boolField(input, "unrecoverableAcceptance", false);
-  if (unrecoverableAcceptance && (service.slug !== "arena-batch" || !acceptanceMode)) {
+  if (unrecoverableAcceptance && (!["arena-batch", "arena-next-prompt"].includes(service.slug) || !acceptanceMode)) {
     throw new AppError("شبیه‌سازی خطای غیرقابل‌بازیابی فقط همراه حالت آزمون پذیرش Arena مجاز است.", {
       status: 422,
       code: "service_unrecoverable_acceptance_invalid",
@@ -868,7 +843,7 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
       ? `آزمون پذیرش شبکه با پایش ${duration} دقیقه‌ای لینک کارگردان`
       : `پایش ${duration} دقیقه‌ای لینک کارگردان`;
   } else {
-    const batch = await arenaBatchSource(input);
+    const batch = await arenaBatchSource(input, service.slug === "arena-next-prompt" ? "next_file" : "manual");
     if (acceptanceMode && batch.total !== 1) {
       throw new AppError("در حالت آزمون پذیرش شبکه دقیقاً یک پرامپت و یک دور مجاز است.", {
         status: 422,
@@ -911,13 +886,13 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
     timeoutSeconds,
     noProgressSeconds,
     requiredCapabilities,
-    monitoringPlan: service.slug === "arena-batch" ? [
+    monitoringPlan: ["arena-batch", "arena-next-prompt"].includes(service.slug) ? [
       "پایش پیوسته فایل play-puase-stop.txt و توقف امن روی pause یا stop",
       "نمایش زنده تغییرهای Message.txt به‌عنوان پیام مستقیم Agent همکار",
       "بایگانی مستقل هر نسخه تازه Complete MarkDown REPORT.md",
       "ثبت تصویر مرحله‌ای و ارائه لینک Google Drive برای هر تصویر",
       "تأیید ورود متن، ارسال واقعی، پایان پاسخ Arena و انتخاب Yes",
-      input.promptSourceMode === "next_file"
+      service.slug === "arena-next-prompt"
         ? "پایش تغییر پایدار NextPrompt.txt و جلوگیری از محتوای قدیمی، ناقص یا تکراری"
         : "اجرای ترتیبی فهرست دستی بدون استفاده از NextPrompt.txt",
     ] : service.slug === "drive-control" ? [
