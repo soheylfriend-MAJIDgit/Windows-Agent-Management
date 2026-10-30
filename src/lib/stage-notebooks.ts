@@ -5,6 +5,8 @@ import { requestAutomationRun, saveAutomationVersion } from "./automations";
 
 const STORE_KEY = "stage-notebooks.v1";
 const ATTEMPT_STORE_KEY = "stage-notebook-attempts.v1";
+const CONTROLLED_TEMPLATE_MARKER = "stage-notebook-controlled-template.v1";
+const CONTROLLED_NOTEBOOK_ID = "controlled-windows-ui-diagnostic-v1";
 const MAX_NOTEBOOKS = 30;
 const MAX_CELLS = 100;
 const MAX_ATTEMPTS = 60;
@@ -91,6 +93,85 @@ async function persist(items: StageNotebook[]): Promise<void> {
   );
 }
 
+const CONTROLLED_MESSAGEBOX_CODE = `import ctypes
+
+MB_OK = 0x00000000
+MB_ICONINFORMATION = 0x00000040
+MB_TOPMOST = 0x00040000
+MB_SETFOREGROUND = 0x00010000
+
+print("CONTROLLED_TEST_STARTED: MessageBox", flush=True)
+result = ctypes.windll.user32.MessageBoxW(
+    0,
+    "این پنجره مستقیماً توسط سلول کنترل‌شده دفترچه نمایش داده شد.",
+    "تست کنترل‌شده Windows Agent",
+    MB_OK | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND,
+)
+if result != 1:
+    raise RuntimeError(f"MessageBox نتیجه نامعتبر داد: {result}")
+print("CONTROLLED_TEST_PASSED: MessageBox visible and confirmed", flush=True)
+`;
+
+const CONTROLLED_APPS_CODE = `import ctypes
+import os
+import subprocess
+import time
+
+print("CONTROLLED_APPS_STARTED", flush=True)
+notepad = subprocess.Popen(["notepad.exe"])
+time.sleep(2)
+if notepad.poll() is not None:
+    raise RuntimeError("Notepad اجرا نشد یا بلافاصله بسته شد.")
+print(f"CONTROLLED_NOTEPAD_OPENED: PID={notepad.pid}", flush=True)
+
+os.startfile("https://www.microsoft.com/")
+print("CONTROLLED_BROWSER_REQUESTED: https://www.microsoft.com/", flush=True)
+time.sleep(2)
+
+MB_OK = 0x00000000
+MB_ICONINFORMATION = 0x00000040
+MB_TOPMOST = 0x00040000
+MB_SETFOREGROUND = 0x00010000
+result = ctypes.windll.user32.MessageBoxW(
+    0,
+    "Notepad و سایت مایکروسافت باید باز شده باشند. برای پایان تست OK را بزنید.",
+    "نتیجه تست کنترل‌شده",
+    MB_OK | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND,
+)
+if result != 1:
+    raise RuntimeError(f"پیام نتیجه مقدار نامعتبر داد: {result}")
+print("CONTROLLED_APPS_PASSED", flush=True)
+`;
+
+async function ensureControlledNotebook(): Promise<StageNotebook[]> {
+  const items = await load();
+  const marker = await dbFirst<{ value: string }>("SELECT value FROM settings WHERE key = ?", [CONTROLLED_TEMPLATE_MARKER]);
+  if (marker?.value === "seeded") return items;
+  if (!items.some((item) => item.id === CONTROLLED_NOTEBOOK_ID)) {
+    const now = new Date().toISOString();
+    items.unshift({
+      id: CONTROLLED_NOTEBOOK_ID,
+      title: "تست کنترل‌شده رابط ویندوز",
+      goal: "اثبات مستقل نمایش MessageBox، اجرای Notepad و بازشدن سایت مایکروسافت بدون API Key یا کتابخانه خارجی.",
+      chatbotGuide: "این دفترچه تشخیصی است. ساختار دو سلول را حفظ کن و هیچ API Key یا کتابخانه خارجی به آن اضافه نکن.",
+      createdAt: now,
+      updatedAt: now,
+      cells: [
+        { id: "controlled-messagebox", title: "۱. نمایش MessageBox واقعی", language: "python", content: CONTROLLED_MESSAGEBOX_CODE, notes: "ابتدا فقط این سلول را اجرا کنید. باید پس از تأیید Windows Agent یک MessageBox دوم ببینید.", transition: "manual", executionMode: "blocking", executable: true, commandId: null, createdAt: now, updatedAt: now },
+        { id: "controlled-apps", title: "۲. بازکردن Notepad و Microsoft", language: "python", content: CONTROLLED_APPS_CODE, notes: "پس از موفقیت سلول اول اجرا شود. به API Key، pyautogui یا فوکوس دستی نیاز ندارد.", transition: "manual", executionMode: "blocking", executable: true, commandId: null, createdAt: now, updatedAt: now },
+      ],
+    });
+    await persist(items);
+  }
+  const markerTime = new Date().toISOString();
+  await dbRun(
+    `INSERT INTO settings (key, value, updated_at) VALUES (?, 'seeded', ?)
+     ON CONFLICT(key) DO UPDATE SET value = 'seeded', updated_at = excluded.updated_at`,
+    [CONTROLLED_TEMPLATE_MARKER, markerTime],
+  );
+  return items;
+}
+
 async function loadAttempts(): Promise<StageExecutionAttempt[]> {
   const row = await dbFirst<{ value: string }>("SELECT value FROM settings WHERE key = ?", [ATTEMPT_STORE_KEY]);
   if (!row?.value) return [];
@@ -161,7 +242,7 @@ export async function listStageExecutionAttempts(): Promise<StageExecutionAttemp
 }
 
 export async function listStageNotebooks(): Promise<StageNotebook[]> {
-  return load();
+  return ensureControlledNotebook();
 }
 
 export async function createStageNotebook(input: unknown): Promise<StageNotebook> {
@@ -255,6 +336,9 @@ export async function updateStageNotebook(id: string, input: unknown): Promise<S
 }
 
 export async function deleteStageNotebook(id: string): Promise<void> {
+  if (id === CONTROLLED_NOTEBOOK_ID) {
+    throw new AppError("دفترچه تشخیصی کنترل‌شده برای استفاده دوباره حذف نمی‌شود.", { status: 422, code: "controlled_notebook_protected" });
+  }
   const items = await load();
   const next = items.filter((item) => item.id !== id);
   if (next.length === items.length) throw new AppError("دفترچه پیدا نشد.", { status: 404, code: "notebook_not_found" });
@@ -346,6 +430,13 @@ export async function runStageNotebookCell(notebookId: string, cellId: string, r
     const cell = notebook?.cells.find((item) => item.id === cellId);
     if (!notebook || !cell) throw new AppError("دفترچه یا مرحله پیدا نشد.", { status: 404, code: "stage_not_found" });
     if (!cell.executable || !cell.content.trim()) throw new AppError("این مرحله اجرایی نیست یا کد ندارد.", { status: 422, code: "cell_not_ready" });
+    if (cell.content.includes("کلید_API_خودت_رو_اینجا_بذار")) {
+      throw new AppError("کد هنوز API_KEY نمونه دارد و پیش از عملیات رابط کاربری متوقف می‌شود.", {
+        status: 422,
+        code: "stage_secret_placeholder",
+        hint: "برای تست بدون کلید، دفترچه «تست کنترل‌شده رابط ویندوز» را باز و سلول اول آن را اجرا کنید.",
+      });
+    }
     phase = "notebook_validated";
     await updateAttempt(attemptId, { phase, message: "دفترچه، سلول و محتوای اجرایی معتبر است." }, { phase, level: "success", message: `سلول «${cell.title}» با زبان ${cell.language} معتبر است.` });
 
