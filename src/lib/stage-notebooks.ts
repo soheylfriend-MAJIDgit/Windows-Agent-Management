@@ -7,7 +7,7 @@ import { arenaApiNotebookCells } from "./arena-api-notebook-template";
 const STORE_KEY = "stage-notebooks.v1";
 const ATTEMPT_STORE_KEY = "stage-notebook-attempts.v1";
 const CONTROLLED_TEMPLATE_MARKER = "stage-notebook-controlled-template.v1";
-const ARENA_API_TEMPLATE_MARKER = "stage-notebook-arena-api-template.v2";
+const ARENA_API_TEMPLATE_MARKER = "stage-notebook-arena-api-template.v3";
 const CONTROLLED_NOTEBOOK_ID = "controlled-windows-ui-diagnostic-v1";
 const ARENA_API_NOTEBOOK_ID = "arena-api-prompt-submit-v1";
 const MAX_NOTEBOOKS = 30;
@@ -168,7 +168,7 @@ async function ensureControlledNotebook(): Promise<StageNotebook[]> {
   const arenaMarker = await dbFirst<{ value: string }>("SELECT value FROM settings WHERE key = ?", [ARENA_API_TEMPLATE_MARKER]);
   if (arenaMarker?.value !== "seeded") {
     const title = "ارسال پرامپت بعدی API به Arena";
-    const goal = "دریافت امن API Key سالی‌تست در دسکتاپ، خواندن nextPrompt از دامنه ثابت https://salitest.ir، بازکردن لینک مشخص Arena در Chrome، انتظار برای توقف loading، Paste یک‌باره و Enter ساده برای Send/Submit.";
+    const goal = "دریافت امن API Key سالی‌تست در دسکتاپ، خواندن decision از GET https://salitest.ir/api/agent/v1/handoff، اجرای nextPrompt فقط برای run_next، بازکردن لینک مشخص Arena در Chrome، انتظار برای توقف loading، Paste یک‌باره و Enter ساده برای Send/Submit.";
     const chatbotGuide = "این دفترچه ایمنی سخت‌گیرانه دارد: API Key هرگز داخل کد یا لاگ قرار نگیرد؛ Prompt هنگام جست‌وجوی composer تکرار نشود؛ Ctrl+V فقط یک بار و Enter فقط بدون Shift/Ctrl/Alt اجرا شود. وضعیت‌های human و stop باید زنجیره را پیش از مرورگر متوقف کنند.";
     const existing = items.find((item) => item.id === ARENA_API_NOTEBOOK_ID);
     const previousCells = new Map(existing?.cells.map((cell) => [cell.id, cell]) ?? []);

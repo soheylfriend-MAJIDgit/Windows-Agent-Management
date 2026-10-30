@@ -31,15 +31,15 @@ from tkinter import ttk
 
 STAGES = [
     ("dashboard", "۱. رابط وضعیت مرحله‌ها"),
-    ("credentials", "۲. دریافت API URL و API Key"),
-    ("prompt", "۳. دریافت پرامپت بعدی از API"),
+    ("credentials", "۲. دریافت API Key سالی‌تست"),
+    ("prompt", "۳. خواندن decision از GET /handoff"),
     ("browser", "۴. بازکردن Chrome و انتظار برای پایداری"),
     ("paste", "۵. Paste دقیقاً یک‌باره از Clipboard"),
     ("submit", "۶. Enter برای Send / Submit"),
 ]
 LABELS = {"waiting": "منتظر", "running": "در حال اجرا", "done": "انجام شد", "failed": "متوقف شد", "skipped": "اجرا نمی‌شود"}
 COLORS = {"waiting": "#64748b", "running": "#f59e0b", "done": "#10b981", "failed": "#ef4444", "skipped": "#8b5cf6"}
-write_state(dashboard="running")
+write_state(dashboard="running", credentials="waiting", prompt="waiting", browser="waiting", paste="waiting", submit="waiting", pasteVerified=False, chainStatus="pending", message="رابط وضعیت آماده شد؛ مرحله دریافت API Key در ادامه باز می‌شود.")
 
 window = tk.Tk()
 window.title("Arena · اجرای پرامپت بعدی")
@@ -88,7 +88,7 @@ import tkinter as tk
 from ctypes import wintypes
 from tkinter import messagebox, ttk
 
-API_URL = "https://salitest.ir"
+API_URL = "https://salitest.ir/api/agent/v1/handoff"
 write_state(credentials="running", message="لطفاً فقط API Key سالی‌تست را در پنجره Python وارد کنید.")
 
 class DATA_BLOB(ctypes.Structure):
@@ -126,18 +126,14 @@ def field(label, secret=False):
     return entry
 
 key_entry = field("API Key سالی‌تست")
-auth_var = tk.StringVar(value="bearer")
-auth_row = tk.Frame(form, bg="#172033")
-auth_row.pack(fill="x", pady=4)
-tk.Radiobutton(auth_row, text="Authorization: Bearer", variable=auth_var, value="bearer", bg="#172033", fg="#cbd5e1", selectcolor="#0f172a", activebackground="#172033", activeforeground="white").pack(side="right", padx=8)
-tk.Radiobutton(auth_row, text="X-API-Key", variable=auth_var, value="x-api-key", bg="#172033", fg="#cbd5e1", selectcolor="#0f172a", activebackground="#172033", activeforeground="white").pack(side="right", padx=8)
+tk.Label(form, text="قرارداد ثابت: Authorization: Bearer · GET /api/agent/v1/handoff", bg="#172033", fg="#7dd3fc", font=("Segoe UI", 9), anchor="e").pack(fill="x", pady=4)
 
 def submit():
     key = key_entry.get().strip()
-    if len(key) < 12:
-        messagebox.showerror("ورودی نامعتبر", "API Key واردشده بیش از حد کوتاه است.", parent=window)
+    if not key.startswith("agk_") or len(key) < 20:
+        messagebox.showerror("ورودی نامعتبر", "کلید ایجنت اتوماسیون باید با agk_ شروع شود.", parent=window)
         return
-    result.update(key=key, auth=auth_var.get())
+    result.update(key=key)
     key_entry.delete(0, "end")
     window.destroy()
 
@@ -151,7 +147,7 @@ if not result:
     write_state(credentials="failed", message="دریافت API Key توسط کاربر لغو شد.")
     raise SystemExit("API credential entry cancelled")
 credentials_path = os.path.join(ROOT, "credentials.json")
-payload = {"url": API_URL, "auth": result["auth"], "protectedKey": protect(result["key"]), "windowsUser": getpass.getuser()}
+payload = {"url": API_URL, "protectedKey": protect(result["key"]), "windowsUser": getpass.getuser()}
 with open(credentials_path + ".tmp", "w", encoding="utf-8") as handle:
     json.dump(payload, handle, ensure_ascii=False, indent=2)
 os.replace(credentials_path + ".tmp", credentials_path)
@@ -178,47 +174,79 @@ def unprotect(encoded):
         return ctypes.string_at(target.pbData, target.cbData).decode("utf-8")
     finally:
         ctypes.windll.kernel32.LocalFree(target.pbData)
-def find_value(value, names):
-    if isinstance(value, dict):
-        for name in names:
-            if name in value:
-                return value[name]
-        for child in value.values():
-            found = find_value(child, names)
-            if found is not None:
-                return found
-    return None
+HANDOFF_URL = "https://salitest.ir/api/agent/v1/handoff"
+
+def api_error(code, raw):
+    try:
+        body = json.loads(raw.decode("utf-8-sig"))
+        if isinstance(body, dict):
+            error_code = str(body.get("code") or body.get("error") or "").strip()
+            error_message = str(body.get("message") or body.get("detail") or "").strip()
+            return " ".join(part for part in ("HTTP " + str(code), error_code, error_message) if part)
+    except Exception:
+        pass
+    return "HTTP " + str(code) + " · پاسخ خطا JSON معتبر نبود"
+
+def get_handoff(secret):
+    headers = {"Accept": "application/json", "Authorization": "Bearer " + secret, "User-Agent": "Windows-Agent/Arena-Next-Prompt-v1"}
+    for attempt in range(1, 4):
+        request = urllib.request.Request(HANDOFF_URL, method="GET", headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                content_type = str(response.headers.get("Content-Type") or "").lower()
+                raw = response.read(128 * 1024 + 1)
+                status_code = response.status
+            if status_code != 200:
+                raise RuntimeError(api_error(status_code, raw))
+            if len(raw) > 128 * 1024:
+                raise RuntimeError("پاسخ API بزرگ‌تر از ۱۲۸ کیلوبایت است")
+            try:
+                payload = json.loads(raw.decode("utf-8-sig"))
+            except (UnicodeError, json.JSONDecodeError) as exc:
+                raise RuntimeError("پاسخ endpoint قرارداد JSON نیست · HTTP 200 · Content-Type=" + (content_type or "نامشخص") + " · bytes=" + str(len(raw))) from exc
+            if not isinstance(payload, dict):
+                raise RuntimeError("پاسخ GET /handoff باید JSON object باشد")
+            print("SALITEST_HANDOFF_RECEIVED: HTTP 200 attempt=" + str(attempt), flush=True)
+            return payload
+        except urllib.error.HTTPError as exc:
+            raw = exc.read(64 * 1024)
+            raise RuntimeError(api_error(exc.code, raw)) from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if attempt >= 3:
+                raise RuntimeError("شبکه پس از دو تلاش مجدد در دسترس نشد: " + str(exc)) from exc
+            delay = 3 * attempt
+            print("SALITEST_HANDOFF_RETRY: attempt=" + str(attempt) + " delay=" + str(delay), flush=True)
+            time.sleep(delay)
+
 try:
     with open(os.path.join(ROOT, "credentials.json"), "r", encoding="utf-8") as handle:
         credentials = json.load(handle)
     secret = unprotect(credentials["protectedKey"])
-    headers = {"Accept": "application/json", "User-Agent": "Windows-Agent/Arena-Next-Prompt-v1"}
-    if credentials.get("auth") == "x-api-key":
-        headers["X-API-Key"] = secret
-    else:
-        headers["Authorization"] = "Bearer " + secret
-    request = urllib.request.Request(credentials["url"], method="GET", headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            if response.status != 200:
-                raise RuntimeError("API HTTP status: " + str(response.status))
-            raw = response.read(128 * 1024 + 1)
+        payload = get_handoff(secret)
     finally:
         secret = ""
-    if len(raw) > 128 * 1024:
-        raise RuntimeError("پاسخ API بزرگ‌تر از حد مجاز است")
-    payload = json.loads(raw.decode("utf-8-sig"))
-    status = str(find_value(payload, ("status", "chainStatus")) or "").strip().lower()
-    prompt = find_value(payload, ("nextPrompt", "next_prompt"))
-    summary = str(find_value(payload, ("summary",)) or "").strip()
-    if status not in ("continue", "human", "stop"):
-        raise RuntimeError("status پاسخ باید یکی از continue، human یا stop باشد")
-    if status != "continue":
-        write_state(prompt="skipped", browser="skipped", paste="skipped", submit="skipped", chainStatus=status, message=("زنجیره نیازمند مداخله انسانی است." if status == "human" else "زنجیره طبق پاسخ API متوقف است."))
-        print("ARENA_CHAIN_NOT_CONTINUING: status=" + status + " summary=" + summary[:300], flush=True)
+    decision = payload.get("decision")
+    computed = payload.get("computed")
+    if not isinstance(decision, dict) and isinstance(computed, dict):
+        decision = computed.get("decision")
+    if not isinstance(decision, dict):
+        raise RuntimeError("پاسخ GET /handoff فاقد decision object است")
+    action = str(decision.get("action") or "").strip().lower()
+    if action not in ("run_next", "wait_human", "stop", "idle"):
+        raise RuntimeError("decision.action ناشناخته است: " + (action or "خالی"))
+    if action != "run_next":
+        chain_status = {"wait_human": "human", "stop": "stop", "idle": "idle"}[action]
+        messages = {"wait_human": "زنجیره نیازمند مداخله انسانی است؛ هیچ کاری اجرا نشد.", "stop": "زنجیره متوقف است؛ هیچ کاری اجرا نشد.", "idle": "زنجیره خالی یا خاموش است؛ هیچ کاری اجرا نشد."}
+        write_state(prompt="skipped", browser="skipped", paste="skipped", submit="skipped", chainStatus=chain_status, decisionAction=action, message=messages[action])
+        print("ARENA_CHAIN_NOT_CONTINUING: action=" + action, flush=True)
         raise SystemExit(0)
+    prompt = decision.get("nextPrompt")
+    status = str(decision.get("status") or "continue").strip().lower()
+    if status != "continue":
+        raise RuntimeError("decision.action=run_next است اما status برابر continue نیست")
     if not isinstance(prompt, str) or not (2 <= len(prompt.strip()) <= 6000):
-        raise RuntimeError("برای status=continue، nextPrompt باید بین ۲ تا ۶۰۰۰ نویسه باشد")
+        raise RuntimeError("برای decision.action=run_next، nextPrompt باید بین ۲ تا ۶۰۰۰ نویسه باشد")
     prompt = prompt.strip()
     digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     previous = read_state().get("lastSubmittedPromptSha256")
@@ -228,7 +256,7 @@ try:
     with open(prompt_path + ".tmp", "w", encoding="utf-8", newline="\n") as handle:
         handle.write(prompt)
     os.replace(prompt_path + ".tmp", prompt_path)
-    write_state(prompt="done", promptSha256=digest, promptChars=len(prompt), chainStatus=status, summary=summary, message="پرامپت بعدی معتبر دریافت شد؛ متن آن در لاگ نمایش داده نمی‌شود.")
+    write_state(prompt="done", promptSha256=digest, promptChars=len(prompt), chainStatus=status, decisionAction=action, decisionReason=str(decision.get("reason") or ""), message="decision.action=run_next و پرامپت بعدی معتبر دریافت شد؛ متن آن در لاگ نمایش داده نمی‌شود.")
     print("ARENA_NEXT_PROMPT_READY: sha256=" + digest + " chars=" + str(len(prompt)), flush=True)
 except SystemExit:
     raise
@@ -242,8 +270,8 @@ import shutil, subprocess, urllib.request
 
 ARENA_URL = "https://arena.ai/agent/01a18017-9552-70af-b937-b790a82b79b3"
 PORT = 9222
-if read_state().get("chainStatus") in ("human", "stop"):
-    write_state(browser="skipped", message="به‌دلیل وضعیت زنجیره، Chrome باز نمی‌شود.")
+if read_state().get("chainStatus") != "continue":
+    write_state(browser="skipped", message="decision.action اجازه ادامه نمی‌دهد؛ Chrome باز نمی‌شود.")
     print("ARENA_BROWSER_SKIPPED: chain status does not allow continuation", flush=True)
     raise SystemExit(0)
 write_state(browser="running", message="در حال بازکردن Chrome و انتظار برای توقف نشانگر بارگذاری…")
@@ -336,6 +364,10 @@ const PASTE_CODE = String.raw`${ROOT_SETUP}
 import base64, ctypes, hashlib, subprocess
 
 PORT = 9222
+if read_state().get("chainStatus") != "continue":
+    write_state(paste="skipped", message="decision.action اجازه ادامه نمی‌دهد؛ هیچ Paste انجام نمی‌شود.")
+    print("ARENA_PASTE_SKIPPED: decision does not allow continuation", flush=True)
+    raise SystemExit(0)
 write_state(paste="running", message="در حال قراردادن Prompt در Clipboard و Paste دقیقاً یک‌باره…")
 
 def evaluate(expression):
@@ -379,7 +411,7 @@ try:
     focus_expression = r'''(() => { const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=="none"&&s.visibility!=="hidden"&&r.width>20&&r.height>20}; const all=[...document.querySelectorAll('textarea,[contenteditable="true"]')].filter(visible); const e=all.at(-1); if(!e)return false; e.focus(); return document.activeElement===e || e.contains(document.activeElement); })()'''
     if evaluate(focus_expression) is not True:
         raise RuntimeError("composer قابل مشاهده پیدا یا Focus نشد؛ هیچ Paste انجام نشد")
-    subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", "Set-Clipboard -LiteralPath $env:PROMPT_FILE"], env={**os.environ, "PROMPT_FILE": prompt_path}, check=True, capture_output=True, timeout=15)
+    subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", "Get-Content -Raw -LiteralPath $env:PROMPT_FILE | Set-Clipboard"], env={**os.environ, "PROMPT_FILE": prompt_path}, check=True, capture_output=True, timeout=15)
     activate_chrome()
     time.sleep(0.8)
     keys((0x11, True), (0x56, True), (0x56, False), (0x11, False))
@@ -401,6 +433,10 @@ const SUBMIT_CODE = String.raw`${ROOT_SETUP}
 import base64, ctypes, hashlib, subprocess
 
 PORT = 9222
+if read_state().get("chainStatus") != "continue":
+    write_state(submit="skipped", message="decision.action اجازه ادامه نمی‌دهد؛ Enter ارسال نمی‌شود.")
+    print("ARENA_SUBMIT_SKIPPED: decision does not allow continuation", flush=True)
+    raise SystemExit(0)
 write_state(submit="running", message="در حال بررسی نهایی و ارسال Enter بدون Shift/Ctrl/Alt…")
 def evaluate(expression):
     env = os.environ.copy()
@@ -454,7 +490,7 @@ export function arenaApiNotebookCells(): ArenaApiNotebookCellTemplate[] {
   return [
     { id: "arena-status-dashboard", title: "۱. نمایش رابط وضعیت منظم", language: "python", content: DASHBOARD_CODE, notes: "یک پنجره پایش مستقل باز می‌کند و وضعیت هر شش مرحله را از فایل state محلی نمایش می‌دهد.", transition: "on_success", executionMode: "background", executable: true },
     { id: "arena-api-credentials", title: "۲. دریافت امن API Key از Python", language: "python", content: CREDENTIALS_CODE, notes: "دامنه https://salitest.ir ثابت است و فقط Key در خود دسکتاپ گرفته می‌شود. Key با Windows DPAPI رمز می‌شود و در stdout یا PostgreSQL قرار نمی‌گیرد.", transition: "on_success", executionMode: "blocking", executable: true },
-    { id: "arena-fetch-next-prompt", title: "۳. دریافت پرامپت بعدی از API", language: "python", content: FETCH_PROMPT_CODE, notes: "فقط statusهای continue/human/stop و nextPrompt حداکثر ۶۰۰۰ نویسه پذیرفته می‌شوند. Prompt تکراری ارسال نمی‌شود.", transition: "on_success", executionMode: "blocking", executable: true },
+    { id: "arena-fetch-next-prompt", title: "۳. خواندن decision از GET /handoff", language: "python", content: FETCH_PROMPT_CODE, notes: "فقط GET https://salitest.ir/api/agent/v1/handoff با Bearer اجرا می‌شود. decision.action ملاک قطعی است؛ Prompt تنها در run_next پذیرفته و از ارسال تکراری جلوگیری می‌شود.", transition: "on_success", executionMode: "blocking", executable: true },
     { id: "arena-open-and-stabilize", title: "۴. بازکردن Chrome و انتظار برای پایداری", language: "python", content: BROWSER_CODE, notes: "Chrome با پروفایل اختصاصی پایدار باز می‌شود؛ سه بررسی متوالی CDP باید نبود spinner/loading و وجود composer را تأیید کنند.", transition: "on_success", executionMode: "blocking", executable: true },
     { id: "arena-paste-once", title: "۵. Paste یک‌باره از Clipboard", language: "python", content: PASTE_CODE, notes: "پس از Focus تأییدشده، Ctrl+V دقیقاً یک بار زده می‌شود. عدم تطبیق متن باعث توقف می‌شود، نه Paste دوباره.", transition: "on_success", executionMode: "blocking", executable: true },
     { id: "arena-submit-enter", title: "۶. Enter برای Send / Submit", language: "python", content: SUBMIT_CODE, notes: "فقط Enter ساده و بدون Shift/Ctrl/Alt ارسال می‌شود؛ پیش از آن متن composer دوباره با Prompt API تطبیق داده می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
