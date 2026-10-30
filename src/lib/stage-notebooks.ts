@@ -1,6 +1,6 @@
 import { AppError } from "./errors";
 import { dbFirst, dbRun } from "./db";
-import { findOnlineCommandAgent } from "./commands";
+import { findOnlineCommandAgent, requestCommandCancellation } from "./commands";
 import { requestAutomationRun, saveAutomationVersion } from "./automations";
 
 const STORE_KEY = "stage-notebooks.v1";
@@ -14,6 +14,7 @@ export interface StageCell {
   content: string;
   notes: string;
   transition: "manual" | "on_success";
+  executionMode: "blocking" | "background";
   executable: boolean;
   commandId: string | null;
   createdAt: string;
@@ -39,7 +40,14 @@ async function load(): Promise<StageNotebook[]> {
   if (!row?.value) return [];
   try {
     const parsed = JSON.parse(row.value);
-    return Array.isArray(parsed) ? parsed.slice(0, MAX_NOTEBOOKS) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.slice(0, MAX_NOTEBOOKS).map((notebook: StageNotebook) => ({
+      ...notebook,
+      cells: Array.isArray(notebook.cells) ? notebook.cells.slice(0, MAX_CELLS).map((cell) => ({
+        ...cell,
+        executionMode: cell.executionMode === "background" ? "background" : "blocking",
+      })) : [],
+    }));
   } catch {
     return [];
   }
@@ -83,7 +91,7 @@ export async function updateStageNotebook(id: string, input: unknown): Promise<S
   if (body.addCell) {
     if (notebook.cells.length >= MAX_CELLS) throw new AppError("حداکثر ۱۰۰ مرحله قابل ثبت است.", { status: 422, code: "cell_limit" });
     const now = new Date().toISOString();
-    notebook.cells.push({ id: crypto.randomUUID(), title: `مرحله ${notebook.cells.length + 1}`, language: "python", content: "", notes: "", transition: "manual", executable: true, commandId: null, createdAt: now, updatedAt: now });
+    notebook.cells.push({ id: crypto.randomUUID(), title: `مرحله ${notebook.cells.length + 1}`, language: "python", content: "", notes: "", transition: "manual", executionMode: "blocking", executable: true, commandId: null, createdAt: now, updatedAt: now });
   }
   if (typeof body.deleteCell === "string") {
     const index = notebook.cells.findIndex((item) => item.id === body.deleteCell);
@@ -109,6 +117,7 @@ export async function updateStageNotebook(id: string, input: unknown): Promise<S
     cell.content = typeof cellInput.content === "string" ? cellInput.content.slice(0, 50000) : cell.content;
     cell.notes = typeof cellInput.notes === "string" ? cellInput.notes.slice(0, 8000) : cell.notes;
     cell.transition = cellInput.transition === "on_success" ? "on_success" : "manual";
+    cell.executionMode = cellInput.executionMode === "background" ? "background" : "blocking";
     cell.executable = Boolean(cellInput.executable);
     cell.updatedAt = new Date().toISOString();
   }
@@ -132,50 +141,70 @@ function py(value: string): string { return JSON.stringify(value); }
 function cellSource(cells: StageCell[], notebook: StageNotebook): string {
   for (const cell of cells) {
     if (!["python", "powershell", "cmd"].includes(cell.language.toLowerCase())) {
-      throw new AppError("ادامه خودکار فقط برای Python، PowerShell و CMD قابل اجرا است.", { status: 422, code: "cell_language_not_executable" });
+      throw new AppError("اجرا فقط برای Python، PowerShell و CMD قابل انجام است.", { status: 422, code: "cell_language_not_executable" });
     }
   }
-  const stages = cells.map((cell) => ({ id: cell.id, title: cell.title, language: cell.language.toLowerCase(), code: cell.content }));
+  const stages = cells.map((cell) => ({ id: cell.id, title: cell.title, language: cell.language.toLowerCase(), code: cell.content, mode: cell.executionMode ?? "blocking" }));
   return `# generated-stage-notebook-cell
 import json, os, subprocess, sys
 from datetime import datetime
 NOTEBOOK_ID = ${py(notebook.id)}
 STAGES = json.loads(${py(JSON.stringify(stages))})
+ROOT = os.path.join(os.environ.get("LOCALAPPDATA", "."), "Windows-Agent", "stage-notebooks", NOTEBOOK_ID)
+os.makedirs(ROOT, exist_ok=True)
 
-def capture(stage):
+def capture(stage, suffix="result"):
     try:
         from PIL import ImageGrab
-        root = os.path.join(os.environ.get("LOCALAPPDATA", "."), "Windows-Agent", "logs", "stage-notebooks")
-        os.makedirs(root, exist_ok=True)
-        path = os.path.join(root, f"stage_{NOTEBOOK_ID}_{stage['id']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+        path = os.path.join(ROOT, f"stage_{stage['id']}_{suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
         ImageGrab.grab(all_screens=True).save(path)
-        print("SERVICE_ARTIFACT: " + json.dumps({"artifactId": "stage-" + stage["id"], "kind": "screenshot", "stage": "stage-notebook-result", "name": os.path.basename(path), "localPath": path, "mimeType": "image/png"}, ensure_ascii=False))
+        print("SERVICE_ARTIFACT: " + json.dumps({"artifactId": "stage-" + stage["id"] + "-" + suffix, "kind": "screenshot", "stage": "stage-notebook-" + suffix, "name": os.path.basename(path), "localPath": path, "mimeType": "image/png"}, ensure_ascii=False), flush=True)
     except Exception as exc:
-        print("STAGE_SCREENSHOT_WARNING: " + str(exc), file=sys.stderr)
+        print("STAGE_SCREENSHOT_WARNING: " + str(exc), file=sys.stderr, flush=True)
+
+def command_for(stage, background=False):
+    language, code = stage["language"], stage["code"]
+    if language == "python":
+        if not background:
+            return None
+        script = os.path.join(ROOT, "background_" + stage["id"] + ".py")
+        with open(script, "w", encoding="utf-8") as handle:
+            handle.write(code)
+        return [sys.executable, "-u", script]
+    if language == "powershell":
+        return ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", code]
+    return ["cmd.exe", "/d", "/s", "/c", code]
 
 def execute(stage):
-    language, code = stage["language"], stage["code"]
-    print("STAGE_STARTED: " + stage["id"] + " · " + stage["title"], flush=True)
-    if language == "python":
-        exec(compile(code, "<stage-cell>", "exec"), {"__name__": "__main__"})
+    print("STAGE_STARTED: " + stage["id"] + " · " + stage["title"] + " · " + stage["mode"], flush=True)
+    if stage["mode"] == "background":
+        log_path = os.path.join(ROOT, "background_" + stage["id"] + ".log")
+        pid_path = os.path.join(ROOT, "background_" + stage["id"] + ".pid")
+        log = open(log_path, "ab", buffering=0)
+        flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+        process = subprocess.Popen(command_for(stage, True), stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, creationflags=flags, close_fds=True)
+        with open(pid_path, "w", encoding="ascii") as handle:
+            handle.write(str(process.pid))
+        print("STAGE_BACKGROUND_STARTED: " + stage["id"] + " · PID=" + str(process.pid) + " · LOG=" + log_path, flush=True)
+        capture(stage, "background-started")
+        return
+    if stage["language"] == "python":
+        exec(compile(stage["code"], "<stage-cell>", "exec"), {"__name__": "__main__"})
     else:
-        command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", code] if language == "powershell" else ["cmd.exe", "/d", "/s", "/c", code]
-        result = subprocess.run(command, text=True, capture_output=True, encoding="utf-8", errors="replace")
-        print(result.stdout, end="")
-        print(result.stderr, end="", file=sys.stderr)
+        result = subprocess.run(command_for(stage), text=True, capture_output=True, encoding="utf-8", errors="replace")
+        print(result.stdout, end="", flush=True)
+        print(result.stderr, end="", file=sys.stderr, flush=True)
         if result.returncode:
             raise RuntimeError(f"stage exited with code {result.returncode}")
     print("STAGE_COMPLETED: " + stage["id"], flush=True)
+    capture(stage)
 
 for stage in STAGES:
-    try:
-        execute(stage)
-    finally:
-        capture(stage)
+    execute(stage)
 `;
 }
 
-export async function runStageNotebookCell(notebookId: string, cellId: string): Promise<{ commandId: string; version: number }> {
+export async function runStageNotebookCell(notebookId: string, cellId: string, runAll = false): Promise<{ commandId: string; version: number }> {
   const items = await load();
   const notebook = items.find((item) => item.id === notebookId);
   const cell = notebook?.cells.find((item) => item.id === cellId);
@@ -183,18 +212,66 @@ export async function runStageNotebookCell(notebookId: string, cellId: string): 
   if (!cell.executable || !cell.content.trim()) throw new AppError("این مرحله اجرایی نیست یا کد ندارد.", { status: 422, code: "cell_not_ready" });
   const target = await findOnlineCommandAgent(["d1_automations"]);
   const startIndex = notebook.cells.findIndex((item) => item.id === cell.id);
-  const chain: StageCell[] = [cell];
-  let cursor = startIndex;
-  while (chain[chain.length - 1].transition === "on_success" && cursor + 1 < notebook.cells.length) {
-    const next = notebook.cells[++cursor];
-    if (!next.executable || !next.content.trim()) break;
-    chain.push(next);
+  let chain: StageCell[];
+  if (runAll) {
+    chain = notebook.cells.slice(startIndex).filter((item) => item.executable && item.content.trim());
+  } else {
+    chain = [cell];
+    let cursor = startIndex;
+    while (chain[chain.length - 1].transition === "on_success" && cursor + 1 < notebook.cells.length) {
+      const next = notebook.cells[++cursor];
+      if (!next.executable || !next.content.trim()) break;
+      chain.push(next);
+    }
   }
-  const saved = await saveAutomationVersion({ slug: `stage_${notebook.id.replace(/-/g, "_")}_${cell.id.replace(/-/g, "_")}`, name: `${notebook.title} · ${cell.title}`, description: "سلول دفترچه کنترل مرحله‌ای", target: "windows", sourceCode: cellSource(chain, notebook), changeSummary: `اجرای واقعی ${chain.length} مرحله در ${new Date().toISOString()}`, actor: "manager:stage-notebook", activate: true });
-  const run = await requestAutomationRun(saved.automation.id, "manager:stage-notebook", target, { source: "stage_notebook", title: `${notebook.title} · ${cell.title}`, timeoutSeconds: 3600, noProgressSeconds: 300, requiredCapabilities: ["d1_automations"], monitoringPlan: ["اجرای سلول در workspace مستقل", "ثبت stdout و stderr", "گرفتن اسکرین‌شات پایان مرحله"] });
+  const saved = await saveAutomationVersion({ slug: `stage_${notebook.id.replace(/-/g, "_")}_${cell.id.replace(/-/g, "_")}`, name: `${notebook.title} · ${runAll ? "اجرای دفترچه" : cell.title}`, description: "سلول‌های دفترچه کنترل مرحله‌ای", target: "windows", sourceCode: cellSource(chain, notebook), changeSummary: `اجرای واقعی ${chain.length} مرحله در ${new Date().toISOString()}`, actor: "manager:stage-notebook", activate: true });
+  const run = await requestAutomationRun(saved.automation.id, "manager:stage-notebook", target, { source: "stage_notebook", title: `${notebook.title} · ${runAll ? "اجرای همه مراحل" : cell.title}`, timeoutSeconds: 3600, noProgressSeconds: 300, requiredCapabilities: ["d1_automations"], monitoringPlan: ["اجرای ترتیبی سلول‌های عادی", "راه‌اندازی مستقل سلول‌های پایشی پس‌زمینه", "ثبت stdout و stderr", "گرفتن اسکرین‌شات هر مرحله"] });
+  for (const item of chain) {
+    item.commandId = run.commandId;
+    item.updatedAt = new Date().toISOString();
+  }
+  notebook.updatedAt = new Date().toISOString();
+  await persist(items);
+  return { commandId: run.commandId, version: saved.version.version };
+}
+
+export async function pauseStageNotebookCell(notebookId: string, cellId: string): Promise<{ commandId: string }> {
+  const items = await load();
+  const notebook = items.find((item) => item.id === notebookId);
+  const cell = notebook?.cells.find((item) => item.id === cellId);
+  if (!notebook || !cell) throw new AppError("دفترچه یا مرحله پیدا نشد.", { status: 404, code: "stage_not_found" });
+  if (cell.executionMode !== "background") {
+    if (!cell.commandId) throw new AppError("برای این مرحله اجرای فعالی ثبت نشده است.", { status: 409, code: "cell_not_running" });
+    await requestCommandCancellation(cell.commandId, `توقف سلول ${cell.title} از دفترچه مرحله‌ای`);
+    return { commandId: cell.commandId };
+  }
+  const target = await findOnlineCommandAgent(["d1_automations"]);
+  const rootPart = py(notebook.id);
+  const cellPart = py(cell.id);
+  const source = `# stop-stage-notebook-background
+import os, subprocess
+root = os.path.join(os.environ.get("LOCALAPPDATA", "."), "Windows-Agent", "stage-notebooks", ${rootPart})
+pid_path = os.path.join(root, "background_" + ${cellPart} + ".pid")
+if not os.path.isfile(pid_path):
+    raise RuntimeError("فایل PID اجرای پایشی پیدا نشد")
+with open(pid_path, "r", encoding="ascii") as handle:
+    pid = int(handle.read().strip())
+result = subprocess.run(["taskkill.exe", "/PID", str(pid), "/T", "/F"], text=True, capture_output=True)
+print(result.stdout, end="")
+print(result.stderr, end="")
+if result.returncode not in (0, 128):
+    raise RuntimeError("توقف پردازش پایشی ناموفق بود: " + str(result.returncode))
+try:
+    os.remove(pid_path)
+except FileNotFoundError:
+    pass
+print("STAGE_BACKGROUND_STOPPED: " + ${cellPart})
+`;
+  const saved = await saveAutomationVersion({ slug: `stage_stop_${notebook.id.replace(/-/g, "_")}_${cell.id.replace(/-/g, "_")}`, name: `${notebook.title} · توقف ${cell.title}`, description: "توقف پردازش پایشی دفترچه", target: "windows", sourceCode: source, changeSummary: `درخواست توقف واقعی در ${new Date().toISOString()}`, actor: "manager:stage-notebook", activate: true });
+  const run = await requestAutomationRun(saved.automation.id, "manager:stage-notebook", target, { source: "stage_notebook_pause", title: `${notebook.title} · توقف ${cell.title}`, timeoutSeconds: 120, noProgressSeconds: 60, requiredCapabilities: ["d1_automations"], monitoringPlan: ["خواندن PID ثبت‌شده", "پایان process tree سلول پایشی"] });
   cell.commandId = run.commandId;
   cell.updatedAt = new Date().toISOString();
   notebook.updatedAt = cell.updatedAt;
   await persist(items);
-  return { commandId: run.commandId, version: saved.version.version };
+  return { commandId: run.commandId };
 }
