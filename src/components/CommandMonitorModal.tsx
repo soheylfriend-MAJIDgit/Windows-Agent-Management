@@ -85,6 +85,13 @@ function durationLabel(seconds: number): string {
   return `${faNumber(seconds)} ثانیه`;
 }
 
+function artifactHref(artifact: { driveUrl: string | null; name: string }): string {
+  if (artifact.driveUrl) return artifact.driveUrl;
+  // نسخه فعلی Windows Agent فقط metadata و نام فایل همگام‌شده را می‌فرستد.
+  // تا زمانی که File ID آنلاین گزارش شود، جست‌وجوی دقیق همان نام در Drive یک لینک عملی فراهم می‌کند.
+  return `https://drive.google.com/drive/u/0/search?q=${encodeURIComponent(`"${artifact.name}"`)}`;
+}
+
 function artifactStageLabel(stage: string | null, kind: string): string {
   const labels: Record<string, string> = {
     "ocr-before-input": "بررسی صفحه پیش از ورود متن",
@@ -428,7 +435,9 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
               {imageArtifacts.map((artifact) => (
                 <article className="command-artifact" key={artifact.id}>
                   <div><strong>{artifact.name}</strong><span>{artifactStageLabel(artifact.stage, artifact.kind)}</span></div>
-                  {artifact.driveUrl ? <a href={artifact.driveUrl} target="_blank" rel="noreferrer">بازکردن در Drive</a> : <span className="artifact-pending">در انتظار Drive</span>}
+                  <a href={artifactHref(artifact)} target="_blank" rel="noopener noreferrer" title={artifact.driveUrl ? "بازکردن مستقیم تصویر در Google Drive" : "جست‌وجوی نام دقیق تصویر همگام‌شده در Google Drive"}>
+                    {artifact.driveUrl ? "بازکردن تصویر ↗" : "یافتن تصویر در Drive ↗"}
+                  </a>
                 </article>
               ))}
             </div>
