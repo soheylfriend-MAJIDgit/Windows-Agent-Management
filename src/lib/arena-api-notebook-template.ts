@@ -651,8 +651,8 @@ try:
     result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File", script_path], env=env, text=True, capture_output=True, timeout=60, creationflags=flags)
     diagnostics = " | ".join(line.strip() for line in result.stdout.splitlines() if line.strip())[-3000:]
     if result.returncode or "ARENA_STAGE5_PASTE_VERIFIED" not in result.stdout:
-        error = (result.stderr or diagnostics or "UI Automation paste verification failed").strip()
-        raise RuntimeError(error[-1800:])
+        error = " | ".join(part for part in (diagnostics, result.stderr.strip()) if part) or "UI Automation paste verification failed"
+        raise RuntimeError(error[-3000:])
     if not os.path.isfile(shot_path):
         raise RuntimeError("Paste تأیید شد اما تصویر مرحله پس از Paste ذخیره نشد")
     write_state(paste="done", pasteVerified=True, pasteMethod="uia-composer-single-ctrl-v", pasteScreenshot=shot_path, browserWindowTitle=title, message="composer واقعی Arena با UI Automation پیدا و فوکوس آن پیش و پس از Ctrl+V تأیید شد؛ Paste دقیقاً یک بار انجام و متن با Copy مستقل تطبیق داده شد. Enter ارسال نشد.")
