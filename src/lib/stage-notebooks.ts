@@ -7,7 +7,7 @@ import { arenaApiNotebookCells } from "./arena-api-notebook-template";
 const STORE_KEY = "stage-notebooks.v1";
 const ATTEMPT_STORE_KEY = "stage-notebook-attempts.v1";
 const CONTROLLED_TEMPLATE_MARKER = "stage-notebook-controlled-template.v1";
-const ARENA_API_TEMPLATE_MARKER = "stage-notebook-arena-api-template.v7";
+const ARENA_API_TEMPLATE_MARKER = "stage-notebook-arena-api-template.v8";
 const CONTROLLED_NOTEBOOK_ID = "controlled-windows-ui-diagnostic-v1";
 const ARENA_API_NOTEBOOK_ID = "arena-api-prompt-submit-v1";
 const MAX_NOTEBOOKS = 30;
@@ -39,6 +39,7 @@ export interface StageExecutionAttempt {
   commandStatus?: string | null;
   commandError?: string | null;
   commandLastEventAt?: string | null;
+  chainCellIds?: string[];
 }
 
 export interface StageCell {
@@ -258,16 +259,92 @@ function executionError(error: unknown): { message: string; code: string; hint: 
 
 export async function listStageExecutionAttempts(): Promise<StageExecutionAttempt[]> {
   const attempts = await loadAttempts();
-  const ids = attempts.map((item) => item.commandId).filter((id): id is string => Boolean(id));
+  const ids = [...new Set(attempts.map((item) => item.commandId).filter((id): id is string => Boolean(id)))];
   if (!ids.length) return attempts;
   const placeholders = ids.map(() => "?").join(",");
-  const rows = await dbAll<{ id: string; status: string; error: string | null; last_event_at: string | null }>(
-    `SELECT id, status, error, last_event_at FROM commands WHERE id IN (${placeholders})`, ids,
-  );
+  const [rows, eventRows, notebooks] = await Promise.all([
+    dbAll<{ id: string; status: string; error: string | null; last_event_at: string | null }>(
+      `SELECT id, status, error, last_event_at FROM commands WHERE id IN (${placeholders})`, ids,
+    ),
+    dbAll<{ command_id: string; message: string; created_at: string }>(
+      `SELECT command_id, message, created_at FROM command_events WHERE command_id IN (${placeholders}) ORDER BY created_at ASC, id ASC`, ids,
+    ),
+    load(),
+  ]);
   const commands = new Map(rows.map((row) => [row.id, row]));
-  return attempts.map((attempt) => {
+  const eventsByCommand = new Map<string, typeof eventRows>();
+  for (const event of eventRows) {
+    const values = eventsByCommand.get(event.command_id) ?? [];
+    values.push(event);
+    eventsByCommand.set(event.command_id, values);
+  }
+  const cellsByCommand = new Map<string, string[]>();
+  for (const notebook of notebooks) {
+    for (const cell of notebook.cells) {
+      if (!cell.commandId || !ids.includes(cell.commandId)) continue;
+      const values = cellsByCommand.get(cell.commandId) ?? [];
+      if (!values.includes(cell.id)) values.push(cell.id);
+      cellsByCommand.set(cell.commandId, values);
+    }
+  }
+  const active = new Set(["pending", "claimed", "waiting_confirmation", "running"]);
+  return attempts.flatMap((attempt) => {
     const command = attempt.commandId ? commands.get(attempt.commandId) : undefined;
-    return command ? { ...attempt, commandStatus: command.status, commandError: command.error, commandLastEventAt: command.last_event_at } : attempt;
+    if (!command || !attempt.commandId) return [attempt];
+    const events = eventsByCommand.get(attempt.commandId) ?? [];
+    const inferredCells = cellsByCommand.get(attempt.commandId) ?? [];
+    const cellIds = attempt.chainCellIds?.length ? attempt.chainCellIds : inferredCells.length ? inferredCells : [attempt.cellId];
+    return cellIds.map((cellId, index) => {
+      const started = events.filter((event) => event.message.includes(`STAGE_STARTED: ${cellId} ·`)).at(-1);
+      const completed = events.filter((event) => event.message.includes(`STAGE_COMPLETED: ${cellId}`) || event.message.includes(`STAGE_BACKGROUND_STARTED: ${cellId} ·`)).at(-1);
+      let commandStatus = command.status;
+      let phase = attempt.phase;
+      let message = attempt.message;
+      let runtimeAt = command.last_event_at ?? attempt.updatedAt;
+      if (completed) {
+        commandStatus = "succeeded";
+        phase = "stage_completed";
+        runtimeAt = completed.created_at;
+        message = "این سلول در Windows Agent واقعاً کامل شده و گزارش پایان آن دریافت شده است.";
+      } else if (started) {
+        commandStatus = active.has(command.status) ? "running" : command.status;
+        phase = "stage_running";
+        runtimeAt = started.created_at;
+        message = active.has(command.status)
+          ? "اجرای واقعی همین سلول در Windows Agent آغاز شده و هنوز گزارش پایان آن دریافت نشده است."
+          : command.error || "فرمان هنگام اجرای همین سلول پایان یافته است.";
+      } else if (command.status === "succeeded") {
+        commandStatus = "succeeded";
+        phase = "stage_completed";
+        message = "فرمان دفترچه موفق تمام شده است؛ این سلول نیز بدون خطای گزارش‌شده پایان یافت.";
+      } else if (!active.has(command.status)) {
+        commandStatus = command.status;
+        phase = "stage_not_reached";
+        message = command.error || "فرمان پیش از رسیدن به این سلول پایان یافت؛ این مرحله اجرا نشد.";
+      } else {
+        commandStatus = "pending";
+        phase = "stage_waiting";
+        message = "این سلول هنوز شروع نشده و منتظر پایان سلول قبلی است.";
+      }
+      const runtimeStep: StageExecutionStep = {
+        at: runtimeAt,
+        phase,
+        level: commandStatus === "succeeded" ? "success" : ["failed", "cancelled", "timed_out", "rejected"].includes(commandStatus) ? "error" : "info",
+        message,
+      };
+      return {
+        ...attempt,
+        id: index === 0 ? attempt.id : `${attempt.id}:${cellId}`,
+        cellId,
+        phase,
+        message,
+        updatedAt: runtimeAt,
+        commandStatus,
+        commandError: command.error,
+        commandLastEventAt: command.last_event_at,
+        steps: [...attempt.steps, runtimeStep],
+      };
+    });
   });
 }
 
@@ -402,7 +479,8 @@ def capture(stage, suffix="result"):
         env = os.environ.copy()
         env["STAGE_SCREENSHOT_PATH"] = path
         ps = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $b=[System.Windows.Forms.SystemInformation]::VirtualScreen; $bmp=New-Object System.Drawing.Bitmap($b.Width,$b.Height); $g=[System.Drawing.Graphics]::FromImage($bmp); try{$g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size);$bmp.Save($env:STAGE_SCREENSHOT_PATH,[System.Drawing.Imaging.ImageFormat]::Png)}finally{$g.Dispose();$bmp.Dispose()}"
-        shot = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps], env=env, text=True, capture_output=True, timeout=45)
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        shot = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps], env=env, text=True, capture_output=True, timeout=45, creationflags=flags)
         if shot.returncode or not os.path.isfile(path):
             raise RuntimeError((shot.stderr or shot.stdout or "PowerShell screenshot failed").strip())
         print("SERVICE_ARTIFACT: " + json.dumps({"artifactId": "stage-" + stage["id"] + "-" + suffix, "kind": "screenshot", "stage": "stage-notebook-" + suffix, "name": os.path.basename(path), "localPath": path, "mimeType": "image/png"}, ensure_ascii=False), flush=True)
@@ -498,7 +576,7 @@ export async function runStageNotebookCell(notebookId: string, cellId: string, r
     }
     const sourceCode = cellSource(chain, notebook);
     phase = "source_built";
-    await updateAttempt(attemptId, { phase, message: `کد wrapper برای ${chain.length} سلول تولید شد.` }, { phase, level: "success", message: `source تولید شد · ${sourceCode.length} نویسه · ${chain.length} سلول` });
+    await updateAttempt(attemptId, { phase, message: `کد wrapper برای ${chain.length} سلول تولید شد.`, chainCellIds: chain.map((item) => item.id) }, { phase, level: "success", message: `source تولید شد · ${sourceCode.length} نویسه · ${chain.length} سلول` });
 
     const saved = await saveAutomationVersion({ slug: `stage_${compactId(notebook.id)}_${compactId(cell.id)}`, name: `${notebook.title} · ${runAll ? "اجرای دفترچه" : cell.title}`, description: "سلول‌های دفترچه کنترل مرحله‌ای", target: "windows", sourceCode, changeSummary: `اجرای واقعی ${chain.length} مرحله در ${new Date().toISOString()}`, actor: "manager:stage-notebook", activate: true });
     phase = "automation_saved";

@@ -281,7 +281,7 @@ except Exception as exc:
 `;
 
 const BROWSER_CODE = String.raw`${ROOT_SETUP}
-import ctypes, hashlib, shutil, subprocess
+import ctypes, shutil, subprocess
 from ctypes import wintypes
 
 ARENA_URL = "https://arena.ai/agent/01a18017-9552-70af-b937-b790a82b79b3"
@@ -322,18 +322,25 @@ def find_chrome_window():
                 windows.append((area, hwnd, rect, title.value))
         return True
     user32.EnumWindows(callback_type(callback), 0)
-    return max(windows, default=None, key=lambda item: item[0])
+    return max(windows, default=None, key=lambda item: (1 if "arena" in item[3].lower() else 0, item[0]))
 
-def window_hash(rect, path):
+def window_signature(rect, path):
+    """اسکرین‌شات واقعی می‌گیرد، اما نوسان‌های کوچک انیمیشن را با امضای ادراکی تحمل می‌کند."""
     width, height = rect.right - rect.left, rect.bottom - rect.top
     env = os.environ.copy()
     env.update({"SHOT_X": str(rect.left), "SHOT_Y": str(rect.top), "SHOT_W": str(width), "SHOT_H": str(height), "SHOT_PATH": path})
-    script = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Drawing; $b=New-Object Drawing.Bitmap([int]$env:SHOT_W,[int]$env:SHOT_H); $g=[Drawing.Graphics]::FromImage($b); try{$g.CopyFromScreen([int]$env:SHOT_X,[int]$env:SHOT_Y,0,0,$b.Size);$b.Save($env:SHOT_PATH,[Drawing.Imaging.ImageFormat]::Png)}finally{$g.Dispose();$b.Dispose()}"
-    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], env=env, text=True, capture_output=True, timeout=30)
-    if result.returncode or not os.path.isfile(path):
+    script = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Drawing; $b=New-Object Drawing.Bitmap([int]$env:SHOT_W,[int]$env:SHOT_H); $g=[Drawing.Graphics]::FromImage($b); $s=New-Object Drawing.Bitmap(24,14); $sg=[Drawing.Graphics]::FromImage($s); try{$g.CopyFromScreen([int]$env:SHOT_X,[int]$env:SHOT_Y,0,0,$b.Size);$b.Save($env:SHOT_PATH,[Drawing.Imaging.ImageFormat]::Png);$sg.DrawImage($b,0,0,24,14);$v='';for($y=0;$y -lt 14;$y++){for($x=0;$x -lt 24;$x++){$p=$s.GetPixel($x,$y);$q=[Math]::Min(15,[int](($p.R+$p.G+$p.B)/48));$v+=$q.ToString('X1')}};Write-Output $v}finally{$sg.Dispose();$s.Dispose();$g.Dispose();$b.Dispose()}"
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], env=env, text=True, capture_output=True, timeout=30, creationflags=flags)
+    signature = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+    if result.returncode or not os.path.isfile(path) or len(signature) != 24 * 14:
         raise RuntimeError((result.stderr or result.stdout or "window screenshot failed").strip())
-    with open(path, "rb") as handle:
-        return hashlib.sha256(handle.read()).hexdigest()
+    return signature
+
+def visual_distance(left, right):
+    if not left or len(left) != len(right):
+        return 1.0
+    return sum(a != b for a, b in zip(left, right)) / len(left)
 
 try:
     chrome = chrome_path()
@@ -355,7 +362,10 @@ try:
     ctypes.windll.user32.SetForegroundWindow(hwnd)
     shot_path = os.path.join(ROOT, "chrome-stability.png")
     stable = 0
-    previous = None
+    previous_signature = None
+    previous_geometry = None
+    # فرصت بارگذاری اولیه؛ تمام PowerShellهای تصویربرداری بدون پنجره آبی اجرا می‌شوند.
+    time.sleep(8)
     while time.monotonic() < deadline:
         target = find_chrome_window()
         if not target:
@@ -363,16 +373,20 @@ try:
             time.sleep(2)
             continue
         _, hwnd, rect, title = target
-        digest = window_hash(rect, shot_path)
-        stable = stable + 1 if digest == previous else 1
-        previous = digest
+        geometry = (rect.left, rect.top, rect.right, rect.bottom, title)
+        signature = window_signature(rect, shot_path)
+        distance = visual_distance(previous_signature, signature) if previous_signature else 1.0
+        stable = stable + 1 if geometry == previous_geometry and distance <= 0.18 else 1
+        previous_signature = signature
+        previous_geometry = geometry
+        print("ARENA_CHROME_VISUAL_CHECK: stable=" + str(stable) + " distance=" + format(distance, ".3f"), flush=True)
         if stable >= 3:
-            write_state(browser="done", browserWindowTitle=title, message="Chrome واقعی با پروفایل عادی باز شد و تصویر پنجره در سه بررسی متوالی پایدار بود.")
-            print("ARENA_REAL_CHROME_STABLE: native window screenshots stable", flush=True)
+            write_state(browser="done", browserWindowTitle=title, browserVisualDistance=distance, browserScreenshot=shot_path, message="پنجره واقعی Arena در Chrome با سه اسکرین‌شات ادراکی پایدار تأیید شد؛ تغییرهای کوچک انیمیشن نادیده گرفته شدند.")
+            print("ARENA_REAL_CHROME_STABLE: three perceptually stable native screenshots", flush=True)
             break
         time.sleep(3)
     else:
-        raise RuntimeError("تصویر پنجره Chrome طی زمان مجاز پایدار نشد")
+        raise RuntimeError("پنجره Chrome در بررسی ادراکی طی زمان مجاز پایدار نشد")
 except Exception as exc:
     write_state(browser="failed", message="بازکردن Chrome واقعی متوقف شد: " + str(exc))
     raise
@@ -619,7 +633,8 @@ try:
     shot_path = os.path.join(ROOT, "stage5-after-paste.png")
     env = os.environ.copy()
     env.update({"ARENA_HWND": str(hwnd), "PROMPT_FILE": prompt_path, "SHOT_PATH": shot_path})
-    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File", script_path], env=env, text=True, capture_output=True, timeout=60)
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File", script_path], env=env, text=True, capture_output=True, timeout=60, creationflags=flags)
     diagnostics = " | ".join(line.strip() for line in result.stdout.splitlines() if line.strip())[-3000:]
     if result.returncode or "ARENA_STAGE5_PASTE_VERIFIED" not in result.stdout:
         error = (result.stderr or diagnostics or "UI Automation paste verification failed").strip()
@@ -671,7 +686,8 @@ def read_clipboard():
     verify_path = os.path.join(ROOT, "clipboard-submit-verify.txt")
     env = os.environ.copy(); env["VERIFY_PATH"] = verify_path
     command = "$v=Get-Clipboard -Raw; [IO.File]::WriteAllText($env:VERIFY_PATH,[string]$v,[Text.UTF8Encoding]::new($false))"
-    result = subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", command], env=env, text=True, capture_output=True, timeout=15)
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", command], env=env, text=True, capture_output=True, timeout=15, creationflags=flags)
     if result.returncode:
         raise RuntimeError((result.stderr or result.stdout).strip())
     with open(verify_path, "r", encoding="utf-8") as handle:
@@ -727,7 +743,7 @@ export function arenaApiNotebookCells(): ArenaApiNotebookCellTemplate[] {
     { id: "arena-status-dashboard", title: "۱. نمایش رابط وضعیت منظم", language: "python", content: DASHBOARD_CODE, notes: "یک پنجره پایش مستقل باز می‌کند و وضعیت هر شش مرحله را از فایل state محلی نمایش می‌دهد.", transition: "manual", executionMode: "background", executable: true },
     { id: "arena-api-credentials", title: "۲. دریافت امن API Key از Python", language: "python", content: CREDENTIALS_CODE, notes: "دامنه https://salitest.ir ثابت است و فقط Key در خود دسکتاپ گرفته می‌شود. Key با Windows DPAPI رمز می‌شود و در stdout یا PostgreSQL قرار نمی‌گیرد.", transition: "manual", executionMode: "blocking", executable: true },
     { id: "arena-fetch-next-prompt", title: "۳. خواندن decision از GET /handoff", language: "python", content: FETCH_PROMPT_CODE, notes: "فقط GET https://salitest.ir/api/agent/v1/handoff با Bearer اجرا می‌شود. decision.action ملاک قطعی است؛ Prompt تنها در run_next پذیرفته و از ارسال تکراری جلوگیری می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
-    { id: "arena-open-and-stabilize", title: "۴. بازکردن Chrome واقعی و انتظار برای پایداری", language: "python", content: BROWSER_CODE, notes: "Chrome واقعی کاربر با پروفایل عادی Windows باز می‌شود؛ بدون Playwright، CDP، remote-debugging یا user-data-dir. پایداری با سه تصویر یکسان از پنجره سنجیده می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
+    { id: "arena-open-and-stabilize", title: "۴. بازکردن Chrome واقعی و انتظار برای پایداری", language: "python", content: BROWSER_CODE, notes: "Chrome واقعی کاربر با پروفایل عادی Windows باز می‌شود؛ بدون Playwright، CDP، remote-debugging یا user-data-dir. پایداری با سه تصویر ادراکیِ مشابه سنجیده می‌شود تا انیمیشن‌های کوچک باعث خطای کاذب نشوند؛ تصویربرداری بدون پنجره کنسول انجام می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
     { id: "arena-paste-once", title: "۵. Paste یک‌باره از Clipboard واقعی", language: "python", content: PASTE_CODE, notes: "composer واقعی Arena با UI Automation و محافظ فوکوس پیدا می‌شود؛ Ctrl+V دقیقاً یک بار اجرا و با UIA و Copy مستقل تأیید می‌شود. این مرحله Enter نمی‌زند و در خطا Paste را تکرار نمی‌کند.", transition: "manual", executionMode: "blocking", executable: true },
     { id: "arena-submit-enter", title: "۶. Enter واقعی برای Send / Submit", language: "python", content: SUBMIT_CODE, notes: "متن کنترل فعال دوباره با Clipboard واقعی بررسی می‌شود و Enter بدون Shift/Ctrl/Alt دقیقاً یک بار ارسال می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
   ];
