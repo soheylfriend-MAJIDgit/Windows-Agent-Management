@@ -138,6 +138,10 @@ export async function deleteStageNotebook(id: string): Promise<void> {
 
 function py(value: string): string { return JSON.stringify(value); }
 
+// UUID کامل دو موجودیت، شناسه اتوماسیون را از سقف ۷۲ نویسه عبور می‌دهد.
+// ۲۴ نویسه نخست هر UUID همچنان فضای یکتایی بسیار بزرگی دارد و slug را معتبر نگه می‌دارد.
+function compactId(value: string): string { return value.replace(/[^a-zA-Z0-9]/g, "").slice(0, 24).toLowerCase(); }
+
 function cellSource(cells: StageCell[], notebook: StageNotebook): string {
   for (const cell of cells) {
     if (!["python", "powershell", "cmd"].includes(cell.language.toLowerCase())) {
@@ -224,7 +228,7 @@ export async function runStageNotebookCell(notebookId: string, cellId: string, r
       chain.push(next);
     }
   }
-  const saved = await saveAutomationVersion({ slug: `stage_${notebook.id.replace(/-/g, "_")}_${cell.id.replace(/-/g, "_")}`, name: `${notebook.title} · ${runAll ? "اجرای دفترچه" : cell.title}`, description: "سلول‌های دفترچه کنترل مرحله‌ای", target: "windows", sourceCode: cellSource(chain, notebook), changeSummary: `اجرای واقعی ${chain.length} مرحله در ${new Date().toISOString()}`, actor: "manager:stage-notebook", activate: true });
+  const saved = await saveAutomationVersion({ slug: `stage_${compactId(notebook.id)}_${compactId(cell.id)}`, name: `${notebook.title} · ${runAll ? "اجرای دفترچه" : cell.title}`, description: "سلول‌های دفترچه کنترل مرحله‌ای", target: "windows", sourceCode: cellSource(chain, notebook), changeSummary: `اجرای واقعی ${chain.length} مرحله در ${new Date().toISOString()}`, actor: "manager:stage-notebook", activate: true });
   const run = await requestAutomationRun(saved.automation.id, "manager:stage-notebook", target, { source: "stage_notebook", title: `${notebook.title} · ${runAll ? "اجرای همه مراحل" : cell.title}`, timeoutSeconds: 3600, noProgressSeconds: 300, requiredCapabilities: ["d1_automations"], monitoringPlan: ["اجرای ترتیبی سلول‌های عادی", "راه‌اندازی مستقل سلول‌های پایشی پس‌زمینه", "ثبت stdout و stderr", "گرفتن اسکرین‌شات هر مرحله"] });
   for (const item of chain) {
     item.commandId = run.commandId;
@@ -267,7 +271,7 @@ except FileNotFoundError:
     pass
 print("STAGE_BACKGROUND_STOPPED: " + ${cellPart})
 `;
-  const saved = await saveAutomationVersion({ slug: `stage_stop_${notebook.id.replace(/-/g, "_")}_${cell.id.replace(/-/g, "_")}`, name: `${notebook.title} · توقف ${cell.title}`, description: "توقف پردازش پایشی دفترچه", target: "windows", sourceCode: source, changeSummary: `درخواست توقف واقعی در ${new Date().toISOString()}`, actor: "manager:stage-notebook", activate: true });
+  const saved = await saveAutomationVersion({ slug: `stage_stop_${compactId(notebook.id)}_${compactId(cell.id)}`, name: `${notebook.title} · توقف ${cell.title}`, description: "توقف پردازش پایشی دفترچه", target: "windows", sourceCode: source, changeSummary: `درخواست توقف واقعی در ${new Date().toISOString()}`, actor: "manager:stage-notebook", activate: true });
   const run = await requestAutomationRun(saved.automation.id, "manager:stage-notebook", target, { source: "stage_notebook_pause", title: `${notebook.title} · توقف ${cell.title}`, timeoutSeconds: 120, noProgressSeconds: 60, requiredCapabilities: ["d1_automations"], monitoringPlan: ["خواندن PID ثبت‌شده", "پایان process tree سلول پایشی"] });
   cell.commandId = run.commandId;
   cell.updatedAt = new Date().toISOString();
