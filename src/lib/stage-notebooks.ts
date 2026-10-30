@@ -186,9 +186,13 @@ os.makedirs(ROOT, exist_ok=True)
 
 def capture(stage, suffix="result"):
     try:
-        from PIL import ImageGrab
         path = os.path.join(ROOT, f"stage_{stage['id']}_{suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
-        ImageGrab.grab(all_screens=True).save(path)
+        env = os.environ.copy()
+        env["STAGE_SCREENSHOT_PATH"] = path
+        ps = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $b=[System.Windows.Forms.SystemInformation]::VirtualScreen; $bmp=New-Object System.Drawing.Bitmap($b.Width,$b.Height); $g=[System.Drawing.Graphics]::FromImage($bmp); try{$g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size);$bmp.Save($env:STAGE_SCREENSHOT_PATH,[System.Drawing.Imaging.ImageFormat]::Png)}finally{$g.Dispose();$bmp.Dispose()}"
+        shot = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps], env=env, text=True, capture_output=True, timeout=45)
+        if shot.returncode or not os.path.isfile(path):
+            raise RuntimeError((shot.stderr or shot.stdout or "PowerShell screenshot failed").strip())
         print("SERVICE_ARTIFACT: " + json.dumps({"artifactId": "stage-" + stage["id"] + "-" + suffix, "kind": "screenshot", "stage": "stage-notebook-" + suffix, "name": os.path.basename(path), "localPath": path, "mimeType": "image/png"}, ensure_ascii=False), flush=True)
     except Exception as exc:
         print("STAGE_SCREENSHOT_WARNING: " + str(exc), file=sys.stderr, flush=True)
@@ -230,8 +234,12 @@ def execute(stage):
     print("STAGE_COMPLETED: " + stage["id"], flush=True)
     capture(stage)
 
-for stage in STAGES:
-    execute(stage)
+def main():
+    for stage in STAGES:
+        execute(stage)
+
+if __name__ == "__main__":
+    main()
 `;
 }
 
