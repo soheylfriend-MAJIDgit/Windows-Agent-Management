@@ -703,7 +703,7 @@ export async function requestCommandCancellation(idValue: unknown, reasonValue?:
   const id = validCommandId(idValue);
   const row = await commandRow(id);
   if (!row) throw new AppError("فرمان پیدا نشد.", { status: 404, code: "command_not_found" });
-  if (!isActive(row.status)) return getCommandDetail(id);
+  if (!isActive(row.status) || row.cancel_requested_at) return getCommandDetail(id);
   const reason = text(reasonValue, "علت توقف", 300, false) ?? "توقف دستی از سایت ایجنت مدیریت";
   const now = new Date().toISOString();
   if ((["pending", "claimed", "waiting_confirmation"] as CommandStatus[]).includes(row.status)) {
@@ -731,6 +731,24 @@ export async function requestCommandCancellation(idValue: unknown, reasonValue?:
     },
   ]);
   return getCommandDetail(id);
+}
+
+export async function requestAllCommandCancellationsForAgent(agentId: string, reason: string): Promise<{ matched: number; requested: number; commandIds: string[] }> {
+  const rows = await dbAll<{ id: string }>(
+    `SELECT id FROM commands WHERE agent_id = ? AND status IN ('pending', 'claimed', 'waiting_confirmation', 'running') ORDER BY created_at ASC LIMIT 100`,
+    [agentId],
+  );
+  const commandIds = rows.map((row) => row.id);
+  let requested = 0;
+  for (const id of commandIds) {
+    try {
+      await requestCommandCancellation(id, reason);
+      requested += 1;
+    } catch {
+      // یک race با نهایی‌شدن طبیعی فرمان نباید توقف بقیه را مختل کند.
+    }
+  }
+  return { matched: commandIds.length, requested, commandIds };
 }
 
 export async function setCommandAutoStop(idValue: unknown, enabled: unknown): Promise<CommandDetail> {

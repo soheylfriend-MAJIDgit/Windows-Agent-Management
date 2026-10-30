@@ -297,6 +297,22 @@ const SCHEMA_SQL: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_managed_agents_seen ON managed_agents(last_seen_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_managed_agents_key ON managed_agents(agent_key_id)`,
+  `CREATE TABLE IF NOT EXISTS agent_control_requests (
+    id TEXT PRIMARY KEY,
+    agent_key_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('stop_all_executions')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'delivered', 'succeeded', 'failed', 'expired', 'cancelled')),
+    reason TEXT NOT NULL,
+    requested_by TEXT NOT NULL,
+    result TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    completed_at TEXT,
+    expires_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_controls_agent_status ON agent_control_requests(agent_id, status, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_controls_created ON agent_control_requests(created_at DESC)`,
   `CREATE TABLE IF NOT EXISTS agent_connection_tests (
     id TEXT PRIMARY KEY,
     agent_key_id TEXT NOT NULL,

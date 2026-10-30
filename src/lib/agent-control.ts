@@ -2,6 +2,7 @@ import { bytesToBase64Url } from "./crypto";
 import { dbAll, dbBatch, dbFirst, dbRun } from "./db";
 import { AppError } from "./errors";
 import type { AuthenticatedAgentKey } from "./agent-keys";
+import { claimEmergencyControl } from "./agent-controls";
 
 export const CONNECTION_TEST_REQUEST = "سلام ایجنت ویندوز؛ لطفاً پیام تست را به ایجنت مدیریت برگردان.";
 export const CONNECTION_TEST_REPLY = "سلام ایجنت مدیریت.";
@@ -215,12 +216,14 @@ export async function recordHeartbeat(
      WHERE agent_key_id = ? AND status = 'pending' AND expires_at > ?`,
     [key.id, now],
   );
+  const control = await claimEmergencyControl(key, agentId);
   return {
     ok: true,
     agentId,
     serverTime: now,
     heartbeatIntervalSeconds: 30,
     pendingConnectionTests: Number(pending?.count ?? 0),
+    emergencyControl: control,
   };
 }
 
