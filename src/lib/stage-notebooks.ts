@@ -1,11 +1,40 @@
 import { AppError } from "./errors";
-import { dbFirst, dbRun } from "./db";
+import { dbAll, dbFirst, dbRun } from "./db";
 import { findOnlineCommandAgent, requestCommandCancellation } from "./commands";
 import { requestAutomationRun, saveAutomationVersion } from "./automations";
 
 const STORE_KEY = "stage-notebooks.v1";
+const ATTEMPT_STORE_KEY = "stage-notebook-attempts.v1";
 const MAX_NOTEBOOKS = 30;
 const MAX_CELLS = 100;
+const MAX_ATTEMPTS = 60;
+
+export interface StageExecutionStep {
+  at: string;
+  phase: string;
+  level: "info" | "success" | "error";
+  message: string;
+}
+
+export interface StageExecutionAttempt {
+  id: string;
+  notebookId: string;
+  cellId: string;
+  runAll: boolean;
+  status: "preparing" | "queued" | "failed";
+  phase: string;
+  message: string;
+  commandId: string | null;
+  automationVersion: number | null;
+  agentName: string | null;
+  agentVersion: string | null;
+  createdAt: string;
+  updatedAt: string;
+  steps: StageExecutionStep[];
+  commandStatus?: string | null;
+  commandError?: string | null;
+  commandLastEventAt?: string | null;
+}
 
 export interface StageCell {
   id: string;
@@ -60,6 +89,75 @@ async function persist(items: StageNotebook[]): Promise<void> {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
     [STORE_KEY, JSON.stringify(items), now],
   );
+}
+
+async function loadAttempts(): Promise<StageExecutionAttempt[]> {
+  const row = await dbFirst<{ value: string }>("SELECT value FROM settings WHERE key = ?", [ATTEMPT_STORE_KEY]);
+  if (!row?.value) return [];
+  try {
+    const parsed = JSON.parse(row.value);
+    return Array.isArray(parsed) ? parsed.slice(0, MAX_ATTEMPTS) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function persistAttempts(items: StageExecutionAttempt[]): Promise<void> {
+  const now = new Date().toISOString();
+  await dbRun(
+    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    [ATTEMPT_STORE_KEY, JSON.stringify(items.slice(0, MAX_ATTEMPTS)), now],
+  );
+}
+
+async function startAttempt(notebookId: string, cellId: string, runAll: boolean): Promise<string> {
+  const now = new Date().toISOString();
+  const attempt: StageExecutionAttempt = {
+    id: crypto.randomUUID(), notebookId, cellId, runAll,
+    status: "preparing", phase: "request_received", message: "درخواست Play در مدیریت دریافت شد.",
+    commandId: null, automationVersion: null, agentName: null, agentVersion: null,
+    createdAt: now, updatedAt: now,
+    steps: [{ at: now, phase: "request_received", level: "info", message: "درخواست Play در مدیریت دریافت شد." }],
+  };
+  const attempts = await loadAttempts();
+  attempts.unshift(attempt);
+  await persistAttempts(attempts);
+  return attempt.id;
+}
+
+async function updateAttempt(id: string, patch: Partial<StageExecutionAttempt>, step?: Omit<StageExecutionStep, "at">): Promise<void> {
+  const attempts = await loadAttempts();
+  const attempt = attempts.find((item) => item.id === id);
+  if (!attempt) return;
+  Object.assign(attempt, patch, { updatedAt: new Date().toISOString() });
+  if (step) attempt.steps = [...attempt.steps.slice(-29), { ...step, at: new Date().toISOString() }];
+  await persistAttempts(attempts);
+}
+
+function executionError(error: unknown): { message: string; code: string; hint: string } {
+  if (error instanceof AppError) {
+    const detail = Array.isArray(error.details)
+      ? error.details.map((item) => item && typeof item === "object" && "message" in item ? String((item as { message: unknown }).message) : "").filter(Boolean).slice(0, 3).join("؛ ")
+      : typeof error.details === "string" ? error.details.slice(0, 800) : "";
+    return { message: [error.message, detail].filter(Boolean).join(" — "), code: error.code, hint: error.hint ?? "" };
+  }
+  return { message: error instanceof Error ? error.message : String(error), code: "unexpected_error", hint: "" };
+}
+
+export async function listStageExecutionAttempts(): Promise<StageExecutionAttempt[]> {
+  const attempts = await loadAttempts();
+  const ids = attempts.map((item) => item.commandId).filter((id): id is string => Boolean(id));
+  if (!ids.length) return attempts;
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = await dbAll<{ id: string; status: string; error: string | null; last_event_at: string | null }>(
+    `SELECT id, status, error, last_event_at FROM commands WHERE id IN (${placeholders})`, ids,
+  );
+  const commands = new Map(rows.map((row) => [row.id, row]));
+  return attempts.map((attempt) => {
+    const command = attempt.commandId ? commands.get(attempt.commandId) : undefined;
+    return command ? { ...attempt, commandStatus: command.status, commandError: command.error, commandLastEventAt: command.last_event_at } : attempt;
+  });
 }
 
 export async function listStageNotebooks(): Promise<StageNotebook[]> {
@@ -243,46 +341,71 @@ if __name__ == "__main__":
 `;
 }
 
-export async function runStageNotebookCell(notebookId: string, cellId: string, runAll = false, requireManualConfirmation = true): Promise<{ commandId: string; version: number; agent: { name: string; version: string | null; autoMode: boolean; busyAtDispatch: string | null } }> {
-  const items = await load();
-  const notebook = items.find((item) => item.id === notebookId);
-  const cell = notebook?.cells.find((item) => item.id === cellId);
-  if (!notebook || !cell) throw new AppError("دفترچه یا مرحله پیدا نشد.", { status: 404, code: "stage_not_found" });
-  if (!cell.executable || !cell.content.trim()) throw new AppError("این مرحله اجرایی نیست یا کد ندارد.", { status: 422, code: "cell_not_ready" });
-  const target = await findOnlineCommandAgent(["d1_automations"]);
-  if (requireManualConfirmation && target.autoMode) {
-    throw new AppError("Windows Agent در حالت Automatic است؛ برای نمایش پنجره Yes/No ابتدا آن را روی Manual قرار دهید.", {
-      status: 409,
-      code: "stage_manual_confirmation_required",
-      hint: `حالت محلی ${target.agentName}${target.agentVersion ? ` نسخه ${target.agentVersion}` : ""} را به Manual تغییر دهید و دوباره Play را بزنید.`,
-    });
-  }
-  const startIndex = notebook.cells.findIndex((item) => item.id === cell.id);
-  let chain: StageCell[];
-  if (runAll) {
-    chain = notebook.cells.slice(startIndex).filter((item) => item.executable && item.content.trim());
-  } else {
-    chain = [cell];
-    let cursor = startIndex;
-    while (chain[chain.length - 1].transition === "on_success" && cursor + 1 < notebook.cells.length) {
-      const next = notebook.cells[++cursor];
-      if (!next.executable || !next.content.trim()) break;
-      chain.push(next);
+export async function runStageNotebookCell(notebookId: string, cellId: string, runAll = false, requireManualConfirmation = true): Promise<{ commandId: string; version: number; attemptId: string; agent: { name: string; version: string | null; autoMode: boolean; busyAtDispatch: string | null } }> {
+  const attemptId = await startAttempt(notebookId, cellId, runAll);
+  let phase = "request_received";
+  try {
+    const items = await load();
+    const notebook = items.find((item) => item.id === notebookId);
+    const cell = notebook?.cells.find((item) => item.id === cellId);
+    if (!notebook || !cell) throw new AppError("دفترچه یا مرحله پیدا نشد.", { status: 404, code: "stage_not_found" });
+    if (!cell.executable || !cell.content.trim()) throw new AppError("این مرحله اجرایی نیست یا کد ندارد.", { status: 422, code: "cell_not_ready" });
+    phase = "notebook_validated";
+    await updateAttempt(attemptId, { phase, message: "دفترچه، سلول و محتوای اجرایی معتبر است." }, { phase, level: "success", message: `سلول «${cell.title}» با زبان ${cell.language} معتبر است.` });
+
+    const target = await findOnlineCommandAgent(["d1_automations"]);
+    phase = "agent_selected";
+    await updateAttempt(attemptId, { phase, message: "Windows Agent سازگار و آنلاین انتخاب شد.", agentName: target.agentName, agentVersion: target.agentVersion }, { phase, level: "success", message: `${target.agentName} نسخه ${target.agentVersion ?? "نامشخص"} · ${target.autoMode ? "Automatic" : "Manual"}${target.busy ? ` · مشغول: ${target.busy}` : " · آزاد"}` });
+    if (requireManualConfirmation && target.autoMode) {
+      throw new AppError("Windows Agent در حالت Automatic است؛ برای نمایش پنجره Yes/No ابتدا آن را روی Manual قرار دهید.", {
+        status: 409,
+        code: "stage_manual_confirmation_required",
+        hint: `حالت محلی ${target.agentName}${target.agentVersion ? ` نسخه ${target.agentVersion}` : ""} را به Manual تغییر دهید و دوباره Play را بزنید.`,
+      });
     }
+
+    const startIndex = notebook.cells.findIndex((item) => item.id === cell.id);
+    let chain: StageCell[];
+    if (runAll) {
+      chain = notebook.cells.slice(startIndex).filter((item) => item.executable && item.content.trim());
+    } else {
+      chain = [cell];
+      let cursor = startIndex;
+      while (chain[chain.length - 1].transition === "on_success" && cursor + 1 < notebook.cells.length) {
+        const next = notebook.cells[++cursor];
+        if (!next.executable || !next.content.trim()) break;
+        chain.push(next);
+      }
+    }
+    const sourceCode = cellSource(chain, notebook);
+    phase = "source_built";
+    await updateAttempt(attemptId, { phase, message: `کد wrapper برای ${chain.length} سلول تولید شد.` }, { phase, level: "success", message: `source تولید شد · ${sourceCode.length} نویسه · ${chain.length} سلول` });
+
+    const saved = await saveAutomationVersion({ slug: `stage_${compactId(notebook.id)}_${compactId(cell.id)}`, name: `${notebook.title} · ${runAll ? "اجرای دفترچه" : cell.title}`, description: "سلول‌های دفترچه کنترل مرحله‌ای", target: "windows", sourceCode, changeSummary: `اجرای واقعی ${chain.length} مرحله در ${new Date().toISOString()}`, actor: "manager:stage-notebook", activate: true });
+    phase = "automation_saved";
+    await updateAttempt(attemptId, { phase, message: "نسخه immutable اتوماسیون در D1 ذخیره و فعال شد.", automationVersion: saved.version.version }, { phase, level: "success", message: `نسخه ${saved.version.version} اتوماسیون ذخیره شد.` });
+
+    const run = await requestAutomationRun(saved.automation.id, "manager:stage-notebook", target, { source: "stage_notebook", title: `${notebook.title} · ${runAll ? "اجرای همه مراحل" : cell.title}`, timeoutSeconds: 3600, noProgressSeconds: 300, requiredCapabilities: ["d1_automations"], monitoringPlan: ["اجرای ترتیبی سلول‌های عادی", "راه‌اندازی مستقل سلول‌های پایشی پس‌زمینه", "ثبت stdout و stderr", "گرفتن اسکرین‌شات هر مرحله"] });
+    phase = "command_created";
+    await updateAttempt(attemptId, { status: "queued", phase, message: "فرمان در D1 ساخته شد و منتظر claim ایجنت است.", commandId: run.commandId }, { phase, level: "success", message: `فرمان ${run.commandId} ساخته شد؛ مرحله بعد باید claim یا waiting_confirmation باشد.` });
+
+    for (const item of chain) {
+      item.commandId = run.commandId;
+      item.updatedAt = new Date().toISOString();
+    }
+    notebook.updatedAt = new Date().toISOString();
+    await persist(items);
+    return {
+      commandId: run.commandId,
+      version: saved.version.version,
+      attemptId,
+      agent: { name: target.agentName, version: target.agentVersion, autoMode: target.autoMode, busyAtDispatch: target.busy },
+    };
+  } catch (error) {
+    const info = executionError(error);
+    await updateAttempt(attemptId, { status: "failed", phase, message: info.message }, { phase, level: "error", message: `${info.code}: ${info.message}${info.hint ? ` · راهنما: ${info.hint}` : ""}` });
+    throw error;
   }
-  const saved = await saveAutomationVersion({ slug: `stage_${compactId(notebook.id)}_${compactId(cell.id)}`, name: `${notebook.title} · ${runAll ? "اجرای دفترچه" : cell.title}`, description: "سلول‌های دفترچه کنترل مرحله‌ای", target: "windows", sourceCode: cellSource(chain, notebook), changeSummary: `اجرای واقعی ${chain.length} مرحله در ${new Date().toISOString()}`, actor: "manager:stage-notebook", activate: true });
-  const run = await requestAutomationRun(saved.automation.id, "manager:stage-notebook", target, { source: "stage_notebook", title: `${notebook.title} · ${runAll ? "اجرای همه مراحل" : cell.title}`, timeoutSeconds: 3600, noProgressSeconds: 300, requiredCapabilities: ["d1_automations"], monitoringPlan: ["اجرای ترتیبی سلول‌های عادی", "راه‌اندازی مستقل سلول‌های پایشی پس‌زمینه", "ثبت stdout و stderr", "گرفتن اسکرین‌شات هر مرحله"] });
-  for (const item of chain) {
-    item.commandId = run.commandId;
-    item.updatedAt = new Date().toISOString();
-  }
-  notebook.updatedAt = new Date().toISOString();
-  await persist(items);
-  return {
-    commandId: run.commandId,
-    version: saved.version.version,
-    agent: { name: target.agentName, version: target.agentVersion, autoMode: target.autoMode, busyAtDispatch: target.busy },
-  };
 }
 
 export async function pauseStageNotebookCell(notebookId: string, cellId: string): Promise<{ commandId: string }> {

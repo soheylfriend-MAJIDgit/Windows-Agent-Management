@@ -1,12 +1,16 @@
 import { api, jsonOk, readJson } from "@/lib/api";
 import { requireAuth } from "@/lib/auth";
-import { createStageNotebook, deleteStageNotebook, listStageNotebooks, pauseStageNotebookCell, runStageNotebookCell, updateStageNotebook } from "@/lib/stage-notebooks";
+import { createStageNotebook, deleteStageNotebook, listStageExecutionAttempts, listStageNotebooks, pauseStageNotebookCell, runStageNotebookCell, updateStageNotebook } from "@/lib/stage-notebooks";
 import { commandAgentPreflight } from "@/lib/commands";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  return api(async () => { await requireAuth(); return jsonOk({ notebooks: await listStageNotebooks() }); });
+  return api(async () => {
+    await requireAuth();
+    const [notebooks, attempts] = await Promise.all([listStageNotebooks(), listStageExecutionAttempts()]);
+    return jsonOk({ notebooks, attempts });
+  });
 }
 
 export async function POST(request: Request) {
