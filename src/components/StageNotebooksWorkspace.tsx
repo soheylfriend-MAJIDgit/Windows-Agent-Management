@@ -20,6 +20,8 @@ export function StageNotebooksWorkspace() {
   const [busy,setBusy]=useState(false);
   const [busyCell,setBusyCell]=useState<string|null>(null);
   const [commandId,setCommandId]=useState<string|null>(null);
+  const [viewMode,setViewMode]=useState<"cells"|"whole">("cells");
+  const [wholeText,setWholeText]=useState("");
   const selected=useMemo(()=>api.data?.notebooks.find(n=>n.id===selectedId)??api.data?.notebooks[0]??null,[api.data,selectedId]);
   const firstRunnable=selected?.cells.find(cell=>cell.executable&&cell.content.trim())??null;
   const runnableCount=selected?.cells.filter(cell=>cell.executable&&cell.content.trim()).length??0;
@@ -31,12 +33,16 @@ export function StageNotebooksWorkspace() {
   async function run(cell:Cell,runAll=false){if(!selected)return;setBusyCell(cell.id);try{await postJson("/api/stage-notebooks",{action:"update",id:selected.id,cell});const r=await postJson<{commandId:string}>("/api/stage-notebooks",{action:"run",id:selected.id,cellId:cell.id,runAll});setCommandId(r.commandId);await api.reload();notify.ok(runAll?"اجرای ترتیبی دفترچه ارسال شد.":cell.executionMode==="background"?"پایش پس‌زمینه روی Windows راه‌اندازی می‌شود.":"سلول برای Windows Agent ارسال شد.");}catch(e){notify.error(message(e,"اجرای مرحله ممکن نشد."));}finally{setBusyCell(null)}}
   async function pause(cell:Cell){if(!selected)return;setBusyCell(cell.id);try{const r=await postJson<{commandId:string}>("/api/stage-notebooks",{action:"pause",id:selected.id,cellId:cell.id});setCommandId(r.commandId);await api.reload();notify.ok(cell.executionMode==="background"?"فرمان توقف پردازش پایشی ارسال شد.":"درخواست توقف امن اجرای سلول ثبت شد.");}catch(e){notify.error(message(e,"توقف مرحله ممکن نشد."));}finally{setBusyCell(null)}}
   async function copyPackage(cell:Cell){if(!selected)return;const text=`${selected.chatbotGuide}\n\nهدف نهایی:\n${selected.goal}\n\nمرحله جاری: ${cell.title}\nزبان: ${cell.language}\nنوع اجرا: ${cell.executionMode==="background"?"پایش مستقل پس‌زمینه":"ترتیبی و منتظر نتیجه"}\n\nکد/محتوا:\n${cell.content}\n\nیادداشت و نتیجه مرحله:\n${cell.notes||"هنوز نتیجه‌ای ثبت نشده است."}\n\nلطفاً فقط مرحله بعدی لازم، کد کامل آن، معیار موفقیت و مواردی را که باید در اسکرین‌شات بررسی کنم ارائه کن.`;await navigator.clipboard.writeText(text);notify.ok("بسته راهنما برای چت‌بات کپی شد.")}
+  function changeView(mode:"cells"|"whole"){if(mode==="whole"&&selected)setWholeText(formatWholeNotebook(selected));setViewMode(mode)}
+  async function copyWhole(){if(!wholeText)return;await navigator.clipboard.writeText(wholeText);notify.ok("متن کامل دفترچه برای چت‌بات کپی شد.")}
+  async function applyWhole(){if(!selected)return;try{const parsed=parseWholeNotebook(wholeText);setBusy(true);await postJson("/api/stage-notebooks",{action:"update",id:selected.id,title:parsed.title,goal:parsed.goal,chatbotGuide:parsed.chatbotGuide,replaceCells:parsed.cells});await api.reload();setViewMode("cells");notify.ok(`${parsed.cells.length.toLocaleString("fa-IR")} سلول از نمای یکجا اعمال شد.`);}catch(e){notify.error(message(e,"قالب نمای یکجا معتبر نیست."));}finally{setBusy(false)}}
 
   return <>
     <div className="stage-topbar">
       <div className="stage-topbar-copy"><strong>دفترچه‌های اجرایی Windows</strong><span>سلول‌های ترتیبی منتظر پایان می‌مانند؛ سلول‌های پایشی مستقل راه‌اندازی می‌شوند و مسیر ادامه پیدا می‌کند.</span><div className="stage-stats"><span><b>{runnableCount.toLocaleString("fa-IR")}</b> سلول آماده</span><span><b>{backgroundCount.toLocaleString("fa-IR")}</b> پایش مستقل</span><span className={firstRunnable?"ready":"idle"}>{firstRunnable?"آماده اجرا":"منتظر کد"}</span></div></div>
       <div className="actions-inline"><button type="button" className="button primary stage-run-all" disabled={!firstRunnable||busy||Boolean(busyCell)} onClick={()=>firstRunnable&&void run(firstRunnable,true)}>{busyCell?"در حال ارسال…":"▶ اجرای کل دفترچه"}</button>{commandId?<button type="button" className="button" onClick={()=>setCommandId(commandId)}>نمایش آخرین اجرا</button>:null}</div>
     </div>
+    <div className="stage-agent-contract"><span>تأیید اجرای ویندوز</span><p>فرمان‌ها با نیاز به تأیید ارسال می‌شوند؛ در حالت محلی <b>Manual</b> پنجره Yes/No نمایش داده می‌شود و در حالت <b>Automatic</b> ایجنت می‌تواند بدون سؤال اجرا کند.</p></div>
     {api.loading&&!api.data?<LoadingState label="در حال دریافت دفترچه‌ها…"/>:null}{api.error?<ErrorBanner error={api.error} onRetry={()=>void api.reload()}/>:null}
     <section className="stage-layout stage-layout-modal">
       <aside className="stage-sidebar">
@@ -44,14 +50,14 @@ export function StageNotebooksWorkspace() {
         <input className="input" value={title} onChange={e=>setTitle(e.target.value)} placeholder="نام دفترچه جدید" maxLength={120}/>
         <textarea className="input textarea" value={goal} onChange={e=>setGoal(e.target.value)} placeholder="هدف نهایی" rows={2}/>
         <button type="button" className="button primary" disabled={busy||title.trim().length<2} onClick={()=>void create()}>+ ساخت دفترچه</button>
-        <div className="stage-book-list">{api.data?.notebooks.map(n=><button type="button" key={n.id} className={`stage-book ${selected?.id===n.id?"active":""}`} onClick={()=>setSelectedId(n.id)}><strong>{n.title}</strong><span>{n.cells.length.toLocaleString("fa-IR")} سلول</span></button>)}</div>
+        <div className="stage-book-list">{api.data?.notebooks.map(n=><button type="button" key={n.id} className={`stage-book ${selected?.id===n.id?"active":""}`} onClick={()=>{setSelectedId(n.id);setViewMode("cells")}}><strong>{n.title}</strong><span>{n.cells.length.toLocaleString("fa-IR")} سلول</span></button>)}</div>
       </aside>
       <main className="stage-workspace">
         {!selected?<div className="empty-state stage-empty"><span>⌘</span><strong>هنوز دفترچه‌ای انتخاب نشده است</strong><p>یک دفترچه تازه بسازید یا از فهرست کناری انتخاب کنید.</p></div>:<>
-          <div className="stage-head"><div><h3>{selected.title}</h3><p>{selected.goal||"هدف نهایی هنوز نوشته نشده است."}</p></div><div className="actions-inline"><button type="button" className="button" disabled={busy} onClick={()=>void update({addCell:true})}>+ سلول کد</button><button type="button" className="button danger" disabled={busy} onClick={()=>void remove()}>حذف دفترچه</button></div></div>
-          <details className="advanced-settings"><summary>تنظیمات و راهنمای ثابت چت‌بات</summary><div className="stage-settings-grid"><label className="field"><span className="field-label">نام دفترچه</span><input className="input" defaultValue={selected.title} onBlur={e=>void update({title:e.target.value},true)}/></label><label className="field"><span className="field-label">هدف نهایی</span><textarea className="input textarea" rows={3} defaultValue={selected.goal} onBlur={e=>void update({goal:e.target.value},true)}/></label></div><label className="field"><span className="field-label">راهنمای ثابت چت‌بات</span><textarea className="input textarea" rows={5} defaultValue={selected.chatbotGuide} onBlur={e=>void update({chatbotGuide:e.target.value},true)}/></label></details>
+          <div className="stage-head"><div><h3>{selected.title}</h3><p>{selected.goal||"هدف نهایی هنوز نوشته نشده است."}</p></div><div className="actions-inline"><div className="stage-view-tabs" role="tablist" aria-label="نحوه نمایش دفترچه"><button type="button" role="tab" aria-selected={viewMode==="cells"} className={viewMode==="cells"?"active":""} onClick={()=>changeView("cells")}>نمای سلولی</button><button type="button" role="tab" aria-selected={viewMode==="whole"} className={viewMode==="whole"?"active":""} onClick={()=>changeView("whole")}>نمای یکجا</button></div><button type="button" className="button" disabled={busy||viewMode==="whole"} onClick={()=>void update({addCell:true})}>+ سلول کد</button><button type="button" className="button danger" disabled={busy} onClick={()=>void remove()}>حذف دفترچه</button></div></div>
+          {viewMode==="cells"?<><details className="advanced-settings"><summary>تنظیمات و راهنمای ثابت چت‌بات</summary><div className="stage-settings-grid"><label className="field"><span className="field-label">نام دفترچه</span><input className="input" defaultValue={selected.title} onBlur={e=>void update({title:e.target.value},true)}/></label><label className="field"><span className="field-label">هدف نهایی</span><textarea className="input textarea" rows={3} defaultValue={selected.goal} onBlur={e=>void update({goal:e.target.value},true)}/></label></div><label className="field"><span className="field-label">راهنمای ثابت چت‌بات</span><textarea className="input textarea" rows={5} defaultValue={selected.chatbotGuide} onBlur={e=>void update({chatbotGuide:e.target.value},true)}/></label></details>
           <Banner tone="info" title="دو نوع اجرای سلول">«ترتیبی» تا پایان کد صبر می‌کند. «پایش پس‌زمینه» پردازش را مستقل با PID و فایل log محلی راه می‌اندازد؛ بنابراین سلول بعدی بدون انتظار اجرا می‌شود و دکمه مکث همان process tree را متوقف می‌کند.</Banner>
-          <div className="stage-cells">{selected.cells.map((cell,index)=><StageCellCard key={`${cell.id}-${cell.content}-${cell.notes}-${cell.executionMode}-${cell.commandId??"idle"}`} cell={cell} index={index} count={selected.cells.length} busy={busy||busyCell===cell.id} onSave={cell=>update({cell})} onRun={run} onPause={pause} onMonitor={setCommandId} onCopy={copyPackage} onDelete={id=>update({deleteCell:id})} onMove={(id,direction)=>update({moveCell:{id,direction}})}/>)}</div>
+          <div className="stage-cells">{selected.cells.map((cell,index)=><StageCellCard key={`${cell.id}-${cell.content}-${cell.notes}-${cell.executionMode}-${cell.commandId??"idle"}`} cell={cell} index={index} count={selected.cells.length} busy={busy||busyCell===cell.id} onSave={cell=>update({cell})} onRun={run} onPause={pause} onMonitor={setCommandId} onCopy={copyPackage} onDelete={id=>update({deleteCell:id})} onMove={(id,direction)=>update({moveCell:{id,direction}})}/>)}</div></>:<section className="stage-whole-view"><div className="stage-whole-head"><div><h4>نمای متنی کامل دفترچه</h4><p>این متن را یکجا برای چت‌بات بفرستید. چت‌بات می‌تواند عنوان، هدف، تنظیمات و کد همه سلول‌ها را ویرایش کند؛ سپس پاسخ را اینجا Paste و اعمال کنید.</p></div><div className="actions-inline"><button type="button" className="button" onClick={()=>void copyWhole()}>کپی کل دفترچه</button><button type="button" className="button" onClick={()=>setWholeText(formatWholeNotebook(selected))}>بازنشانی از سلول‌ها</button><button type="button" className="button primary" disabled={busy} onClick={()=>void applyWhole()}>اعمال و تبدیل به سلول‌ها</button></div></div><div className="stage-whole-warning">خطوطی که با <code># @</code> شروع می‌شوند متادیتای ساختاری هستند. نشانگر <code># %% [stage-notebook-cell]</code> را برای جداسازی سلول‌ها نگه دارید.</div><textarea className="stage-whole-editor" dir="ltr" value={wholeText} onChange={event=>setWholeText(event.target.value)} spellCheck={false} aria-label="متن کامل دفترچه"/></section>}
         </>}
       </main>
     </section>
@@ -79,5 +85,77 @@ function StageCellCard({cell,index,count,busy,onSave,onRun,onPause,onMonitor,onC
     <footer><span className={`stage-mode-badge ${draft.executionMode}`}>{draft.executionMode==="background"?"پایش مستقل؛ بدون انتظار":"اجرای ترتیبی؛ منتظر پایان"}</span><span className="stage-shortcut" dir="ltr">Ctrl + Enter = Run</span>{draft.commandId?<code title={draft.commandId}>اجرا: {draft.commandId.slice(0,8)}</code>:<span className="muted">هنوز اجرا نشده</span>}<div className="stage-cell-actions"><button type="button" className="button" disabled={busy||index===0} onClick={()=>onMove(cell.id,"up")}>↑</button><button type="button" className="button" disabled={busy||index===count-1} onClick={()=>onMove(cell.id,"down")}>↓</button><button type="button" className="button" disabled={busy} onClick={()=>onSave(draft)}>ذخیره</button><button type="button" className="button" disabled={busy} onClick={()=>void onCopy(draft)}>کپی برای چت‌بات</button><button type="button" className="button danger" disabled={busy} onClick={()=>window.confirm("این سلول حذف شود؟")&&onDelete(cell.id)}>حذف</button></div></footer>
   </article>;
 }
+
+function formatWholeNotebook(notebook:Notebook):string{
+  const header=[
+    "# STAGE NOTEBOOK FORMAT v1",
+    `# @notebook-title ${JSON.stringify(notebook.title)}`,
+    `# @goal ${JSON.stringify(notebook.goal)}`,
+    `# @chatbot-guide ${JSON.stringify(notebook.chatbotGuide)}`,
+    "# این قالب را می‌توان یکجا به چت‌بات داد و سپس دوباره در دفترچه اعمال کرد.",
+  ];
+  const cells=notebook.cells.map(cell=>[
+    "# %% [stage-notebook-cell]",
+    `# @id ${JSON.stringify(cell.id)}`,
+    `# @title ${JSON.stringify(cell.title)}`,
+    `# @language ${JSON.stringify(cell.language)}`,
+    `# @execution ${JSON.stringify(cell.executionMode)}`,
+    `# @transition ${JSON.stringify(cell.transition)}`,
+    `# @enabled ${JSON.stringify(cell.executable)}`,
+    `# @notes ${JSON.stringify(cell.notes)}`,
+    "",
+    cell.content,
+  ].join("\n"));
+  return [...header,...cells].join("\n\n").trimEnd()+"\n";
+}
+
+function parseWholeNotebook(source:string):{title:string;goal:string;chatbotGuide:string;cells:Cell[]}{
+  const normalized=source.replace(/\r\n?/g,"\n");
+  const marker="# %% [stage-notebook-cell]";
+  const parts=normalized.split(marker);
+  const header=metadata(parts.shift()??"");
+  const cells=parts.map((part,index)=>{
+    const lines=part.replace(/^\n/,"").split("\n");
+    const meta:Record<string,unknown>={};
+    let cursor=0;
+    while(cursor<lines.length){
+      const line=lines[cursor];
+      if(!line.trim()){cursor+=1;break;}
+      const match=line.match(/^# @([a-z-]+)\s+(.+)$/);
+      if(!match)break;
+      meta[match[1]]=metadataValue(match[2]);
+      cursor+=1;
+    }
+    const language=typeof meta.language==="string"?meta.language:"python";
+    if(!["python","powershell","cmd"].includes(language))throw new Error(`زبان سلول ${(index+1).toLocaleString("fa-IR")} معتبر نیست.`);
+    return {
+      id:typeof meta.id==="string"?meta.id:"",
+      title:typeof meta.title==="string"&&meta.title.trim()?meta.title:`مرحله ${index+1}`,
+      language,
+      content:lines.slice(cursor).join("\n").trimEnd(),
+      notes:typeof meta.notes==="string"?meta.notes:"",
+      executionMode:meta.execution==="background"?"background":"blocking",
+      transition:meta.transition==="on_success"?"on_success":"manual",
+      executable:meta.enabled!==false,
+      commandId:null,
+    } as Cell;
+  });
+  return {
+    title:typeof header["notebook-title"]==="string"&&header["notebook-title"].trim()?header["notebook-title"]:"دفترچه بدون نام",
+    goal:typeof header.goal==="string"?header.goal:"",
+    chatbotGuide:typeof header["chatbot-guide"]==="string"?header["chatbot-guide"]:"",
+    cells,
+  };
+}
+
+function metadata(source:string):Record<string,unknown>{
+  const result:Record<string,unknown>={};
+  for(const line of source.split("\n")){
+    const match=line.match(/^# @([a-z-]+)\s+(.+)$/);
+    if(match)result[match[1]]=metadataValue(match[2]);
+  }
+  return result;
+}
+function metadataValue(value:string):unknown{try{return JSON.parse(value)}catch{return value.trim()}}
 
 function message(error:unknown,fallback:string){return error instanceof Error?error.message:fallback;}

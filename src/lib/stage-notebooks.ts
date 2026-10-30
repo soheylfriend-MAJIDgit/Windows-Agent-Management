@@ -108,6 +108,33 @@ export async function updateStageNotebook(id: string, input: unknown): Promise<S
     const [cell] = notebook.cells.splice(index, 1);
     notebook.cells.splice(target, 0, cell);
   }
+  if (Array.isArray(body.replaceCells)) {
+    if (body.replaceCells.length > MAX_CELLS) throw new AppError("حداکثر ۱۰۰ مرحله قابل ثبت است.", { status: 422, code: "cell_limit" });
+    const existing = new Map(notebook.cells.map((cell) => [cell.id, cell]));
+    const now = new Date().toISOString();
+    notebook.cells = body.replaceCells.map((value, index) => {
+      const input = value && typeof value === "object" ? value as Record<string, unknown> : {};
+      const requestedId = text(input.id, 80);
+      const previous = requestedId ? existing.get(requestedId) : undefined;
+      const language = text(input.language, 40).toLowerCase();
+      if (!["python", "powershell", "cmd"].includes(language)) {
+        throw new AppError(`زبان سلول ${index + 1} قابل اجرا نیست.`, { status: 422, code: "cell_language_invalid" });
+      }
+      return {
+        id: previous?.id ?? crypto.randomUUID(),
+        title: text(input.title, 120) || `مرحله ${index + 1}`,
+        language,
+        content: typeof input.content === "string" ? input.content.slice(0, 50000) : "",
+        notes: typeof input.notes === "string" ? input.notes.slice(0, 8000) : previous?.notes ?? "",
+        transition: input.transition === "on_success" ? "on_success" as const : "manual" as const,
+        executionMode: input.executionMode === "background" ? "background" as const : "blocking" as const,
+        executable: input.executable !== false,
+        commandId: previous?.commandId ?? null,
+        createdAt: previous?.createdAt ?? now,
+        updatedAt: now,
+      };
+    });
+  }
   if (body.cell && typeof body.cell === "object") {
     const cellInput = body.cell as Record<string, unknown>;
     const cell = notebook.cells.find((item) => item.id === cellInput.id);
