@@ -77,9 +77,7 @@ export default function DashboardPage() {
           <ol className="steps">
             <li>
               <strong>استقرار</strong>
-              یک بار <span className="mono">npm run deploy</span> را اجرا کنید؛ Wrangler دیتابیس D1 را از روی{" "}
-              <span className="mono">database_name</span> خودکار می‌سازد و شناسه را در <span className="mono">wrangler.jsonc</span>
-              می‌نویسد.
+              در Vercel Project از تب Storage یک PostgreSQL متصل کنید و وجود <span className="mono">DATABASE_URL</span> را بررسی کنید؛ سپس Redeploy بزنید.
             </li>
             <li>
               <strong>جدول‌ها</strong>
@@ -87,7 +85,7 @@ export default function DashboardPage() {
             </li>
             <li>
               <strong>بررسی</strong>
-              بعد از بالا آمدن Worker، همین صفحه را تازه کنید. وضعیت هر اتصال در بخش «سلامت اتصال‌ها» دیده می‌شود.
+              بعد از بالا آمدن Deployment، همین صفحه را تازه کنید. وضعیت هر اتصال در بخش «سلامت اتصال‌ها» دیده می‌شود.
             </li>
           </ol>
           <div className="actions-inline" style={{ marginTop: 10 }}>
@@ -243,7 +241,7 @@ export default function DashboardPage() {
             <EmptyState
               icon="terminal"
               title="هنوز اجرایی ثبت نشده"
-              text="پس از اجرا، Windows Agent نتیجه را مستقیماً در D1 ثبت می‌کند؛ ورود دستی داده‌های قدیمی نیز فعال است."
+              text="پس از اجرا، Windows Agent نتیجه را مستقیماً در PostgreSQL ثبت می‌کند؛ ورود دستی داده‌های قدیمی نیز فعال است."
               actions={
                 <Link href="/reports" className="btn btn-small">
                   ورود دستی نتیجه
@@ -281,14 +279,14 @@ export default function DashboardPage() {
                 />
                 <ConnectionRow
                   icon="image"
-                  label="فضای تصاویر Cloudflare"
+                  label="فضای تصاویر Vercel"
                   ok={true}
-                  text="فایل‌ها در R2 و متادیتا و گزارش‌ها در D1 نگهداری می‌شوند"
-                  badge="R2 + D1"
+                  text="فایل‌ها در Blob و متادیتا و گزارش‌ها در PostgreSQL نگهداری می‌شوند"
+                  badge="Blob + PostgreSQL"
                 />
                 <ConnectionRow
                   icon="database"
-                  label="پایگاه داده D1"
+                  label="پایگاه داده PostgreSQL"
                   ok={data.connections.db.ok}
                   text={data.connections.db.message}
                   badge={data.connections.db.ok ? "آماده" : "خطا"}
@@ -323,7 +321,7 @@ export default function DashboardPage() {
               <Icon name="clock" size={17} />
               رویدادهای اخیر
             </h2>
-            <span className="card-head-sub">رخدادهای D1</span>
+            <span className="card-head-sub">رخدادهای PostgreSQL</span>
           </div>
           {data && data.events.length ? (
             <ul className="timeline">

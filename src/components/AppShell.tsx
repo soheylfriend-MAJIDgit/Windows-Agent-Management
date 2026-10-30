@@ -153,7 +153,7 @@ export function AppShell({
             ) : null}
           </span>
           <span className="foot-group">
-            <span><span className="status-mark is-ok" aria-hidden="true" />ذخیره تصاویر: Cloudflare R2 + D1</span>
+            <span><span className="status-mark is-ok" aria-hidden="true" />ذخیره تصاویر: Vercel Blob + PostgreSQL</span>
             <span aria-hidden="true">·</span>
             <span>ساعت تهران</span>
           </span>

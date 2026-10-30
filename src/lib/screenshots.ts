@@ -1,9 +1,11 @@
 import { AppError } from "./errors";
 import type { AuthenticatedAgentKey } from "./agent-keys";
-import { dbAll, dbBatch, dbFirst, dbRun, getScreenshotBucket } from "./db";
+import { dbAll, dbBatch, dbFirst, dbRun } from "./db";
+import { del, get, put } from "@vercel/blob";
 import { sha256Hex } from "./crypto";
 
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+// Vercel Function requests are limited to 4.5 MB; keep multipart uploads safely below it.
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_BUDGET_BYTES = 8 * 1024 * 1024 * 1024;
 const MIME_EXT: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
 
@@ -56,7 +58,7 @@ export async function uploadScreenshot(key:AuthenticatedAgentKey,form:FormData):
   const mime=file.type.toLowerCase();
   const ext=MIME_EXT[mime];
   if(!ext)throw new AppError("فقط تصویر PNG، JPEG یا WebP پذیرفته می‌شود.",{status:415,code:"screenshot_type_invalid"});
-  if(file.size<1||file.size>MAX_IMAGE_BYTES)throw new AppError("حجم هر تصویر باید حداکثر ۱۰ مگابایت باشد.",{status:413,code:"screenshot_too_large"});
+  if(file.size<1||file.size>MAX_IMAGE_BYTES)throw new AppError("حجم هر تصویر در Vercel باید حداکثر ۴ مگابایت باشد.",{status:413,code:"screenshot_too_large"});
   const commandId=value(form.get("commandId"),80);
   if(commandId){
     const command=await dbFirst<{id:string}>("SELECT id FROM commands WHERE id = ? AND agent_key_id = ?",[commandId,key.id]);
@@ -76,12 +78,11 @@ export async function uploadScreenshot(key:AuthenticatedAgentKey,form:FormData):
   const hash=await sha256Hex(new Uint8Array(bytes));
   const duplicate=await dbFirst<ScreenshotRow>(`SELECT * FROM screenshots WHERE agent_key_id = ? AND COALESCE(command_id,'') = COALESCE(?,'') AND COALESCE(stage,'') = COALESCE(?,'') AND sha256 = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1`,[key.id,commandId,stage,hash]);
   if(duplicate)return view(duplicate);
-  const bucket=await getScreenshotBucket();
-  await bucket.put(objectKey,bytes,{httpMetadata:{contentType:mime,cacheControl:"private, max-age=3600"},customMetadata:{id,agentKeyId:key.id,sha256:hash}});
+  const blob=await put(objectKey,bytes,{access:"private",addRandomSuffix:false,contentType:mime,cacheControlMaxAge:300});
   try {
     const queries=[{sql:`INSERT INTO screenshots
       (id,object_key,command_id,execution_id,agent_key_id,agent_id,stage,name,mime_type,size,sha256,width,height,occurred_at,visibility,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'private',?)`,params:[id,objectKey,commandId,executionId,key.id,agentId,stage,name,mime,file.size,hash,width,height,occurredAt,now]}];
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'private',?)`,params:[id,blob.url,commandId,executionId,key.id,agentId,stage,name,mime,file.size,hash,width,height,occurredAt,now]}];
     if(commandId){
       queries.push({sql:`INSERT INTO command_artifacts
         (id,command_id,kind,stage,name,local_path,drive_url,mime_type,size,created_at)
@@ -90,7 +91,7 @@ export async function uploadScreenshot(key:AuthenticatedAgentKey,form:FormData):
       queries.push({sql:"UPDATE commands SET last_event_at = ? WHERE id = ?",params:[now,commandId]});
     }
     await dbBatch(queries);
-  }catch(error){await bucket.delete(objectKey);throw error}
+  }catch(error){await del(blob.url);throw error}
   const row=await dbFirst<ScreenshotRow>("SELECT * FROM screenshots WHERE id = ?",[id]);
   return view(row!);
 }
@@ -115,7 +116,12 @@ export async function screenshotRow(id:string):Promise<ScreenshotRow> {
   if(!row)throw new AppError("تصویر پیدا نشد یا قبلاً حذف شده است.",{status:404,code:"screenshot_not_found"});
   return row;
 }
-export async function screenshotContent(id:string){const row=await screenshotRow(id);const object=await (await getScreenshotBucket()).get(row.object_key);if(!object)throw new AppError("فایل تصویر در R2 پیدا نشد.",{status:404,code:"screenshot_object_missing"});return {row,object}}
+async function blobResponse(row:ScreenshotRow):Promise<Response>{
+  const object=await get(row.object_key,{access:"private",useCache:false});
+  if(!object||object.statusCode!==200||!object.stream)throw new AppError("فایل تصویر در Vercel Blob پیدا نشد.",{status:404,code:"screenshot_object_missing"});
+  return new Response(object.stream);
+}
+export async function screenshotContent(id:string){const row=await screenshotRow(id);return {row,object:await blobResponse(row)}}
 
 export async function deleteScreenshots(ids:string[]):Promise<number>{
   const unique=[...new Set(ids)].filter(id=>/^shot_[a-f0-9]{24}$/.test(id)).slice(0,100);
@@ -123,11 +129,11 @@ export async function deleteScreenshots(ids:string[]):Promise<number>{
   const placeholders=unique.map(()=>"?").join(",");
   const rows=await dbAll<ScreenshotRow>(`SELECT * FROM screenshots WHERE id IN (${placeholders}) AND deleted_at IS NULL`,unique);
   if(!rows.length)return 0;
-  await (await getScreenshotBucket()).delete(rows.map(row=>row.object_key));
+  await del(rows.map(row=>row.object_key));
   const now=new Date().toISOString();
   await dbRun(`UPDATE screenshots SET deleted_at = ?, visibility = 'private', share_token = NULL WHERE id IN (${placeholders})`,[now,...unique]);
   await dbRun(`DELETE FROM command_artifacts WHERE id IN (${rows.map(()=>"?").join(",")})`,rows.map(row=>`art_${row.id}`));
-  await dbRun("INSERT INTO events(kind,title,detail,created_at) VALUES('screenshots_deleted','حذف تصاویر R2',?,?)",[JSON.stringify({count:rows.length,ids:rows.map(row=>row.id)}),now]);
+  await dbRun("INSERT INTO events(kind,title,detail,created_at) VALUES('screenshots_deleted','حذف تصاویر Vercel Blob',?,?)",[JSON.stringify({count:rows.length,ids:rows.map(row=>row.id)}),now]);
   return rows.length;
 }
 
@@ -140,6 +146,6 @@ export async function publicScreenshot(token:string){
   if(!/^share_[a-f0-9]{36}$/.test(token))throw new AppError("لینک عمومی معتبر نیست.",{status:404,code:"share_not_found"});
   const row=await dbFirst<ScreenshotRow>("SELECT * FROM screenshots WHERE share_token = ? AND visibility = 'public' AND deleted_at IS NULL",[token]);
   if(!row)throw new AppError("لینک عمومی وجود ندارد یا لغو شده است.",{status:404,code:"share_not_found"});
-  const object=await (await getScreenshotBucket()).get(row.object_key);if(!object)throw new AppError("فایل عمومی پیدا نشد.",{status:404,code:"share_object_missing"});return {row,object};
+  return {row,object:await blobResponse(row)};
 }
 export async function saveScreenshotBudget(bytes:number){if(!Number.isFinite(bytes)||bytes<100*1024*1024||bytes>10*1024*1024*1024*1024)throw new AppError("بودجه فضا باید بین ۱۰۰ مگابایت و ۱۰ ترابایت باشد.",{status:400,code:"screenshot_budget_invalid"});await dbRun(`INSERT INTO settings(key,value,updated_at) VALUES('screenshots.budget_bytes',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`,[String(Math.round(bytes)),new Date().toISOString()])}

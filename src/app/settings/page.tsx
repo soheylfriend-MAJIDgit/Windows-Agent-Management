@@ -148,7 +148,7 @@ export default function SettingsPage() {
       <PageHeader
         eyebrow="مدیریت"
         title="تنظیمات"
-        subtitle="مخزن‌ها، Cloudflare R2/D1، وضعیت اتصال‌ها و متغیرهای محیطی. مقدارهای حساس فقط سمت سرور نگه‌داری می‌شوند."
+        subtitle="مخزن‌ها، Vercel Blob/PostgreSQL، وضعیت اتصال‌ها و متغیرهای محیطی. مقدارهای حساس فقط سمت سرور نگه‌داری می‌شوند."
         actions={
           <>
             <Link href="/database" className="btn btn-small">
@@ -260,7 +260,7 @@ export default function SettingsPage() {
                   : env
                     ? [
                         { name: "توکن گیت‌هاب", ok: env.githubToken, note: env.githubToken ? "تنظیم شده" : "تنظیم نشده" },
-                        { name: "ذخیره تصاویر", ok: true, note: "Cloudflare R2 + D1؛ وضعیت واقعی را با دکمه بررسی ببینید" },
+                        { name: "ذخیره تصاویر", ok: true, note: "Vercel Blob + PostgreSQL؛ وضعیت واقعی را با دکمه بررسی ببینید" },
                         { name: "کد مدیریت", ok: env.passcode, note: env.passcode ? "فعال" : "بدون رمز" },
                       ].map((row) => (
                         <div className="status-row" key={row.name}>
@@ -288,35 +288,34 @@ export default function SettingsPage() {
                 </span>
               </div>
               <p className="field-helper">
-                هیچ‌کدام از این مقدارها در فرانت‌اند یا در مخزن ذخیره نمی‌شوند. در استقرار فعلی از مسیر Cloudflare:
-                Worker → Settings → Variables and Secrets → Add → Secret ثبت کنید؛ یا دستورهای زیر را در ترمینال اجرا کنید.
+                هیچ‌کدام از این مقدارها در فرانت‌اند یا مخزن ذخیره نمی‌شوند. در Vercel از مسیر Project → Settings → Environment Variables ثبت و سپس Redeploy کنید.
               </p>
               <div className="secrets-stack" style={{ marginTop: 10 }}>
                 <SecretRow
                   label="توکن گیت‌هاب (نوشتن در مخزن همکار)"
                   present={Boolean(env?.githubToken)}
-                  command="wrangler secret put GITHUB_TOKEN"
+                  command="Vercel: GITHUB_TOKEN"
                   helper="کلاسیک یا fine-grained با دسترسی Contents: Read and write روی Windows-Agent-hamkar."
                 />
                 <SecretRow
                   label="کد مدیریت (ورود)"
                   present={Boolean(env?.passcode)}
-                  command="wrangler secret put MANAGER_PASSCODE"
+                  command="Vercel: MANAGER_PASSCODE"
                   helper="اگر تنظیم نشود، سایت بدون رمز باز است. برای محیط عمومی حتماً تنظیم کنید."
                 />
                 <SecretRow
                   label="کلید امضای نشست (اختیاری)"
                   present={Boolean(env?.authSecret)}
-                  command="wrangler secret put AUTH_SECRET"
+                  command="Vercel: AUTH_SECRET"
                   helper="طولانی و تصادفی؛ اگر خالی باشد از کد مدیریت استفاده می‌شود."
                 />
               </div>
             </section>
 
             <section className="card">
-              <div className="card-head"><h2 className="row" style={{ gap: 7 }}><Icon name="image" size={16} />ذخیره تصاویر Cloudflare</h2><StatusChip status="success" label="R2 + D1" /></div>
-              <ol className="steps"><li><strong>R2 bucket</strong>یک bucket خصوصی با نام <span className="mono">windows-agent-management-screenshots</span> بسازید.</li><li><strong>Binding</strong>نام binding باید <span className="mono">SCREENSHOTS</span> باشد.</li><li><strong>Agent API</strong>ایجنت فایل را به <span className="mono">/api/agent/screenshots</span> می‌فرستد؛ هیچ Secret مربوط به R2 در Agent قرار نمی‌گیرد.</li></ol>
-              <p className="feedback">Google Drive بازنشسته شده است؛ تصویر در R2 و متادیتا و گزارش در D1 ذخیره می‌شود.</p>
+              <div className="card-head"><h2 className="row" style={{ gap: 7 }}><Icon name="image" size={16} />ذخیره تصاویر Vercel</h2><StatusChip status="success" label="Blob + PostgreSQL" /></div>
+              <ol className="steps"><li><strong>Blob Store</strong>در تب Storage پروژه، Vercel Blob بسازید و به همین Project متصل کنید.</li><li><strong>متغیر سرور</strong>وجود <span className="mono">BLOB_READ_WRITE_TOKEN</span> را بررسی و Redeploy کنید.</li><li><strong>Agent API</strong>ایجنت فقط <span className="mono">/api/agent/screenshots</span> را با Agent Key صدا می‌زند؛ Blob Token هرگز داخل Agent قرار نمی‌گیرد.</li></ol>
+              <p className="feedback">Google Drive بازنشسته شده است؛ تصویر در Blob و متادیتا و گزارش در PostgreSQL ذخیره می‌شود.</p>
             </section>
 
             <section className="card">
@@ -337,14 +336,13 @@ export default function SettingsPage() {
                 <dd>{faNumber(bundle.data.prompts)}</dd>
                 <dt>رویدادها</dt>
                 <dd>{faNumber(bundle.data.events)}</dd>
-                <dt>Worker</dt>
+                <dt>Vercel Project</dt>
                 <dd className="mono" dir="ltr">{env?.workerName}</dd>
                 <dt>نسخه</dt>
                 <dd className="mono" dir="ltr">{bundle.version}</dd>
               </dl>
               <div className="callout" style={{ marginTop: 10 }}>
-                <strong>D1 خودکار است.</strong> دیتابیس با اولین deploy ساخته می‌شود و جدول‌ها با اولین درخواست. برای
-                اجرای محلی، <span className="mono">npm run dev</span> نسخه‌ی محلی D1 را می‌سازد.
+                <strong>PostgreSQL با Prisma مدیریت می‌شود.</strong> Store را یک‌بار در Vercel متصل کنید؛ <span className="mono">prisma migrate deploy</span> ساختار را هنگام Build اعمال می‌کند.
               </div>
               {!env?.passcode ? (
                 <p className="form-error" style={{ marginTop: 8 }}>

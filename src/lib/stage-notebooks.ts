@@ -441,7 +441,7 @@ export async function runStageNotebookCell(notebookId: string, cellId: string, r
     await updateAttempt(attemptId, { phase, message: "دفترچه، سلول و محتوای اجرایی معتبر است." }, { phase, level: "success", message: `سلول «${cell.title}» با زبان ${cell.language} معتبر است.` });
 
     phase = "agent_selection";
-    await updateAttempt(attemptId, { phase, message: "در حال یافتن Windows Agent با Heartbeat تازه و قابلیت D1 است." }, { phase, level: "info", message: "جست‌وجوی Agent آنلاین با Heartbeat کمتر از ۹۰ ثانیه آغاز شد." });
+    await updateAttempt(attemptId, { phase, message: "در حال یافتن Windows Agent با Heartbeat تازه و قابلیت PostgreSQL است." }, { phase, level: "info", message: "جست‌وجوی Agent آنلاین با Heartbeat کمتر از ۹۰ ثانیه آغاز شد." });
     const target = await findOnlineCommandAgent(["d1_automations"]);
     phase = "agent_selected";
     await updateAttempt(attemptId, { phase, message: "Windows Agent سازگار و آنلاین انتخاب شد.", agentName: target.agentName, agentVersion: target.agentVersion }, { phase, level: "success", message: `${target.agentName} نسخه ${target.agentVersion ?? "نامشخص"} · ${target.autoMode ? "Automatic" : "Manual"}${target.busy ? ` · مشغول: ${target.busy}` : " · آزاد"}` });
@@ -472,11 +472,11 @@ export async function runStageNotebookCell(notebookId: string, cellId: string, r
 
     const saved = await saveAutomationVersion({ slug: `stage_${compactId(notebook.id)}_${compactId(cell.id)}`, name: `${notebook.title} · ${runAll ? "اجرای دفترچه" : cell.title}`, description: "سلول‌های دفترچه کنترل مرحله‌ای", target: "windows", sourceCode, changeSummary: `اجرای واقعی ${chain.length} مرحله در ${new Date().toISOString()}`, actor: "manager:stage-notebook", activate: true });
     phase = "automation_saved";
-    await updateAttempt(attemptId, { phase, message: "نسخه immutable اتوماسیون در D1 ذخیره و فعال شد.", automationVersion: saved.version.version }, { phase, level: "success", message: `نسخه ${saved.version.version} اتوماسیون ذخیره شد.` });
+    await updateAttempt(attemptId, { phase, message: "نسخه immutable اتوماسیون در PostgreSQL ذخیره و فعال شد.", automationVersion: saved.version.version }, { phase, level: "success", message: `نسخه ${saved.version.version} اتوماسیون ذخیره شد.` });
 
     const run = await requestAutomationRun(saved.automation.id, "manager:stage-notebook", target, { source: "stage_notebook", title: `${notebook.title} · ${runAll ? "اجرای همه مراحل" : cell.title}`, timeoutSeconds: 3600, noProgressSeconds: 300, requiredCapabilities: ["d1_automations"], monitoringPlan: ["اجرای ترتیبی سلول‌های عادی", "راه‌اندازی مستقل سلول‌های پایشی پس‌زمینه", "ثبت stdout و stderr", "گرفتن اسکرین‌شات هر مرحله"] });
     phase = "command_created";
-    await updateAttempt(attemptId, { status: "queued", phase, message: "فرمان در D1 ساخته شد و منتظر claim ایجنت است.", commandId: run.commandId }, { phase, level: "success", message: `فرمان ${run.commandId} ساخته شد؛ مرحله بعد باید claim یا waiting_confirmation باشد.` });
+    await updateAttempt(attemptId, { status: "queued", phase, message: "فرمان در PostgreSQL ساخته شد و منتظر claim ایجنت است.", commandId: run.commandId }, { phase, level: "success", message: `فرمان ${run.commandId} ساخته شد؛ مرحله بعد باید claim یا waiting_confirmation باشد.` });
 
     for (const item of chain) {
       item.commandId = run.commandId;

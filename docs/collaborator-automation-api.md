@@ -1,4 +1,4 @@
-# قرارداد API ایجنت همکار برای کدهای اتوماسیون D1
+# قرارداد API ایجنت همکار برای کدهای اتوماسیون PostgreSQL
 
 ایجنت همکار برای کدهای اتوماسیون به repository، Git CLI، GitHub token، Commit یا Push نیاز ندارد. کد پایه سایت مدیریت و Windows Agent همچنان در مخزن‌های متعلق به مدیریت و مادر باقی می‌مانند.
 
@@ -77,7 +77,7 @@ POST /automations/{automationId}
 POST /automations/{automationId}/run
 ```
 
-این درخواست کد را داخل command حمل نمی‌کند؛ فرمان فقط `versionId`, `sourceSha256` و endpoint دریافت نسخه را در D1 ثبت می‌کند. Windows Agent نسخه immutable را می‌گیرد و hash را بررسی می‌کند.
+این درخواست کد را داخل command حمل نمی‌کند؛ فرمان فقط `versionId`, `sourceSha256` و endpoint دریافت نسخه را در PostgreSQL ثبت می‌کند. Windows Agent نسخه immutable را می‌گیرد و hash را بررسی می‌کند.
 
 ## پایش و توقف فرمان
 
@@ -96,8 +96,8 @@ POST /commands/{commandId}/cancel
 
 ## مرزها
 
-- API، SQL آزاد یا دسترسی مستقیم D1 نمی‌دهد.
+- API، SQL آزاد یا دسترسی مستقیم PostgreSQL نمی‌دهد.
 - این API کد پایه `app.py`, `manager_client.py` یا Next.js را تغییر نمی‌دهد.
 - Python اتوماسیون طبق سیاست دستی/خودکار Windows Agent اجرا می‌شود.
 - ایجنت همکار موظف است کد پایه و secretها را تغییر ندهد یا نخواند.
-- تصاویر و لاگ‌های حجیم در Drive می‌مانند؛ D1 فقط metadata را نگه می‌دارد.
+- تصاویر و لاگ‌های حجیم در Drive می‌مانند؛ PostgreSQL فقط metadata را نگه می‌دارد.

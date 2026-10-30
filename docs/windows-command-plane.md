@@ -7,11 +7,11 @@
 - فرمان shell یا Python آزاد وجود ندارد. `type` فقط از allowlist محلی پذیرفته شود:
   - `run_arena_prompt`: Sync مخزن همکار و اجرای دقیق `job_arena.py`
   - `sync_and_run_job`: مسیر قدیمی سازگاری با Sync مخزن همکار
-  - `run_automation`: دریافت نسخه immutable از API/D1، بررسی SHA-256 و اجرای `payload.jobName`
+  - `run_automation`: دریافت نسخه immutable از API/PostgreSQL، بررسی SHA-256 و اجرای `payload.jobName`
 - در مسیر جدید `run_automation` هیچ Git clone/pull لازم نیست. `sourceEndpoint` فقط باید relative و زیر `/api/agent/automations/` باشد.
 - `jobName` باید با `^job_[A-Za-z0-9_]+\.py$` تطبیق کند، بدون `/`، `\\` یا `..`، و پس از `resolve()` داخل پوشه‌ی شناخته‌شده‌ی `Desktop\\CODES` بماند.
 - `payload` آرگومان shell، مسیر اجرایی، URL دلخواه یا قطعه کد نیست.
-- کلید Bearer فقط در DPAPI بماند. تصویر یا secret هرگز در D1/رخدادها ارسال نشود.
+- کلید Bearer فقط در DPAPI بماند. تصویر یا secret هرگز در PostgreSQL/رخدادها ارسال نشود.
 - `requiresConfirmation: true` یعنی اجرای فرمان باید از همان سیاست فعلی Windows Agent عبور کند: در حالت دستی، UI محلی تأیید می‌گیرد؛ در حالت خودکار، همان سیاست محلی اجازه‌ی ادامه می‌دهد. سایت حق تغییر این mode را ندارد.
 
 ## اعلام آمادگی و چرخه‌ی Poll
@@ -102,7 +102,7 @@ POST /commands/{commandId}/events
 
 برای هر مرحله‌ی قابل مشاهده screenshot گرفته شود. خطاهای catchable در `job_arena.py` باید با حداکثر سه تلاش به همکار بازخورد دهند؛ متن بازخورد از همکار بخواهد لاگ‌ها/تصویرهای موجود در Drive را بررسی و کد را اصلاح یا بازنویسی کند. لاگ کامل در Arena تایپ نشود.
 
-## فراداده‌ی تصویر؛ بدون بایت در D1
+## فراداده‌ی تصویر؛ بدون بایت در PostgreSQL
 
 ابتدا فایل با Google Drive client موجود Windows Agent آپلود شود. سپس فقط metadata ثبت شود:
 
@@ -199,7 +199,7 @@ stdout/stderr به صورت chunkهای محدود و پاک‌سازی‌شده
 
 ## بازیابی پس از crash خود manager_client
 
-- تمام state/events/artifacts در D1 باقی می‌مانند.
+- تمام state/events/artifacts در PostgreSQL باقی می‌مانند.
 - پس از restart، client فرمان `claimed`/`running` قبلی را کورکورانه دوباره اجرا نکند.
 - heartbeat وضعیت `busy` را گزارش کند.
 - اگر process قبلی واقعاً زنده نیست، رخداد crash و state=`failed` ارسال شود.
@@ -222,7 +222,7 @@ Windows Agent باید PaddleOCR را در محیط ایزوله زیر LocalApp
 1. با submit پرامپت/اجرای دوباره، modal بلافاصله با command ID باز شود.
 2. حالت دستی Windows Agent منتظر تأیید محلی و حالت خودکار بدون دخالت سایت ادامه دهد.
 3. timeline، timestamp، warning/error/fatal، وضعیت نهایی و metadata تصویرها پس از reload قابل بازیابی باشند.
-4. D1 هیچ blob/base64 تصویر نداشته باشد.
+4. PostgreSQL هیچ blob/base64 تصویر نداشته باشد.
 5. توقف سایت حداکثر در دو ثانیه دیده و کل process tree متوقف شود.
 6. timeout، no-progress و fatal anomaly اجرای فعال را متوقف کنند.
 7. command type یا job path خارج allowlist هرگز اجرا نشود.

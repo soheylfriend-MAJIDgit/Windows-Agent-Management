@@ -562,7 +562,7 @@ while time.monotonic() < deadline:
             time.sleep(POLL_SECONDS)
             continue
         command_id, revision, timeout_seconds, payload_hash = validated
-        # Receipt پیش از اجرا در Drive mirror نوشته می‌شود و هم‌زمان رویداد آن به D1 می‌رود.
+        # Receipt پیش از اجرا در Drive mirror نوشته می‌شود و هم‌زمان رویداد آن به PostgreSQL می‌رود.
         status("accepted", "فرمان پایدار، تازه و دارای hash صحیح پذیرفته شد.", command_id, revision=revision, payloadSha256=payload_hash)
         processed.add(command_id)
         last_revision = revision
@@ -798,7 +798,7 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
     throw new AppError("سرویس Google Drive بازنشسته شده است.", {
       status: 410,
       code: "drive_service_retired",
-      hint: "برای فایل و اسکرین‌شات از APIهای D1/R2 مدیریت استفاده کنید.",
+      hint: "برای فایل و اسکرین‌شات از APIهای PostgreSQL/Blob مدیریت استفاده کنید.",
     });
   } else if (service.slug === "director-monitor") {
     const url = httpsUrl(input.url);
@@ -861,7 +861,7 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
       "پایش پیوسته فایل play-puase-stop.txt و توقف امن روی pause یا stop",
       "نمایش زنده تغییرهای Message.txt به‌عنوان پیام مستقیم Agent همکار",
       "بایگانی مستقل هر نسخه تازه Complete MarkDown REPORT.md",
-      "ثبت تصویر مرحله‌ای و Upload مستقیم به Cloudflare R2 همراه متادیتای D1",
+      "ثبت تصویر مرحله‌ای و Upload مستقیم به Vercel Blob همراه متادیتای PostgreSQL",
       "تأیید ورود متن، ارسال واقعی، پایان پاسخ Arena و انتخاب Yes",
       "پایش تغییر پایدار NextPrompt.txt و جلوگیری از محتوای قدیمی، ناقص یا تکراری",
     ] : service.slug === "arena-batch" ? [

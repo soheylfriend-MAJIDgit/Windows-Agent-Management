@@ -102,7 +102,7 @@ export default function DatabasePage() {
     try {
       const fresh = await postJson<AgentConnectionBundle>("/api/agent-tests", { keyId: selectedKey });
       connection.setData(fresh);
-      notify.ok("درخواست تست در D1 ثبت شد؛ منتظر پاسخ ایجنت ویندوز هستیم.");
+      notify.ok("درخواست تست در PostgreSQL ثبت شد؛ منتظر پاسخ ایجنت ویندوز هستیم.");
     } catch (err) {
       notify.error(err instanceof ApiRequestError ? err.message : "شروع تست اتصال ممکن نشد.");
     } finally {
@@ -115,7 +115,7 @@ export default function DatabasePage() {
       <PageHeader
         eyebrow="مرکز فرماندهی"
         title="پایگاه داده و اتصال ویندوز"
-        subtitle="سلامت Cloudflare D1، Heartbeat ایجنت‌ها و تست رفت‌وبرگشت واقعی بین سایت و Windows Agent."
+        subtitle="سلامت PostgreSQL/Prisma، Heartbeat ایجنت‌ها و تست رفت‌وبرگشت واقعی بین سایت و Windows Agent."
         actions={
           <button
             type="button"
@@ -132,13 +132,13 @@ export default function DatabasePage() {
       <ErrorBanner error={status.error} onRetry={() => status.reload()} />
 
       {!db ? (
-        status.error ? null : <LoadingState label="در حال بررسی D1…" />
+        status.error ? null : <LoadingState label="در حال بررسی PostgreSQL…" />
       ) : (
         <>
           <Banner
             tone={db.connected && db.schemaReady ? "ok" : "danger"}
             icon="database"
-            title={db.connected && db.schemaReady ? "D1 متصل و آماده است" : "D1 نیازمند بررسی است"}
+            title={db.connected && db.schemaReady ? "PostgreSQL متصل و آماده است" : "PostgreSQL نیازمند بررسی است"}
             actions={
               <Link href="/settings" className="btn btn-small">
                 <Icon name="settings" size={13} />
@@ -223,8 +223,8 @@ export default function DatabasePage() {
                 </h2>
               </div>
               <ul className="db-check-list">
-                <li><Icon name="check-circle" size={15} /> binding واقعی D1 با نام <span className="mono">DB</span> در Worker موجود است.</li>
-                <li><Icon name="check-circle" size={15} /> یک Query واقعی روی D1 اجرا و پاسخ آن خوانده شده است.</li>
+                <li><Icon name="check-circle" size={15} /> binding واقعی PostgreSQL با نام <span className="mono">DB</span> در Worker موجود است.</li>
+                <li><Icon name="check-circle" size={15} /> یک Query واقعی روی PostgreSQL اجرا و پاسخ آن خوانده شده است.</li>
                 <li><Icon name="check-circle" size={15} /> جدول‌ها با <span className="mono">ensureSchema</span> بررسی و در صورت نیاز ساخته شده‌اند.</li>
                 <li><Icon name="lock" size={15} /> هیچ توکن، شناسه یا محتوای حساس در این صفحه نمایش داده نمی‌شود.</li>
               </ul>
@@ -281,9 +281,9 @@ function AgentConnectionPanel({
   const latest = data?.tests.find((test) => test.status !== "cancelled") ?? null;
   const statusMeta = latest
     ? {
-        pending: { status: "pending", label: "در صف D1", text: "ایجنت ویندوز هنوز درخواست تست را دریافت نکرده است." },
+        pending: { status: "pending", label: "در صف PostgreSQL", text: "ایجنت ویندوز هنوز درخواست تست را دریافت نکرده است." },
         delivered: { status: "running", label: "دریافت‌شده", text: "درخواست به Windows Agent رسیده؛ منتظر پیام پاسخ هستیم." },
-        succeeded: { status: "success", label: "اتصال برقرار", text: "پیام صحیح از ایجنت ویندوز دریافت و در D1 ثبت شد." },
+        succeeded: { status: "success", label: "اتصال برقرار", text: "پیام صحیح از ایجنت ویندوز دریافت و در PostgreSQL ثبت شد." },
         failed: { status: "error", label: "پاسخ نادرست", text: "ایجنت پاسخ داد، اما متن پاسخ با پیام مورد انتظار یکسان نبود." },
         expired: { status: "error", label: "مهلت تمام شد", text: "تا پنج دقیقه پاسخی از ایجنت ویندوز نرسید." },
         cancelled: { status: "neutral", label: "لغوشده", text: "این تست با تست تازه جایگزین شد." },
@@ -298,7 +298,7 @@ function AgentConnectionPanel({
             <Icon name="terminal" size={17} />
             تست اتصال ایجنت مدیریت و ایجنت ویندوز
           </h2>
-          <p className="field-helper">یک رفت‌وبرگشت واقعی از سایت ← D1 ← ویندوز ← D1 ← سایت</p>
+          <p className="field-helper">یک رفت‌وبرگشت واقعی از سایت ← PostgreSQL ← ویندوز ← PostgreSQL ← سایت</p>
         </div>
         <div className="row">
           {statusMeta ? <StatusChip status={statusMeta.status} label={statusMeta.label} /> : null}
@@ -336,7 +336,7 @@ function AgentConnectionPanel({
               title="ابتدا کلید ایجنت بسازید"
               actions={<Link href="/agent-keys" className="btn btn-small"><Icon name="lock" size={13} />کلید ایجنت</Link>}
             >
-              بدون کلید فعال، Windows Agent نمی‌تواند درخواست تست را از D1 دریافت کند.
+              بدون کلید فعال، Windows Agent نمی‌تواند درخواست تست را از PostgreSQL دریافت کند.
             </Banner>
           ) : (
             <button type="button" className="btn btn-primary" onClick={onStart} disabled={starting || !selectedKey}>
@@ -368,7 +368,7 @@ function AgentConnectionPanel({
                 </div>
               </div>
               <div className="agent-test-flow" aria-label="مراحل تست اتصال">
-                <TestStep done title="ثبت در D1" note={formatJalaliDateTime(latest.createdAt, true)} />
+                <TestStep done title="ثبت در PostgreSQL" note={formatJalaliDateTime(latest.createdAt, true)} />
                 <TestStep
                   done={Boolean(latest.deliveredAt)}
                   title="دریافت در ویندوز"

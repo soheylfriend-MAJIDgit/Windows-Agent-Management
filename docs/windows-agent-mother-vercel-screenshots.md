@@ -1,8 +1,8 @@
-# نامه اجرایی به Windows Agent Mother — مهاجرت کامل تصاویر از Google Drive به R2/D1
+# نامه اجرایی به Windows Agent Mother — مهاجرت کامل تصاویر از Google Drive به Blob/PostgreSQL
 
 ## تصمیم قطعی
 
-از این نسخه، Mother نباید هیچ Screenshot، گزارش، فایل کنترل یا Artifact تازه‌ای را به Google Drive بفرستد. مسیر رسمی تصاویر، API مدیریت است؛ مدیریت بایت فایل را در Cloudflare R2 و متادیتا را در D1 نگه می‌دارد.
+از این نسخه، Mother نباید هیچ Screenshot، گزارش، فایل کنترل یا Artifact تازه‌ای را به Google Drive بفرستد. مسیر رسمی تصاویر، API مدیریت است؛ مدیریت بایت فایل را در Vercel Blob و متادیتا را در PostgreSQL نگه می‌دارد.
 
 ## قرارداد Upload
 
@@ -15,7 +15,7 @@ Headers:
 
 Fields:
 
-- `file` الزامی: PNG/JPEG/WebP، حداکثر ۱۰ MiB
+- `file` الزامی: PNG/JPEG/WebP، حداکثر ۴ MiB (برای عبور مطمئن از سقف درخواست Vercel Function)
 - `commandId` اختیاری ولی برای اجرای فرمان الزامی تلقی شود
 - `executionId` شناسه اجرای محلی
 - `agentId` شناسه پایدار Agent
@@ -84,7 +84,7 @@ def upload_screenshot(base_url, agent_key, path, *, command_id=None,
 7. فایل محلی طبق retention محلی پاک شود؛ هرگز به Drive منتقل نشود.
 8. تمام کدهای `googleapiclient`, Service Account, Folder ID و sync پوشه Drive از مسیر Screenshot و Report حذف شوند.
 9. Marker قدیمی `SERVICE_ARTIFACT` فقط برای سازگاری لاگ مجاز است؛ مرجع نهایی فایل، پاسخ Upload مدیریت است.
-10. قابلیت Heartbeat جدید گزارش شود: `r2_screenshot_upload: true` و `google_drive_artifacts: false`.
+10. قابلیت Heartbeat جدید گزارش شود: `vercel_blob_screenshot_upload: true` و `google_drive_artifacts: false`. کلید قدیمی `r2_screenshot_upload` فقط برای سازگاری نسخه‌های قبلی قابل خواندن است.
 
 ## دسترسی
 
@@ -96,5 +96,5 @@ def upload_screenshot(base_url, agent_key, path, *, command_id=None,
 - کلیک Thumbnail دقیقاً همان تصویر را باز کند.
 - Command و Stage صحیح باشند.
 - قطع/وصل اینترنت باعث Upload تکراری نشود.
-- حذف از مدیریت، Object را از R2 حذف و مصرف را کم کند.
+- حذف از مدیریت، Object را از Blob حذف و مصرف را کم کند.
 - هیچ فایل تازه‌ای در Google Drive ایجاد نشود.

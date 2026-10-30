@@ -9,12 +9,14 @@ out/
 next-env.d.ts
 *.tsbuildinfo
 
-# cloudflare
+
+# generated build caches
 .open-next/
 .wrangler/
+
+# legacy local secrets
 .dev.vars
 .dev.vars.*
-!.dev.vars.example
 
 # env
 .env
@@ -28,3 +30,7 @@ next-env.d.ts
 *.log
 coverage/
 .data/
+
+# python
+__pycache__/
+*.py[cod]

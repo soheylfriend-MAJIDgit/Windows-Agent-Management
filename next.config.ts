@@ -1,5 +1,4 @@
 import type { NextConfig } from "next";
-import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
 import { execFileSync } from "node:child_process";
 
 function gitValue(format: string): string {
@@ -25,15 +24,15 @@ function gitBranch(): string {
   }
 }
 
-const buildCommitSha = process.env.CF_PAGES_COMMIT_SHA || process.env.GITHUB_SHA || gitValue("%H");
+const buildCommitSha = process.env.VERCEL_GIT_COMMIT_SHA || process.env.GITHUB_SHA || gitValue("%H");
 const buildCommitDate = process.env.BUILD_COMMIT_DATE || gitValue("%cI");
-const buildRepository = process.env.GITHUB_REPOSITORY || "soheylfriend-MAJIDgit/Windows-Agent-Management";
+const buildRepository = process.env.GITHUB_REPOSITORY || (process.env.VERCEL_GIT_REPO_OWNER && process.env.VERCEL_GIT_REPO_SLUG ? `${process.env.VERCEL_GIT_REPO_OWNER}/${process.env.VERCEL_GIT_REPO_SLUG}` : "soheylfriend-MAJIDgit/Windows-Agent-Management");
 const buildBranch = process.env.BUILD_BRANCH
-  || process.env.CF_PAGES_BRANCH
+  || process.env.VERCEL_GIT_COMMIT_REF
   || process.env.GITHUB_HEAD_REF
   || process.env.GITHUB_REF_NAME
   || gitBranch()
-  || "arena/0133f1f3-windows-agent-management";
+  || "main";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -59,8 +58,5 @@ const nextConfig: NextConfig = {
     ];
   },
 };
-
-// در حالت توسعه، bindingهای wrangler (از جمله D1) در دسترس قرار می‌گیرند.
-initOpenNextCloudflareForDev();
 
 export default nextConfig;

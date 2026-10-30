@@ -271,7 +271,7 @@ export default function ReportsPage() {
         </div>
         <div className="row" style={{ gap: 8 }}>
           <span className="field-helper">
-            {current ? `${faNumber(current.total)} مورد ذخیره‌شده در D1` : ""}
+            {current ? `${faNumber(current.total)} مورد ذخیره‌شده در PostgreSQL` : ""}
           </span>
         </div>
       </div>
@@ -388,7 +388,7 @@ export default function ReportsPage() {
             <EmptyState
               icon="terminal"
               title="هنوز نتیجه‌ای ثبت نشده"
-              text="پس از اجرای کدها، نتیجه Agent مستقیماً در D1 ثبت می‌شود؛ ورود دستی نیز برای داده‌های قدیمی فعال است."
+              text="پس از اجرای کدها، نتیجه Agent مستقیماً در PostgreSQL ثبت می‌شود؛ ورود دستی نیز برای داده‌های قدیمی فعال است."
               actions={
                 <>
                   <button type="button" className="btn btn-small" onClick={() => setShowIngest(true)}>
@@ -411,12 +411,12 @@ export default function ReportsPage() {
           <EmptyState
             icon="check-circle"
             title="خطایی ثبت نشده"
-            text="Windows Agent هنوز خطایی در D1 ثبت نکرده است."
+            text="Windows Agent هنوز خطایی در PostgreSQL ثبت نکرده است."
           />
         </section>
       )}
 
-      <p className="feedback">گزارش‌ها مستقیماً در D1 و تصاویر در Cloudflare R2 نگه‌داری می‌شوند؛ Google Drive در این مسیر استفاده نمی‌شود.</p>
+      <p className="feedback">گزارش‌ها مستقیماً در PostgreSQL و تصاویر در Vercel Blob نگه‌داری می‌شوند؛ Google Drive در این مسیر استفاده نمی‌شود.</p>
     </>
   );
 }

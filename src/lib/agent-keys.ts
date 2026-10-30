@@ -25,7 +25,7 @@ export const AGENT_SCOPE_LABELS: Record<AgentKeyScope, string> = {
   "results:write": "ثبت نتیجه‌ی اجرای فرمان",
   "artifacts:write": "آپلود فایل و اسکرین‌شات",
   "artifacts:read": "مشاهده اسکرین‌شات‌های همه ایجنت‌ها",
-  "artifacts:delete": "حذف اسکرین‌شات‌های R2",
+  "artifacts:delete": "حذف اسکرین‌شات‌های Blob",
   "reports:read": "خواندن گزارش‌های مدیریتی",
   "automations:read": "خواندن کدهای اتوماسیون",
   "automations:write": "ساخت و نسخه‌بندی کدهای اتوماسیون",

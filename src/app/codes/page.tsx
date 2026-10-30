@@ -74,7 +74,7 @@ export default function AutomationsPage() {
         changeSummary: summary || "ویرایش از سایت مدیریت",
         activate: true,
       });
-      notify.ok("نسخه جدید در D1 ثبت و فعال شد.");
+      notify.ok("نسخه جدید در PostgreSQL ثبت و فعال شد.");
       await catalog.reload({ silent: true });
       await select(saved.automation);
     } catch (cause) {
@@ -94,12 +94,12 @@ export default function AutomationsPage() {
         description,
         target: "windows",
         sourceCode: source,
-        changeSummary: "نسخه نخست در D1",
+        changeSummary: "نسخه نخست در PostgreSQL",
         activate: true,
       });
       setShowNew(false);
       setName(""); setSlug(""); setDescription(""); setSource("");
-      notify.ok("کد اتوماسیون در D1 ساخته شد.");
+      notify.ok("کد اتوماسیون در PostgreSQL ساخته شد.");
       await catalog.reload({ silent: true });
       await select(saved.automation);
     } catch (cause) {
@@ -139,7 +139,7 @@ export default function AutomationsPage() {
     setError(null);
     try {
       const value = await postJson<{ imported: unknown[]; failed: unknown[] }>("/api/automations/import-github", {});
-      notify.ok(`${faNumber(value.imported.length)} فایل به D1 منتقل شد.`);
+      notify.ok(`${faNumber(value.imported.length)} فایل به PostgreSQL منتقل شد.`);
       if (value.failed.length) notify.error(`${faNumber(value.failed.length)} فایل منتقل نشد؛ نتیجه را بررسی کنید.`);
       await catalog.reload({ silent: true });
     } catch (cause) {
@@ -150,14 +150,14 @@ export default function AutomationsPage() {
   return (
     <>
       <PageHeader
-        eyebrow="منبع اجرایی D1"
+        eyebrow="منبع اجرایی PostgreSQL"
         title="کدهای اتوماسیون"
-        subtitle="کدهای Python عملیاتی مستقل از کد پایه ایجنت ویندوز و سایت مدیریت؛ نسخه‌بندی، اجرا و رصد از طریق D1."
+        subtitle="کدهای Python عملیاتی مستقل از کد پایه ایجنت ویندوز و سایت مدیریت؛ نسخه‌بندی، اجرا و رصد از طریق PostgreSQL."
         actions={<button className="btn btn-small" type="button" onClick={() => { setShowNew(true); setDetail(null); setSelectedId(null); setSource("#!/usr/bin/env python3\n\ndef main():\n    print(\"automation ready\")\n\nif __name__ == \"__main__\":\n    main()\n"); }}><Icon name="plus" size={14} /> اتوماسیون جدید</button>}
       />
 
       <Banner tone="info" title="تفکیک کدها">
-        منبع اصلی این صفحه Cloudflare D1 است. کد پایه Windows Agent در مخزن مادر و کد پایه سایت مدیریت در مخزن مدیریت باقی می‌ماند. ایجنت همکار برای ساخت و اجرای اتوماسیون‌ها به Git نیاز ندارد.
+        منبع اصلی این صفحه PostgreSQL است. کد پایه Windows Agent در مخزن مادر و کد پایه سایت مدیریت در مخزن مدیریت باقی می‌ماند. ایجنت همکار برای ساخت و اجرای اتوماسیون‌ها به Git نیاز ندارد.
       </Banner>
       <ErrorBanner error={error ?? catalog.error} onRetry={() => catalog.reload()} />
 
@@ -168,8 +168,8 @@ export default function AutomationsPage() {
         </button>
       </div>
 
-      {catalog.loading && !catalog.data ? <LoadingState label="در حال خواندن کاتالوگ D1…" /> : filtered.length === 0 ? (
-        <EmptyState icon="code" title="هنوز کد اتوماسیونی در D1 نیست" text="یک اتوماسیون بسازید یا فایل‌های مخزن قدیمی را یک‌بار به D1 منتقل کنید." />
+      {catalog.loading && !catalog.data ? <LoadingState label="در حال خواندن کاتالوگ PostgreSQL…" /> : filtered.length === 0 ? (
+        <EmptyState icon="code" title="هنوز کد اتوماسیونی در PostgreSQL نیست" text="یک اتوماسیون بسازید یا فایل‌های مخزن قدیمی را یک‌بار به PostgreSQL منتقل کنید." />
       ) : (
         <div className="automation-grid">
           {filtered.map((item) => (
@@ -193,7 +193,7 @@ export default function AutomationsPage() {
           {showNew ? <div className="form-grid"><div className="field"><label>نام نمایشی</label><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></div><div className="field"><label>شناسه لاتین</label><input className="input" dir="ltr" value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="arena_helper" /></div><div className="field field-wide"><label>توضیح</label><input className="input" value={description} onChange={(e) => setDescription(e.target.value)} /></div></div> : null}
           <div className="field"><label htmlFor="automation-source">کد Python</label><textarea id="automation-source" className="code-input automation-source" dir="ltr" value={source} onChange={(e) => setSource(e.target.value)} spellCheck={false} /></div>
           <div className="field"><label>شرح تغییر</label><input className="input" value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="چه چیزی تغییر کرده است؟" /></div>
-          <div className="actions-inline"><button className="btn" type="button" disabled={Boolean(busy)} onClick={() => void (showNew ? createAutomation() : saveVersion())}>{busy === "save" || busy === "create" ? "در حال ثبت…" : "ثبت نسخه فعال در D1"}</button><button className="btn btn-ghost" type="button" onClick={() => { setDetail(null); setShowNew(false); setSelectedId(null); }}>بستن</button></div>
+          <div className="actions-inline"><button className="btn" type="button" disabled={Boolean(busy)} onClick={() => void (showNew ? createAutomation() : saveVersion())}>{busy === "save" || busy === "create" ? "در حال ثبت…" : "ثبت نسخه فعال در PostgreSQL"}</button><button className="btn btn-ghost" type="button" onClick={() => { setDetail(null); setShowNew(false); setSelectedId(null); }}>بستن</button></div>
           {detail?.versions.length ? <div className="automation-versions"><h3>تاریخچه نسخه‌ها</h3>{detail.versions.map((version) => <div key={version.id}><span>نسخه {faNumber(version.version)} · {version.status}</span><code dir="ltr">{version.sourceSha256.slice(0, 16)}</code><time>{formatJalaliDateTime(version.createdAt, true)}</time></div>)}</div> : null}
         </section>
       ) : null}

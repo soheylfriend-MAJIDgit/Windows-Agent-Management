@@ -134,7 +134,7 @@ export async function getOverview(options: { force?: boolean } = {}): Promise<Ov
     },
     db: {
       ok: databaseOk,
-      message: databaseOk ? "پایگاه داده D1 آماده است" : "پایگاه داده D1 پاسخ نداد.",
+      message: databaseOk ? "پایگاه داده PostgreSQL آماده است" : "پایگاه داده PostgreSQL پاسخ نداد.",
     },
     token: { configured: tokenConfigured },
   };

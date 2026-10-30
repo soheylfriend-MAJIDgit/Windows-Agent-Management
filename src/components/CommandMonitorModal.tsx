@@ -426,14 +426,14 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
               <h3 id="command-artifacts-title">لینک تصویرهای مرحله‌ای</h3>
               <span>{faNumber(imageArtifacts.length)} مورد</span>
             </div>
-            <p className="command-storage-note">فایل تصویر در Cloudflare R2 و متادیتا در D1 نگهداری می‌شود؛ لینک داخلی تصویر دقیق را باز می‌کند.</p>
+            <p className="command-storage-note">فایل تصویر در Vercel Blob و متادیتا در PostgreSQL نگهداری می‌شود؛ لینک داخلی تصویر دقیق را باز می‌کند.</p>
             <div className="command-artifact-list">
               {!imageArtifacts.length ? <p className="command-empty">هنوز تصویری از Agent دریافت نشده است.</p> : null}
               {imageArtifacts.map((artifact) => {
                 const href=artifactHref(artifact);
                 return <article className="command-artifact" key={artifact.id}>
                   <div><strong>{artifact.name}</strong><span>{artifactStageLabel(artifact.stage, artifact.kind)}</span></div>
-                  {href?<a href={href} target="_blank" rel="noopener noreferrer" title="بازکردن مستقیم تصویر ذخیره‌شده در R2">بازکردن تصویر ↗</a>:<span className="artifact-pending">در انتظار Upload فایل به R2</span>}
+                  {href?<a href={href} target="_blank" rel="noopener noreferrer" title="بازکردن مستقیم تصویر ذخیره‌شده در Blob">بازکردن تصویر ↗</a>:<span className="artifact-pending">در انتظار Upload فایل به Blob</span>}
                 </article>;
               })}
             </div>

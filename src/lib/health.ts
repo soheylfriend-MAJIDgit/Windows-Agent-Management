@@ -1,5 +1,5 @@
 import { getRepoConfig } from "./config";
-import { dbHealthy, envVar, getScreenshotBucket } from "./db";
+import { dbHealthy, envVar } from "./db";
 import { fetchArchive, fetchRateLimit } from "./github";
 import { authEnabled } from "./auth";
 import type { HealthCheck } from "./types";
@@ -16,17 +16,17 @@ export async function runHealthCheck(deep: boolean): Promise<HealthResult> {
   try {
     const ok = await dbHealthy();
     checks.push({
-      name: "پایگاه داده D1",
+      name: "پایگاه داده PostgreSQL",
       ok,
       message: ok ? "اتصال و جدول‌ها آماده است." : "اتصال برقرار نشد.",
-      hint: ok ? undefined : "binding با نام DB در wrangler.jsonc و اجرای اولیه‌ی Worker را بررسی کنید.",
+      hint: ok ? undefined : "DATABASE_URL و اتصال Prisma Postgres/Neon در Vercel را بررسی کنید.",
     });
   } catch (err) {
     checks.push({
-      name: "پایگاه داده D1",
+      name: "پایگاه داده PostgreSQL",
       ok: false,
       message: err instanceof Error ? err.message : "خطای نامشخص",
-      hint: "با اولین deploy، D1 خودکار ساخته می‌شود؛ سپس جدول‌ها در اولین درخواست.",
+      hint: "اتصال PostgreSQL و اجرای prisma migrate deploy را بررسی کنید.",
     });
   }
 
@@ -35,7 +35,7 @@ export async function runHealthCheck(deep: boolean): Promise<HealthResult> {
     name: "توکن گیت‌هاب",
     ok: Boolean(token),
     message: token ? "تنظیم شده (سمت سرور)." : "تنظیم نشده؛ دکمه‌های نوشتن غیرفعال‌اند.",
-    hint: token ? undefined : "wrangler secret put GITHUB_TOKEN — یا در .dev.vars برای اجرای محلی.",
+    hint: token ? undefined : "در Vercel Environment Variables یا فایل .env.local تنظیم کنید.",
   });
   if (deep && token) {
     const rate = await fetchRateLimit(token);
@@ -74,12 +74,13 @@ export async function runHealthCheck(deep: boolean): Promise<HealthResult> {
     });
   }
 
-  try {
-    await getScreenshotBucket();
-    checks.push({ name: "ذخیره اسکرین‌شات‌ها", ok: true, message: "Cloudflare R2 با binding=SCREENSHOTS متصل است." });
-  } catch (error) {
-    checks.push({ name: "ذخیره اسکرین‌شات‌ها", ok: false, message: error instanceof Error ? error.message : "R2 متصل نیست.", hint: "bucket خصوصی windows-agent-management-screenshots و binding=SCREENSHOTS را ایجاد کنید." });
-  }
+  const blobToken = await envVar("BLOB_READ_WRITE_TOKEN");
+  checks.push({
+    name: "ذخیره اسکرین‌شات‌ها",
+    ok: Boolean(blobToken),
+    message: blobToken ? "Vercel Blob متصل و توکن فقط سمت سرور است." : "توکن Vercel Blob تنظیم نشده است.",
+    hint: blobToken ? undefined : "از تب Storage پروژه یک Blob Store بسازید و آن را به پروژه متصل کنید.",
+  });
 
   checks.push({
     name: "ورود مدیریت",
@@ -87,7 +88,7 @@ export async function runHealthCheck(deep: boolean): Promise<HealthResult> {
     message: (await authEnabled())
       ? "کد مدیریت تنظیم شده؛ ورود لازم است."
       : "بدون رمز (باز). برای محیط عمومی، MANAGER_PASSCODE را تنظیم کنید.",
-    hint: (await authEnabled()) ? undefined : "wrangler secret put MANAGER_PASSCODE",
+    hint: (await authEnabled()) ? undefined : "در Vercel متغیرهای MANAGER_PASSCODE و AUTH_SECRET را تنظیم کنید",
   });
 
   return { ok: checks.every((c) => c.ok || c.optional), checks, checkedAt: new Date().toISOString() };

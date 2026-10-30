@@ -156,7 +156,7 @@ export default function AgentKeysPage() {
       <PageHeader
         eyebrow="مرکز فرماندهی"
         title="کلید ایجنت"
-        subtitle="کلیدهای اتصال Windows Agent به Cloudflare را بسازید، تعویض کنید یا فوراً از کار بیندازید."
+        subtitle="کلیدهای اتصال Windows Agent به Vercel را بسازید، تعویض کنید یا فوراً از کار بیندازید."
         actions={
           <div className="row">
             <button
@@ -184,7 +184,7 @@ export default function AgentKeysPage() {
       ) : (
         <>
           <Banner tone="info" icon="lock" title="مقدار کامل کلید فقط یک بار نمایش داده می‌شود">
-            در D1 فقط اثر انگشت SHA-256 کلید ذخیره می‌شود. کلید کامل را بعد از ساخت در
+            در PostgreSQL فقط اثر انگشت SHA-256 کلید ذخیره می‌شود. کلید کامل را بعد از ساخت در
             <span className="mono" dir="ltr"> manager_secret.bin </span>
             ویندوز نگه دارید. هر زمان لازم بود می‌توانید آن را از همین صفحه غیرفعال یا تعویض کنید.
           </Banner>
@@ -310,7 +310,7 @@ export default function AgentKeysPage() {
               <ol className="agent-steps">
                 <li><span>۱</span><div><strong>کلید را بسازید</strong><p>مقدار کامل را همان لحظه کپی کنید.</p></div></li>
                 <li><span>۲</span><div><strong>ذخیره با DPAPI</strong><p>ایجنت مادر آن را در <code>manager_secret.bin</code> قرار می‌دهد.</p></div></li>
-                <li><span>۳</span><div><strong>آزمون اتصال</strong><p><code dir="ltr">GET /api/agent/ping</code> با Bearer Token پاسخ واقعی D1 می‌دهد.</p></div></li>
+                <li><span>۳</span><div><strong>آزمون اتصال</strong><p><code dir="ltr">GET /api/agent/ping</code> با Bearer Token پاسخ واقعی PostgreSQL می‌دهد.</p></div></li>
                 <li><span>۴</span><div><strong>لغو فوری</strong><p>دکمه‌ی «غیرفعال‌کردن» تمام درخواست‌های بعدی آن کلید را رد می‌کند.</p></div></li>
               </ol>
               <div className="agent-endpoint-box">
