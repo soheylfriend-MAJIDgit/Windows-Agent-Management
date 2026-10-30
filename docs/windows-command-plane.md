@@ -100,32 +100,21 @@ POST /commands/{commandId}/events
 11. `result_uploaded`
 12. `completed`
 
-برای هر مرحله‌ی قابل مشاهده screenshot گرفته شود. خطاهای catchable در `job_arena.py` باید با حداکثر سه تلاش به همکار بازخورد دهند؛ متن بازخورد از همکار بخواهد لاگ‌ها/تصویرهای موجود در Drive را بررسی و کد را اصلاح یا بازنویسی کند. لاگ کامل در Arena تایپ نشود.
+برای هر مرحله‌ی قابل مشاهده screenshot گرفته شود. خطاهای catchable در `job_arena.py` باید با حداکثر سه تلاش به همکار بازخورد دهند؛ متن بازخورد از همکار بخواهد لاگ‌ها و تصویرهای موجود در سایت مدیریت را بررسی و کد را اصلاح یا بازنویسی کند. لاگ کامل در Arena تایپ نشود.
 
-## فراداده‌ی تصویر؛ بدون بایت در PostgreSQL
+## Screenshot مستقیم؛ بایت در Blob و متادیتا در PostgreSQL
 
-ابتدا فایل با Google Drive client موجود Windows Agent آپلود شود. سپس فقط metadata ثبت شود:
+Google Drive در مسیر تازه بازنشسته است. برای هر Screenshot واقعی، Agent فایل را مستقیماً به API مدیریت می‌فرستد:
 
 ```http
-POST /commands/{commandId}/artifacts
+POST /screenshots
+Authorization: Bearer <key>
+Content-Type: multipart/form-data
 ```
 
-```json
-{
-  "artifactId": "art_local_stable_id",
-  "kind": "screenshot",
-  "stage": "prompt_submitted",
-  "name": "2026-10-25T10-21-42Z_prompt_submitted.png",
-  "localPath": "screenshots/2026-10-25T10-21-42Z_prompt_submitted.png",
-  "driveFileId": "1Abc...",
-  "driveUrl": "https://drive.google.com/open?id=1Abc...",
-  "mimeType": "image/png",
-  "size": 183204,
-  "occurredAt": "2026-10-25T10:21:42.012Z"
-}
-```
+فیلد `file` از نوع PNG/JPEG/WebP و حداکثر ۴ MiB است. `commandId`, `executionId`, `agentId`, `stage`, `occurredAt`, `width` و `height` همراه آن ارسال شوند. موفقیت فقط HTTP 201 و JSON معتبر است. پاسخ شامل `screenshot.id` و `contentUrl` می‌شود.
 
-`localPath` اختیاری و فقط نسبی/نمایشی است. API هیچ فیلد base64 یا body تصویری ندارد. در شکست موقت Drive می‌توان metadata نام را بدون URL ثبت و بعداً همان `artifactId` را با Drive ID/URL به‌روزرسانی کرد.
+Agent هیچ credential مربوط به PostgreSQL یا Vercel Blob ندارد و با Blob مستقیم صحبت نمی‌کند. endpoint `/commands/{commandId}/artifacts` فقط برای metadata سازگار Artifactهای غیرتصویری باقی می‌ماند؛ `driveFileId` یا `driveUrl` تازه تولید نشود. قرارداد کامل retry، idempotency و آزمون در [`LETTER_TO_WINDOWS_AGENT_MOTHER_VERCEL_FA.md`](./LETTER_TO_WINDOWS_AGENT_MOTHER_VERCEL_FA.md) آمده است.
 
 ## لغو، timeout و توقف فرایند
 
@@ -192,7 +181,7 @@ def terminate_tree(proc):
 - traceback یا الگوی fatal در خروجی
 - عدم پیشرفت
 - timeout
-- شکست متوالی screenshot/Drive (warning؛ اگر ادامه امن نیست fatal)
+- شکست متوالی گرفتن یا Upload اسکرین‌شات (warning؛ اگر ادامه امن نیست fatal)
 - ناسازگاری job path یا command type (reject پیش از اجرا)
 
 stdout/stderr به صورت chunkهای محدود و پاک‌سازی‌شده گزارش شود؛ secret، token، Cookie، Authorization و مسیر کامل کاربر redaction شوند. تاریخ رخداد در سرور ثبت می‌شود و UI آن را شمسی/تهران نشان می‌دهد.

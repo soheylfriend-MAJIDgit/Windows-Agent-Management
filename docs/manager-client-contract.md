@@ -1,6 +1,6 @@
 # قرارداد اتصال `manager_client.py` به ایجنت مدیریت
 
-این سند نامه‌ی اجرایی ایجنت مدیریت به ایجنت مادر است. هدف، وصل‌کردن Windows Agent به Control Plane کلادفلر است؛ بدون خودبه‌روزرسانی و بدون نوشتن فایل کنار `app.py`.
+این سند نامه‌ی اجرایی ایجنت مدیریت به ایجنت مادر است. هدف، وصل‌کردن Windows Agent به Control Plane تولیدی Vercel است؛ بدون خودبه‌روزرسانی و بدون نوشتن فایل کنار `app.py`.
 
 ## مرز مسئولیت چهار ایجنت
 
@@ -37,7 +37,7 @@ except ImportError:
 
 ```json
 {
-  "base_url": "https://windows-agent-management-cloudflare.soheylfriend.workers.dev/api/agent",
+  "base_url": "https://windows-agent-management.vercel.app/api/agent",
   "agent_key": "wam_agent_..."
 }
 ```
@@ -71,13 +71,16 @@ POST /heartbeat
     "run_single": true,
     "take_screenshot": true,
     "open_report": true,
-    "telegram_queue": true
+    "telegram_queue": true,
+    "vercel_blob_screenshot_upload": true,
+    "google_drive_artifacts": false
   },
   "state": {
     "auto_mode": false,
     "busy": null,
     "internet": true,
-    "drive": true
+    "manager_base": "vercel",
+    "drive": false
   },
   "message": "Windows Agent آماده است"
 }
