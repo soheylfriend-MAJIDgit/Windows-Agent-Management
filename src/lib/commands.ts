@@ -391,11 +391,11 @@ function parseScopes(value: string): string[] {
   }
 }
 
-export async function findOnlineCommandAgent(requiredCapability: string | string[] = "command_plane"): Promise<{ keyId: string; agentId: string; agentName: string }> {
+export async function findOnlineCommandAgent(requiredCapability: string | string[] = "command_plane"): Promise<{ keyId: string; agentId: string; agentName: string; agentVersion: string | null; autoMode: boolean; busy: string | null }> {
   const requiredCapabilities = Array.isArray(requiredCapability) ? requiredCapability : [requiredCapability];
   const cutoff = new Date(Date.now() - 90_000).toISOString();
-  const rows = await dbAll<{ agent_key_id: string; agent_id: string; agent_name: string; scopes: string; capabilities: string }>(
-    `SELECT a.agent_key_id, a.id AS agent_id, a.name AS agent_name, a.capabilities, k.scopes
+  const rows = await dbAll<{ agent_key_id: string; agent_id: string; agent_name: string; agent_version: string | null; scopes: string; capabilities: string; state: string }>(
+    `SELECT a.agent_key_id, a.id AS agent_id, a.name AS agent_name, a.version AS agent_version, a.capabilities, a.state, k.scopes
      FROM managed_agents a
      JOIN agent_keys k ON k.id = a.agent_key_id
      WHERE a.last_seen_at >= ? AND k.status = 'active'
@@ -439,7 +439,15 @@ export async function findOnlineCommandAgent(requiredCapability: string | string
       hint: "Windows Agent را اجرا کنید و پس از ثبت Heartbeat دوباره تلاش کنید.",
     });
   }
-  return { keyId: match.agent_key_id, agentId: match.agent_id, agentName: match.agent_name };
+  const runtimeState = parseObject(match.state);
+  return {
+    keyId: match.agent_key_id,
+    agentId: match.agent_id,
+    agentName: match.agent_name,
+    agentVersion: match.agent_version,
+    autoMode: runtimeState.auto_mode === true,
+    busy: typeof runtimeState.busy === "string" && runtimeState.busy.trim() ? runtimeState.busy.trim() : null,
+  };
 }
 
 export async function createManagedCommand(input: {

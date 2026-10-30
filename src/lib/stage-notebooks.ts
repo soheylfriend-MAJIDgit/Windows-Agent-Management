@@ -235,13 +235,20 @@ for stage in STAGES:
 `;
 }
 
-export async function runStageNotebookCell(notebookId: string, cellId: string, runAll = false): Promise<{ commandId: string; version: number }> {
+export async function runStageNotebookCell(notebookId: string, cellId: string, runAll = false, requireManualConfirmation = true): Promise<{ commandId: string; version: number; agent: { name: string; version: string | null; autoMode: boolean; busyAtDispatch: string | null } }> {
   const items = await load();
   const notebook = items.find((item) => item.id === notebookId);
   const cell = notebook?.cells.find((item) => item.id === cellId);
   if (!notebook || !cell) throw new AppError("دفترچه یا مرحله پیدا نشد.", { status: 404, code: "stage_not_found" });
   if (!cell.executable || !cell.content.trim()) throw new AppError("این مرحله اجرایی نیست یا کد ندارد.", { status: 422, code: "cell_not_ready" });
   const target = await findOnlineCommandAgent(["d1_automations"]);
+  if (requireManualConfirmation && target.autoMode) {
+    throw new AppError("Windows Agent در حالت Automatic است؛ برای نمایش پنجره Yes/No ابتدا آن را روی Manual قرار دهید.", {
+      status: 409,
+      code: "stage_manual_confirmation_required",
+      hint: `حالت محلی ${target.agentName}${target.agentVersion ? ` نسخه ${target.agentVersion}` : ""} را به Manual تغییر دهید و دوباره Play را بزنید.`,
+    });
+  }
   const startIndex = notebook.cells.findIndex((item) => item.id === cell.id);
   let chain: StageCell[];
   if (runAll) {
@@ -263,7 +270,11 @@ export async function runStageNotebookCell(notebookId: string, cellId: string, r
   }
   notebook.updatedAt = new Date().toISOString();
   await persist(items);
-  return { commandId: run.commandId, version: saved.version.version };
+  return {
+    commandId: run.commandId,
+    version: saved.version.version,
+    agent: { name: target.agentName, version: target.agentVersion, autoMode: target.autoMode, busyAtDispatch: target.busy },
+  };
 }
 
 export async function pauseStageNotebookCell(notebookId: string, cellId: string): Promise<{ commandId: string }> {
