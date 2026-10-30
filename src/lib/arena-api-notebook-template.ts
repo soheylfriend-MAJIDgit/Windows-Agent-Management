@@ -528,38 +528,52 @@ $all = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [Syst
 $candidates = @()
 foreach ($element in $all) {
     try {
-        if (-not $element.Current.IsEnabled -or $element.Current.IsOffscreen -or -not $element.Current.IsKeyboardFocusable) { continue }
+        if (-not $element.Current.IsEnabled -or $element.Current.IsOffscreen) { continue }
         $rect = $element.Current.BoundingRectangle
-        if ($rect.Width -lt 220 -or $rect.Height -lt 28 -or $rect.Height -gt 420) { continue }
+        if ($rect.Width -lt 18 -or $rect.Height -lt 12 -or $rect.Height -gt 420) { continue }
         if ($rect.Left -lt ($windowRect.Left - 5) -or $rect.Right -gt ($windowRect.Right + 5)) { continue }
         if ($rect.Top -lt ($windowRect.Top + 145) -or $rect.Bottom -gt ($windowRect.Bottom + 5)) { continue }
         if ($rect.Top -lt ($windowRect.Top + ($windowRect.Height * 0.42))) { continue }
         $type = [string]$element.Current.ControlType.ProgrammaticName
         $name = [string]$element.Current.Name
         $id = [string]$element.Current.AutomationId
+        $identity = ($name + " " + $id).ToLowerInvariant()
+        if ($identity -match 'address and search|omnibox|نوار نشانی') { continue }
+
+        # Chrome گاهی contenteditable آرنا را پیش از اولین کلیک keyboard-focusable اعلام نمی‌کند،
+        # اما placeholder قابل مشاهده آن را به‌عنوان Text/Group در UIA منتشر می‌کند.
+        $semanticPlaceholder = $identity -match 'what would you like|what do you want|message arena|send a message|type a message|ask arena|پرامپت|پیام خود|چه کاری'
         $hasEditablePattern = $false
         $pattern = $null
         if ($element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { $hasEditablePattern = -not $pattern.Current.IsReadOnly }
         $textPattern = $null
         $hasTextPattern = $element.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$textPattern)
-        if ($type -notmatch 'ControlType\.(Edit|Document)$' -and -not $hasEditablePattern -and -not $hasTextPattern) { continue }
-        $identity = ($name + " " + $id).ToLowerInvariant()
-        if ($identity -match 'address and search|omnibox|نوار نشانی') { continue }
-        $score = 0.0
+        $editableShape = $rect.Width -ge 180 -and $rect.Height -ge 24
+        $editableRole = $type -match 'ControlType\.(Edit|Document)$' -or $hasEditablePattern -or ($hasTextPattern -and $element.Current.IsKeyboardFocusable)
+        if (-not $semanticPlaceholder -and -not ($editableShape -and $editableRole)) { continue }
+
+        $source = if ($semanticPlaceholder) { "semantic-placeholder" } else { "editable-role" }
+        $score = if ($semanticPlaceholder) { 2200.0 } else { 0.0 }
+        if ($element.Current.IsKeyboardFocusable) { $score += 180 }
         if ($type -match 'ControlType\.Edit$') { $score += 500 }
         if ($hasEditablePattern) { $score += 220 }
-        if ($identity -match 'what would you like|message|prompt|ask|chat|پرامپت|پیام') { $score += 450 }
         $score += 300 * (($rect.Bottom - $windowRect.Top) / [Math]::Max(1, $windowRect.Height))
         $score += [Math]::Min(180, $rect.Width / 8)
-        $candidates += [pscustomobject]@{ Element=$element; Rect=$rect; Score=$score; Type=$type; Name=$name; Id=$id }
+        $candidates += [pscustomobject]@{ Element=$element; Rect=$rect; Score=$score; Type=$type; Name=$name; Id=$id; Source=$source }
     } catch {}
 }
 $candidates = @($candidates | Sort-Object Score -Descending)
 Write-Output ("ARENA_STAGE5_UIA_CANDIDATES=" + $candidates.Count)
-if ($candidates.Count -eq 0) { throw "No safe editable Arena composer candidate was found; paste was not attempted" }
+for ($candidateIndex = 0; $candidateIndex -lt [Math]::Min(8, $candidates.Count); $candidateIndex++) {
+    $candidate = $candidates[$candidateIndex]
+    $candidateName = ([string]$candidate.Name -replace '[\r\n]+', ' ')
+    if ($candidateName.Length -gt 120) { $candidateName = $candidateName.Substring(0, 120) }
+    Write-Output ("ARENA_STAGE5_CANDIDATE=" + $candidateIndex + ";source=" + $candidate.Source + ";type=" + $candidate.Type + ";rect=" + [int]$candidate.Rect.Left + "," + [int]$candidate.Rect.Top + "," + [int]$candidate.Rect.Width + "," + [int]$candidate.Rect.Height + ";name=" + $candidateName)
+}
+if ($candidates.Count -eq 0) { throw "No safe Arena composer or composer placeholder was exposed by Chrome UI Automation; paste was not attempted" }
 $chosen = $candidates[0]
-if ($candidates.Count -gt 1 -and [Math]::Abs($chosen.Score - $candidates[1].Score) -lt 12) {
-    throw "Composer detection was ambiguous; paste was not attempted"
+if ($chosen.Source -eq "editable-role" -and $candidates.Count -gt 1 -and $candidates[1].Source -eq "editable-role" -and [Math]::Abs($chosen.Score - $candidates[1].Score) -lt 12) {
+    throw "Editable composer detection was ambiguous; paste was not attempted"
 }
 $composer = $chosen.Element
 $composerRect = $chosen.Rect
