@@ -88,7 +88,8 @@ import tkinter as tk
 from ctypes import wintypes
 from tkinter import messagebox, ttk
 
-write_state(credentials="running", message="لطفاً نشانی API و کلید دسترسی را در پنجره Python وارد کنید.")
+API_URL = "https://salitest.ir"
+write_state(credentials="running", message="لطفاً فقط API Key سالی‌تست را در پنجره Python وارد کنید.")
 
 class DATA_BLOB(ctypes.Structure):
     _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
@@ -114,7 +115,7 @@ window.configure(bg="#0f172a")
 window.attributes("-topmost", True)
 
 tk.Label(window, text="دسترسی ماشینی · ایجنت اتوماسیون", bg="#0f172a", fg="#f8fafc", font=("Segoe UI", 17, "bold"), anchor="e").pack(fill="x", padx=28, pady=(24, 6))
-tk.Label(window, text="کلید فقط با Windows DPAPI و برای همین حساب ویندوز رمز می‌شود؛ مقدار آن در لاگ چاپ نخواهد شد.", bg="#0f172a", fg="#94a3b8", font=("Segoe UI", 10), anchor="e", wraplength=630).pack(fill="x", padx=28, pady=(0, 18))
+tk.Label(window, text="دامنه ثابت: https://salitest.ir  ·  کلید فقط با Windows DPAPI و برای همین حساب ویندوز رمز می‌شود.", bg="#0f172a", fg="#94a3b8", font=("Segoe UI", 10), anchor="e", wraplength=630).pack(fill="x", padx=28, pady=(0, 18))
 form = tk.Frame(window, bg="#172033", padx=20, pady=18)
 form.pack(fill="both", expand=True, padx=28, pady=(0, 20))
 
@@ -124,9 +125,7 @@ def field(label, secret=False):
     entry.pack(fill="x", ipady=9, pady=(0, 10))
     return entry
 
-url_entry = field("API URL دریافت متغیرهای پرامپت بعدی")
-url_entry.insert(0, os.environ.get("ARENA_NEXT_PROMPT_API_URL", ""))
-key_entry = field("API Key")
+key_entry = field("API Key سالی‌تست")
 auth_var = tk.StringVar(value="bearer")
 auth_row = tk.Frame(form, bg="#172033")
 auth_row.pack(fill="x", pady=4)
@@ -134,15 +133,11 @@ tk.Radiobutton(auth_row, text="Authorization: Bearer", variable=auth_var, value=
 tk.Radiobutton(auth_row, text="X-API-Key", variable=auth_var, value="x-api-key", bg="#172033", fg="#cbd5e1", selectcolor="#0f172a", activebackground="#172033", activeforeground="white").pack(side="right", padx=8)
 
 def submit():
-    url = url_entry.get().strip()
     key = key_entry.get().strip()
-    if not url.lower().startswith("https://"):
-        messagebox.showerror("ورودی نامعتبر", "نشانی API باید با https:// شروع شود.", parent=window)
-        return
     if len(key) < 12:
         messagebox.showerror("ورودی نامعتبر", "API Key واردشده بیش از حد کوتاه است.", parent=window)
         return
-    result.update(url=url, key=key, auth=auth_var.get())
+    result.update(key=key, auth=auth_var.get())
     key_entry.delete(0, "end")
     window.destroy()
 
@@ -156,7 +151,7 @@ if not result:
     write_state(credentials="failed", message="دریافت API Key توسط کاربر لغو شد.")
     raise SystemExit("API credential entry cancelled")
 credentials_path = os.path.join(ROOT, "credentials.json")
-payload = {"url": result["url"], "auth": result["auth"], "protectedKey": protect(result["key"]), "windowsUser": getpass.getuser()}
+payload = {"url": API_URL, "auth": result["auth"], "protectedKey": protect(result["key"]), "windowsUser": getpass.getuser()}
 with open(credentials_path + ".tmp", "w", encoding="utf-8") as handle:
     json.dump(payload, handle, ensure_ascii=False, indent=2)
 os.replace(credentials_path + ".tmp", credentials_path)
@@ -458,7 +453,7 @@ export interface ArenaApiNotebookCellTemplate {
 export function arenaApiNotebookCells(): ArenaApiNotebookCellTemplate[] {
   return [
     { id: "arena-status-dashboard", title: "۱. نمایش رابط وضعیت منظم", language: "python", content: DASHBOARD_CODE, notes: "یک پنجره پایش مستقل باز می‌کند و وضعیت هر شش مرحله را از فایل state محلی نمایش می‌دهد.", transition: "on_success", executionMode: "background", executable: true },
-    { id: "arena-api-credentials", title: "۲. دریافت امن API Key از Python", language: "python", content: CREDENTIALS_CODE, notes: "API URL و Key در خود دسکتاپ گرفته می‌شوند. Key با Windows DPAPI رمز می‌شود و در stdout یا PostgreSQL قرار نمی‌گیرد.", transition: "on_success", executionMode: "blocking", executable: true },
+    { id: "arena-api-credentials", title: "۲. دریافت امن API Key از Python", language: "python", content: CREDENTIALS_CODE, notes: "دامنه https://salitest.ir ثابت است و فقط Key در خود دسکتاپ گرفته می‌شود. Key با Windows DPAPI رمز می‌شود و در stdout یا PostgreSQL قرار نمی‌گیرد.", transition: "on_success", executionMode: "blocking", executable: true },
     { id: "arena-fetch-next-prompt", title: "۳. دریافت پرامپت بعدی از API", language: "python", content: FETCH_PROMPT_CODE, notes: "فقط statusهای continue/human/stop و nextPrompt حداکثر ۶۰۰۰ نویسه پذیرفته می‌شوند. Prompt تکراری ارسال نمی‌شود.", transition: "on_success", executionMode: "blocking", executable: true },
     { id: "arena-open-and-stabilize", title: "۴. بازکردن Chrome و انتظار برای پایداری", language: "python", content: BROWSER_CODE, notes: "Chrome با پروفایل اختصاصی پایدار باز می‌شود؛ سه بررسی متوالی CDP باید نبود spinner/loading و وجود composer را تأیید کنند.", transition: "on_success", executionMode: "blocking", executable: true },
     { id: "arena-paste-once", title: "۵. Paste یک‌باره از Clipboard", language: "python", content: PASTE_CODE, notes: "پس از Focus تأییدشده، Ctrl+V دقیقاً یک بار زده می‌شود. عدم تطبیق متن باعث توقف می‌شود، نه Paste دوباره.", transition: "on_success", executionMode: "blocking", executable: true },

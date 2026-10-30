@@ -7,6 +7,7 @@ import { arenaApiNotebookCells } from "./arena-api-notebook-template";
 const STORE_KEY = "stage-notebooks.v1";
 const ATTEMPT_STORE_KEY = "stage-notebook-attempts.v1";
 const CONTROLLED_TEMPLATE_MARKER = "stage-notebook-controlled-template.v1";
+const ARENA_API_TEMPLATE_MARKER = "stage-notebook-arena-api-template.v2";
 const CONTROLLED_NOTEBOOK_ID = "controlled-windows-ui-diagnostic-v1";
 const ARENA_API_NOTEBOOK_ID = "arena-api-prompt-submit-v1";
 const MAX_NOTEBOOKS = 30;
@@ -164,19 +165,32 @@ async function ensureControlledNotebook(): Promise<StageNotebook[]> {
     });
     changed = true;
   }
-  if (!items.some((item) => item.id === ARENA_API_NOTEBOOK_ID)) {
-    items.unshift({
-      id: ARENA_API_NOTEBOOK_ID,
-      title: "ارسال پرامپت بعدی API به Arena",
-      goal: "دریافت امن API Key در دسکتاپ، خواندن nextPrompt، بازکردن لینک مشخص Arena در Chrome، انتظار برای توقف loading، Paste یک‌باره و Enter ساده برای Send/Submit.",
-      chatbotGuide: "این دفترچه ایمنی سخت‌گیرانه دارد: API Key هرگز داخل کد یا لاگ قرار نگیرد؛ Prompt هنگام جست‌وجوی composer تکرار نشود؛ Ctrl+V فقط یک بار و Enter فقط بدون Shift/Ctrl/Alt اجرا شود. وضعیت‌های human و stop باید زنجیره را پیش از مرورگر متوقف کنند.",
-      createdAt: now,
-      updatedAt: now,
-      cells: arenaApiNotebookCells().map((cell) => ({ ...cell, commandId: null, createdAt: now, updatedAt: now })),
+  const arenaMarker = await dbFirst<{ value: string }>("SELECT value FROM settings WHERE key = ?", [ARENA_API_TEMPLATE_MARKER]);
+  if (arenaMarker?.value !== "seeded") {
+    const title = "ارسال پرامپت بعدی API به Arena";
+    const goal = "دریافت امن API Key سالی‌تست در دسکتاپ، خواندن nextPrompt از دامنه ثابت https://salitest.ir، بازکردن لینک مشخص Arena در Chrome، انتظار برای توقف loading، Paste یک‌باره و Enter ساده برای Send/Submit.";
+    const chatbotGuide = "این دفترچه ایمنی سخت‌گیرانه دارد: API Key هرگز داخل کد یا لاگ قرار نگیرد؛ Prompt هنگام جست‌وجوی composer تکرار نشود؛ Ctrl+V فقط یک بار و Enter فقط بدون Shift/Ctrl/Alt اجرا شود. وضعیت‌های human و stop باید زنجیره را پیش از مرورگر متوقف کنند.";
+    const existing = items.find((item) => item.id === ARENA_API_NOTEBOOK_ID);
+    const previousCells = new Map(existing?.cells.map((cell) => [cell.id, cell]) ?? []);
+    const cells = arenaApiNotebookCells().map((cell) => {
+      const previous = previousCells.get(cell.id);
+      return { ...cell, commandId: previous?.commandId ?? null, createdAt: previous?.createdAt ?? now, updatedAt: now };
     });
+    if (existing) {
+      Object.assign(existing, { title, goal, chatbotGuide, cells, updatedAt: now });
+    } else {
+      items.unshift({ id: ARENA_API_NOTEBOOK_ID, title, goal, chatbotGuide, cells, createdAt: now, updatedAt: now });
+    }
     changed = true;
   }
   if (changed) await persist(items);
+  if (arenaMarker?.value !== "seeded") {
+    await dbRun(
+      `INSERT INTO settings (key, value, updated_at) VALUES (?, 'seeded', ?)
+       ON CONFLICT(key) DO UPDATE SET value = 'seeded', updated_at = excluded.updated_at`,
+      [ARENA_API_TEMPLATE_MARKER, now],
+    );
+  }
   const marker = await dbFirst<{ value: string }>("SELECT value FROM settings WHERE key = ?", [CONTROLLED_TEMPLATE_MARKER]);
   if (marker?.value !== "seeded") {
     await dbRun(
