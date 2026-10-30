@@ -7,7 +7,7 @@ import { arenaApiNotebookCells } from "./arena-api-notebook-template";
 const STORE_KEY = "stage-notebooks.v1";
 const ATTEMPT_STORE_KEY = "stage-notebook-attempts.v1";
 const CONTROLLED_TEMPLATE_MARKER = "stage-notebook-controlled-template.v1";
-const ARENA_API_TEMPLATE_MARKER = "stage-notebook-arena-api-template.v10";
+const ARENA_API_TEMPLATE_MARKER = "stage-notebook-arena-api-template.v11";
 const CONTROLLED_NOTEBOOK_ID = "controlled-windows-ui-diagnostic-v1";
 const ARENA_API_NOTEBOOK_ID = "arena-api-prompt-submit-v1";
 const MAX_NOTEBOOKS = 30;

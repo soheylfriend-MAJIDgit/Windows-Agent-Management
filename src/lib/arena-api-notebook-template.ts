@@ -590,6 +590,31 @@ $focusSafe = (-not (Is-Omnibox $focused $windowRect.Top)) -and (Focus-Belongs-To
 Write-Output ("ARENA_STAGE5_FOCUS_SAFE_BEFORE_PASTE=" + [bool]$focusSafe)
 if (-not $focusSafe) { throw "The focused element could not be proven to belong to the Arena composer; paste was not attempted" }
 
+# بازیابی امن پس از خطای گزارش‌گیری: پیش از هر Paste بررسی می‌شود آیا متن همین حالا
+# کامل داخل composer است. در این حالت مرحله بدون Ctrl+V دوم موفق اعلام می‌شود.
+$prompt = [IO.File]::ReadAllText($env:PROMPT_FILE)
+$expectedNormalized = $prompt -replace '\r', ''
+$preflightSentinel = "__ARENA_STAGE5_PREFLIGHT_$([Guid]::NewGuid().ToString('N'))__"
+Set-Clipboard -Value $preflightSentinel
+if (-not [Stage5Native]::Chord(0x11, 0x41)) { throw "Safe pre-paste Select All failed; paste was not attempted" }
+Start-Sleep -Milliseconds 120
+if (-not [Stage5Native]::Chord(0x11, 0x43)) { throw "Safe pre-paste Copy failed; paste was not attempted" }
+Start-Sleep -Milliseconds 350
+$currentCopied = [string](Get-Clipboard -Raw)
+$currentNormalized = $currentCopied -replace '\r', ''
+[void][Stage5Native]::Press(0x23)
+if ($currentNormalized -eq $expectedNormalized) {
+    Write-Output "ARENA_STAGE5_ALREADY_PRESENT_VERIFIED"
+    Save-Shot $env:SHOT_PATH
+    [IO.File]::WriteAllText($env:RESULT_PATH, "verified-existing", [Text.UTF8Encoding]::new($false))
+    Write-Output "ARENA_STAGE5_PASTE_VERIFIED"
+    exit 0
+}
+if ($currentCopied -ne $preflightSentinel -and $currentNormalized.Length -gt 0) {
+    throw "The verified composer already contains different text; paste was not attempted"
+}
+Write-Output "ARENA_STAGE5_COMPOSER_EMPTY_VERIFIED"
+
 Get-Content -Raw -LiteralPath $env:PROMPT_FILE | Set-Clipboard
 Start-Sleep -Milliseconds 250
 if (-not [Stage5Native]::Chord(0x11, 0x56)) { throw "The single native Ctrl+V operation failed" }
@@ -600,7 +625,6 @@ $focusSafeAfter = (-not (Is-Omnibox $focusedAfter $windowRect.Top)) -and (Focus-
 Write-Output ("ARENA_STAGE5_FOCUS_SAFE_AFTER_PASTE=" + [bool]$focusSafeAfter)
 if (-not $focusSafeAfter) { throw "Focus left the verified Arena composer after the single paste; paste was not repeated" }
 
-$prompt = [IO.File]::ReadAllText($env:PROMPT_FILE)
 $promptCanonical = Canonical $prompt
 $uiaCanonical = Canonical ((Element-Text $focusedAfter) + " " + (Element-Text $composer))
 $probeLength = [Math]::Min(32, $promptCanonical.Length)
@@ -627,6 +651,7 @@ Write-Output ("ARENA_STAGE5_EXACT_COPY=" + [bool]$exactCopy)
 if (-not $exactCopy) { throw "The composer selection did not exactly match the prompt after the single paste; paste was not repeated" }
 [void][Stage5Native]::Press(0x23)
 Save-Shot $env:SHOT_PATH
+[IO.File]::WriteAllText($env:RESULT_PATH, "verified-pasted", [Text.UTF8Encoding]::new($false))
 Write-Output "ARENA_STAGE5_PASTE_VERIFIED"
 '''
 
@@ -645,18 +670,32 @@ try:
     with open(script_path, "w", encoding="utf-8-sig", newline="\n") as handle:
         handle.write(UIA_PASTE_SCRIPT)
     shot_path = os.path.join(ROOT, "stage5-after-paste.png")
+    result_path = os.path.join(ROOT, "stage5-result.txt")
+    try:
+        os.remove(result_path)
+    except FileNotFoundError:
+        pass
     env = os.environ.copy()
-    env.update({"ARENA_HWND": str(hwnd), "PROMPT_FILE": prompt_path, "SHOT_PATH": shot_path})
+    env.update({"ARENA_HWND": str(hwnd), "PROMPT_FILE": prompt_path, "SHOT_PATH": shot_path, "RESULT_PATH": result_path})
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File", script_path], env=env, text=True, capture_output=True, timeout=60, creationflags=flags)
-    diagnostics = " | ".join(line.strip() for line in result.stdout.splitlines() if line.strip())[-3000:]
-    if result.returncode or "ARENA_STAGE5_PASTE_VERIFIED" not in result.stdout:
-        error = " | ".join(part for part in (diagnostics, result.stderr.strip()) if part) or "UI Automation paste verification failed"
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+    diagnostics = " | ".join(line.strip() for line in stdout.splitlines() if line.strip())[-3000:]
+    try:
+        with open(result_path, "r", encoding="utf-8") as handle:
+            result_marker = handle.read().strip()
+    except OSError:
+        result_marker = ""
+    if result.returncode or result_marker not in ("verified-pasted", "verified-existing"):
+        error = " | ".join(part for part in (diagnostics, stderr.strip()) if part) or "UI Automation paste verification failed"
         raise RuntimeError(error[-3000:])
     if not os.path.isfile(shot_path):
         raise RuntimeError("Paste تأیید شد اما تصویر مرحله پس از Paste ذخیره نشد")
-    write_state(paste="done", pasteVerified=True, pasteMethod="uia-composer-single-ctrl-v", pasteScreenshot=shot_path, browserWindowTitle=title, message="composer واقعی Arena با UI Automation پیدا و فوکوس آن پیش و پس از Ctrl+V تأیید شد؛ Paste دقیقاً یک بار انجام و متن با Copy مستقل تطبیق داده شد. Enter ارسال نشد.")
-    print("ARENA_NATIVE_PROMPT_PASTED_ONCE: sha256=" + expected_hash + " chars=" + str(len(prompt)), flush=True)
+    recovered = result_marker == "verified-existing"
+    success_message = "متن همین Prompt از اجرای قبلی از قبل کامل داخل composer بود؛ بدون Ctrl+V دوباره تطبیق و تأیید شد. Enter ارسال نشد." if recovered else "composer واقعی Arena با UI Automation پیدا و فوکوس آن پیش و پس از Ctrl+V تأیید شد؛ Paste دقیقاً یک بار انجام و متن با Copy مستقل تطبیق داده شد. Enter ارسال نشد."
+    write_state(paste="done", pasteVerified=True, pasteMethod="uia-recovered-existing-prompt" if recovered else "uia-composer-single-ctrl-v", pasteScreenshot=shot_path, browserWindowTitle=title, message=success_message)
+    print(("ARENA_EXISTING_PROMPT_RECOVERED" if recovered else "ARENA_NATIVE_PROMPT_PASTED_ONCE") + ": sha256=" + expected_hash + " chars=" + str(len(prompt)), flush=True)
     print("ARENA_STAGE5_DIAGNOSTICS: " + diagnostics, flush=True)
 except Exception as exc:
     write_state(paste="failed", pasteVerified=False, message="مرحله Paste امن متوقف شد (Paste هرگز تکرار نشد): " + str(exc))
