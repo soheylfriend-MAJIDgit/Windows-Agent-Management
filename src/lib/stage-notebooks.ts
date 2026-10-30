@@ -85,6 +85,21 @@ export async function updateStageNotebook(id: string, input: unknown): Promise<S
     const now = new Date().toISOString();
     notebook.cells.push({ id: crypto.randomUUID(), title: `مرحله ${notebook.cells.length + 1}`, language: "python", content: "", notes: "", transition: "manual", executable: true, commandId: null, createdAt: now, updatedAt: now });
   }
+  if (typeof body.deleteCell === "string") {
+    const index = notebook.cells.findIndex((item) => item.id === body.deleteCell);
+    if (index < 0) throw new AppError("مرحله پیدا نشد.", { status: 404, code: "cell_not_found" });
+    notebook.cells.splice(index, 1);
+  }
+  if (body.moveCell && typeof body.moveCell === "object") {
+    const move = body.moveCell as Record<string, unknown>;
+    const index = notebook.cells.findIndex((item) => item.id === move.id);
+    const target = move.direction === "up" ? index - 1 : move.direction === "down" ? index + 1 : index;
+    if (index < 0 || target < 0 || target >= notebook.cells.length) {
+      throw new AppError("جابجایی مرحله در این جهت ممکن نیست.", { status: 422, code: "cell_move_invalid" });
+    }
+    const [cell] = notebook.cells.splice(index, 1);
+    notebook.cells.splice(target, 0, cell);
+  }
   if (body.cell && typeof body.cell === "object") {
     const cellInput = body.cell as Record<string, unknown>;
     const cell = notebook.cells.find((item) => item.id === cellInput.id);

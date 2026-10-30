@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CommandMonitorModal } from "@/components/CommandMonitorModal";
+import { StageNotebooksWorkspace } from "@/components/StageNotebooksWorkspace";
 import { Icon } from "@/components/icons";
 import { Banner, ErrorBanner, LoadingState, PageHeader } from "@/components/ui";
 import { useToast } from "@/components/ToastProvider";
@@ -25,7 +25,6 @@ interface ServiceDefinition {
   summary: string;
   category: string;
   caution: string;
-  href?: string;
   fields: ServiceField[];
 }
 
@@ -263,26 +262,19 @@ export default function ServicesPage() {
             </div>
             <div className="service-input-count">
               <Icon name="settings" size={14} />
-              {service.href ? "فضای کاری مستقل و ذخیره‌شونده" : `${service.fields.length.toLocaleString("fa-IR")} ورودی تعاملی`}
+              {service.slug === "stage-notebook" ? "مدیریت چند دفترچه در مودال" : `${service.fields.length.toLocaleString("fa-IR")} ورودی تعاملی`}
             </div>
-            {service.href ? (
-              <Link className="btn btn-primary" href={service.href}>
-                <Icon name="code" size={14} />
-                باز کردن دفترچه
-              </Link>
-            ) : (
-              <button type="button" className="btn btn-primary" onClick={() => openService(service)}>
-                <Icon name="play" size={14} />
-                تنظیم و اجرا
-              </button>
-            )}
+            <button type="button" className="btn btn-primary" onClick={() => openService(service)}>
+              <Icon name={service.slug === "stage-notebook" ? "code" : "play"} size={14} />
+              {service.slug === "stage-notebook" ? "باز کردن دفترچه‌ها" : "تنظیم و اجرا"}
+            </button>
           </article>
         ))}
       </div>
 
       {selected ? (
         <div className="command-modal-backdrop" role="presentation">
-          <section className="command-modal service-config-modal" role="dialog" aria-modal="true" aria-labelledby="service-config-title">
+          <section className={`command-modal service-config-modal ${selected.slug === "stage-notebook" ? "stage-service-modal" : ""}`} role="dialog" aria-modal="true" aria-labelledby="service-config-title">
             <header className="command-modal-head">
               <div>
                 <span className="eyebrow">تنظیم سرویس</span>
@@ -292,6 +284,16 @@ export default function ServicesPage() {
               <button className="command-close" type="button" onClick={() => !submitting && setSelected(null)} aria-label="بستن">×</button>
             </header>
 
+            {selected.slug === "stage-notebook" ? (
+              <>
+                <div className="service-modal-body stage-service-body">
+                  <StageNotebooksWorkspace />
+                </div>
+                <footer className="command-modal-actions">
+                  <button type="button" className="button primary" onClick={() => setSelected(null)}>بستن دفترچه‌ها</button>
+                </footer>
+              </>
+            ) : (
             <form onSubmit={runService}>
               <div className="service-modal-body">
                 <Banner tone="warn" title="پیش از اجرا">{selected.caution}</Banner>
@@ -544,6 +546,7 @@ export default function ServicesPage() {
                 </button>
               </footer>
             </form>
+            )}
           </section>
         </div>
       ) : null}

@@ -11,7 +11,6 @@ export interface ServiceDefinition {
   summary: string;
   category: string;
   caution: string;
-  href?: string;
   fields: Array<{
     name: string;
     label: string;
@@ -112,7 +111,6 @@ export const SERVICE_CATALOG: ServiceDefinition[] = [
     summary: "مراحل چندزبانه را ذخیره، با چت‌بات واقعی تکمیل و در صورت نیاز روی Windows Agent اجرا می‌کند.",
     category: "یادگیری و ساخت",
     caution: "این سرویس API مدل نمی‌خواهد؛ بسته آماده را در چت‌بات دلخواه می‌فرستید و پاسخ مرحله بعد را در دفترچه ذخیره می‌کنید.",
-    href: "/stage-notebooks",
     fields: [],
   },
   {
@@ -797,11 +795,10 @@ export async function runService(slugValue: unknown, inputValue: unknown): Promi
   if (typeof slugValue !== "string") throw new AppError("شناسه سرویس معتبر نیست.", { status: 400, code: "service_slug_invalid" });
   const service = SERVICE_CATALOG.find((item) => item.slug === slugValue);
   if (!service) throw new AppError("سرویس پیدا نشد.", { status: 404, code: "service_not_found" });
-  if (service.href) {
-    throw new AppError("این سرویس در فضای کاری اختصاصی خودش باز می‌شود.", {
+  if (service.slug === "stage-notebook") {
+    throw new AppError("دفترچه هدایت مرحله‌ای داخل مودال اختصاصی سرویس مدیریت می‌شود.", {
       status: 409,
-      code: "service_has_dedicated_workspace",
-      hint: service.href,
+      code: "service_has_dedicated_modal",
     });
   }
   const input = object(inputValue);
