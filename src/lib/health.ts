@@ -75,11 +75,13 @@ export async function runHealthCheck(deep: boolean): Promise<HealthResult> {
   }
 
   const blobToken = await envVar("BLOB_READ_WRITE_TOKEN");
+  const blobStoreId = await envVar("BLOB_STORE_ID");
+  const blobReady = Boolean(blobStoreId || blobToken);
   checks.push({
     name: "ذخیره اسکرین‌شات‌ها",
-    ok: Boolean(blobToken),
-    message: blobToken ? "Vercel Blob متصل و توکن فقط سمت سرور است." : "توکن Vercel Blob تنظیم نشده است.",
-    hint: blobToken ? undefined : "از تب Storage پروژه یک Blob Store بسازید و آن را به پروژه متصل کنید.",
+    ok: blobReady,
+    message: blobReady ? "Vercel Blob عمومی با دسترسی OIDC سمت سرور متصل است." : "Vercel Blob به پروژه متصل نیست.",
+    hint: blobReady ? undefined : "از تب Storage پروژه یک Blob Store بسازید و آن را به پروژه متصل کنید.",
   });
 
   checks.push({
@@ -87,8 +89,7 @@ export async function runHealthCheck(deep: boolean): Promise<HealthResult> {
     ok: true,
     message: (await authEnabled())
       ? "کد مدیریت تنظیم شده؛ ورود لازم است."
-      : "بدون رمز (باز). برای محیط عمومی، MANAGER_PASSCODE را تنظیم کنید.",
-    hint: (await authEnabled()) ? undefined : "در Vercel متغیرهای MANAGER_PASSCODE و AUTH_SECRET را تنظیم کنید",
+      : "ورود مدیریتی طبق تنظیم فعلی غیرفعال است و سایت مستقیم باز می‌شود.",
   });
 
   return { ok: checks.every((c) => c.ok || c.optional), checks, checkedAt: new Date().toISOString() };

@@ -18,18 +18,18 @@
 1. در همان Project وارد **Storage** شوید.
 2. **Create → Blob** را انتخاب کنید.
 3. Store را بسازید و به همین Project متصل کنید.
-4. وجود `BLOB_READ_WRITE_TOKEN` در Environment Variables را بررسی کنید.
-5. Token فقط server-side است؛ آن را به Windows Agent یا متغیر `NEXT_PUBLIC_*` ندهید.
+4. وجود `BLOB_STORE_ID` را در Environment Variables بررسی کنید.
+5. Vercel در زمان اجرا OIDC token کوتاه‌عمر فراهم می‌کند؛ Secret ثابتی داخل Windows Agent قرار نمی‌گیرد.
 
-Objectها با نام تصادفی ذخیره می‌شوند. برنامه URL خام را در فهرست عمومی نمایش نمی‌دهد؛ مشاهده مدیریتی از route احراز هویت‌شده و اشتراک اختیاری از token قابل لغو انجام می‌شود.
+Store عمومی است و Objectها با نام تصادفی ذخیره می‌شوند. برنامه URL خام را در فهرست نمایش نمی‌دهد، ولی هرکس URL مستقیم Blob را داشته باشد می‌تواند فایل را ببیند. لینک اختیاری برنامه همچنان تصادفی و قابل لغو است.
 
 ## ۳. متغیرهای امنیتی
 
 در **Settings → Environment Variables** برای Production و Preview ثبت کنید:
 
-- `MANAGER_PASSCODE`: کد ورود قوی
-- `AUTH_SECRET`: رشته تصادفی حداقل ۳۲ بایت
-- `GITHUB_TOKEN`: فقط اگر نوشتن در مخزن لازم است
+- `MANAGER_PASSCODE`: اختیاری؛ اگر نمی‌خواهید صفحه ورود داشته باشید تعریف نکنید.
+- `AUTH_SECRET`: فقط وقتی Passcode فعال است.
+- `GITHUB_TOKEN`: فقط اگر نوشتن در مخزن لازم است.
 
 برای Local Development همین کلیدها در `.env.local` قرار می‌گیرند؛ این فایل در Git ذخیره نمی‌شود.
 
@@ -59,5 +59,5 @@ Migration پایه همه جدول‌های برنامه را در PostgreSQL م
 
 - `database_url_missing`: Database به Project/Environment جاری متصل نیست.
 - `db_schema_failed`: URL، SSL، مجوز ساخت جدول یا migration را بررسی کنید.
-- `BLOB_READ_WRITE_TOKEN` missing: Blob Store به Project متصل نیست یا Redeploy نشده است.
+- `BLOB_STORE_ID` missing: Blob Store به Project متصل نیست یا Redeploy نشده است.
 - HTTP 413: تصویر باید حداکثر ۴ MiB باشد.

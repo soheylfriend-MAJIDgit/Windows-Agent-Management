@@ -314,7 +314,7 @@ export default function SettingsPage() {
 
             <section className="card">
               <div className="card-head"><h2 className="row" style={{ gap: 7 }}><Icon name="image" size={16} />ذخیره تصاویر Vercel</h2><StatusChip status="success" label="Blob + PostgreSQL" /></div>
-              <ol className="steps"><li><strong>Blob Store</strong>در تب Storage پروژه، Vercel Blob بسازید و به همین Project متصل کنید.</li><li><strong>متغیر سرور</strong>وجود <span className="mono">BLOB_READ_WRITE_TOKEN</span> را بررسی و Redeploy کنید.</li><li><strong>Agent API</strong>ایجنت فقط <span className="mono">/api/agent/screenshots</span> را با Agent Key صدا می‌زند؛ Blob Token هرگز داخل Agent قرار نمی‌گیرد.</li></ol>
+              <ol className="steps"><li><strong>Blob Store</strong>در تب Storage پروژه، Vercel Blob بسازید و به همین Project متصل کنید.</li><li><strong>متغیر سرور</strong>وجود <span className="mono">BLOB_STORE_ID</span> را بررسی و Redeploy کنید. OIDC توکن موقت را در Vercel فراهم می‌کند.</li><li><strong>Agent API</strong>ایجنت فقط <span className="mono">/api/agent/screenshots</span> را با Agent Key صدا می‌زند؛ Blob Token هرگز داخل Agent قرار نمی‌گیرد.</li></ol>
               <p className="feedback">Google Drive بازنشسته شده است؛ تصویر در Blob و متادیتا و گزارش در PostgreSQL ذخیره می‌شود.</p>
             </section>
 
@@ -344,12 +344,7 @@ export default function SettingsPage() {
               <div className="callout" style={{ marginTop: 10 }}>
                 <strong>PostgreSQL با Prisma مدیریت می‌شود.</strong> Store را یک‌بار در Vercel متصل کنید؛ <span className="mono">prisma migrate deploy</span> ساختار را هنگام Build اعمال می‌کند.
               </div>
-              {!env?.passcode ? (
-                <p className="form-error" style={{ marginTop: 8 }}>
-                  <Icon name="alert" size={13} />
-                  کد مدیریت تنظیم نشده؛ آدرس عمومی سایت بدون رمز باز است.
-                </p>
-              ) : null}
+
             </section>
           </div>
 

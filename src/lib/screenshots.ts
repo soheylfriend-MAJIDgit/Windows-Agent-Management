@@ -1,7 +1,7 @@
 import { AppError } from "./errors";
 import type { AuthenticatedAgentKey } from "./agent-keys";
 import { dbAll, dbBatch, dbFirst, dbRun } from "./db";
-import { del, get, put } from "@vercel/blob";
+import { del, put } from "@vercel/blob";
 import { sha256Hex } from "./crypto";
 
 // Vercel Function requests are limited to 4.5 MB; keep multipart uploads safely below it.
@@ -78,7 +78,7 @@ export async function uploadScreenshot(key:AuthenticatedAgentKey,form:FormData):
   const hash=await sha256Hex(new Uint8Array(bytes));
   const duplicate=await dbFirst<ScreenshotRow>(`SELECT * FROM screenshots WHERE agent_key_id = ? AND COALESCE(command_id,'') = COALESCE(?,'') AND COALESCE(stage,'') = COALESCE(?,'') AND sha256 = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1`,[key.id,commandId,stage,hash]);
   if(duplicate)return view(duplicate);
-  const blob=await put(objectKey,bytes,{access:"private",addRandomSuffix:false,contentType:mime,cacheControlMaxAge:300});
+  const blob=await put(objectKey,bytes,{access:"public",addRandomSuffix:false,contentType:mime,cacheControlMaxAge:300});
   try {
     const queries=[{sql:`INSERT INTO screenshots
       (id,object_key,command_id,execution_id,agent_key_id,agent_id,stage,name,mime_type,size,sha256,width,height,occurred_at,visibility,created_at)
@@ -117,9 +117,9 @@ export async function screenshotRow(id:string):Promise<ScreenshotRow> {
   return row;
 }
 async function blobResponse(row:ScreenshotRow):Promise<Response>{
-  const object=await get(row.object_key,{access:"private",useCache:false});
-  if(!object||object.statusCode!==200||!object.stream)throw new AppError("فایل تصویر در Vercel Blob پیدا نشد.",{status:404,code:"screenshot_object_missing"});
-  return new Response(object.stream);
+  const response=await fetch(row.object_key,{cache:"no-store"});
+  if(!response.ok||!response.body)throw new AppError("فایل تصویر در Vercel Blob پیدا نشد.",{status:404,code:"screenshot_object_missing"});
+  return new Response(response.body);
 }
 export async function screenshotContent(id:string){const row=await screenshotRow(id);return {row,object:await blobResponse(row)}}
 

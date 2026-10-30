@@ -212,7 +212,7 @@ export default function HelpPage() {
           <div className="card-head"><h2><Icon name="database" size={17} />راه‌اندازی روی Vercel</h2><span className="card-head-sub">یک‌بار تنظیم، سپس Deploy خودکار</span></div>
           <div className="help-grid" style={{ gap: 12 }}>
             <div><h3>۱. PostgreSQL</h3><p className="prose">در Storage پروژه، Prisma Postgres یا Neon را متصل و وجود <span className="mono">DATABASE_URL</span> را بررسی کنید.</p></div>
-            <div><h3>۲. Blob</h3><p className="prose">یک Vercel Blob Store متصل کنید تا <span className="mono">BLOB_READ_WRITE_TOKEN</span> سمت سرور ساخته شود.</p></div>
+            <div><h3>۲. Blob</h3><p className="prose">یک Vercel Blob Store عمومی متصل کنید؛ <span className="mono">BLOB_STORE_ID</span> و OIDC سمت سرور استفاده می‌شوند.</p></div>
             <div><h3>۳. کلیدهای امنیتی</h3><pre className="code-block">{`MANAGER_PASSCODE=…
 AUTH_SECRET=…
 GITHUB_TOKEN=…`}</pre><p className="prose">آن‌ها را در Project → Settings → Environment Variables ثبت و Redeploy کنید.</p></div>

@@ -5,6 +5,7 @@ export interface AppEnv {
   DATABASE_URL?: string;
   DIRECT_URL?: string;
   BLOB_READ_WRITE_TOKEN?: string;
+  BLOB_STORE_ID?: string;
   GITHUB_TOKEN?: string;
   MANAGER_PASSCODE?: string;
   AUTH_SECRET?: string;

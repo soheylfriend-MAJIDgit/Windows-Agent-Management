@@ -31,7 +31,7 @@
 ```bash
 npm install
 cp .env.example .env.local
-# DATABASE_URL و BLOB_READ_WRITE_TOKEN را در .env.local تکمیل کنید.
+# DATABASE_URL را تکمیل کنید؛ برای Blob محلی از vercel dev/env pull استفاده کنید.
 npm run db:migrate
 npm run dev
 ```
@@ -52,7 +52,7 @@ npm run lint:job -- --dir .
 1. مخزن GitHub را به یک Vercel Project متصل کنید.
 2. در تب **Storage** یک PostgreSQL سازگار (Prisma Postgres یا Neon) بسازید/متصل کنید.
 3. متغیر `DATABASE_URL` را برای Production و Preview تنظیم کنید.
-4. در **Storage → Blob** یک Blob Store خصوصی بسازید و به Project متصل کنید؛ Vercel متغیر `BLOB_READ_WRITE_TOKEN` را تزریق می‌کند.
+4. در **Storage → Blob** یک Blob Store عمومی بسازید و به Project متصل کنید؛ Vercel متغیر `BLOB_STORE_ID` و دسترسی OIDC را فراهم می‌کند.
 5. `MANAGER_PASSCODE` و یک `AUTH_SECRET` تصادفی و طولانی را در Environment Variables ثبت کنید.
 6. در صورت نیاز به نوشتن در GitHub، `GITHUB_TOKEN` را فقط به‌عنوان Server Secret ثبت کنید.
 7. Redeploy کنید. اسکریپت `vercel-build` ابتدا migrationهای Prisma را اجرا و سپس Next.js را Build می‌کند.
@@ -65,9 +65,10 @@ npm run lint:job -- --dir .
 | نام | وضعیت | کاربرد |
 | --- | --- | --- |
 | `DATABASE_URL` | الزامی | اتصال PostgreSQL برای Prisma و migrationها |
-| `BLOB_READ_WRITE_TOKEN` | الزامی برای تصویر | توکن server-only تولیدشده توسط Vercel Blob |
-| `MANAGER_PASSCODE` | اکیداً توصیه‌شده | قفل ورود پنل |
-| `AUTH_SECRET` | اکیداً توصیه‌شده | امضای نشست؛ طولانی و تصادفی |
+| `BLOB_STORE_ID` | خودکار در Vercel | شناسه Blob Store؛ احراز هویت نوشتن با OIDC انجام می‌شود |
+| `BLOB_READ_WRITE_TOKEN` | فقط توسعه محلی قدیمی | جایگزین اختیاری OIDC برای اجرای خارج Vercel |
+| `MANAGER_PASSCODE` | اختیاری | اگر خالی باشد سایت بدون صفحه ورود باز است |
+| `AUTH_SECRET` | فقط همراه Passcode | امضای نشست مدیریتی |
 | `GITHUB_TOKEN` | برای عملیات نوشتن | Contents: Read/Write روی مخزن مجاز |
 | `COLLAB_OWNER/REPO/BRANCH` | اختیاری | مقصد پیش‌فرض مخزن همکار |
 | `MOTHER_OWNER/REPO/BRANCH` | اختیاری | مرجع خواندنی Mother |
@@ -105,7 +106,7 @@ Content-Type: multipart/form-data
 ## امنیت و محدودیت‌ها
 
 - Blob token، Database URL، GitHub token و کلیدهای ورود فقط سمت سرور هستند.
-- Blob URL خام در API عمومی فهرست منتشر نمی‌شود؛ مسیر خصوصی سایت احراز هویت می‌خواهد.
+- Blob Store عمومی است؛ URL خام در فهرست API منتشر نمی‌شود، ولی هرکس URL مستقیم Blob را داشته باشد می‌تواند فایل را ببیند.
 - Blob objectها نام تصادفی دارند. لینک اشتراک از `/s/<token>` قابل لغو است.
 - فایل تازه Screenshot/Report به Google Drive ارسال نمی‌شود.
 - موفقیت اجرای Windows فقط با متن گزارش اثبات نمی‌شود؛ تصویر واقعی باید بررسی شود.
