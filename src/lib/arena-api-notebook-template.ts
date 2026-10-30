@@ -47,7 +47,7 @@ STAGES = [
 ]
 LABELS = {"waiting": "منتظر", "running": "در حال اجرا", "done": "انجام شد", "failed": "متوقف شد", "skipped": "اجرا نمی‌شود"}
 COLORS = {"waiting": "#64748b", "running": "#f59e0b", "done": "#10b981", "failed": "#ef4444", "skipped": "#8b5cf6"}
-write_state(dashboard="running", credentials="waiting", prompt="waiting", browser="waiting", paste="waiting", submit="waiting", pasteVerified=False, chainStatus="pending", message="رابط وضعیت آماده شد؛ مرحله دریافت API Key در ادامه باز می‌شود.")
+write_state(dashboard="running", message="رابط گزارش باز شد؛ وضعیت و نتیجه مرحله‌های قبلی حفظ شده است.")
 
 window = tk.Tk()
 window.title("Arena · اجرای پرامپت بعدی")
@@ -89,7 +89,8 @@ def refresh():
             status = "done"
         badge, report = rows[key]
         badge.configure(text=LABELS.get(status, status), bg=COLORS.get(status, "#334155"))
-        report.configure(text=str(state.get(key + "Report") or "هنوز گزارشی ثبت نشده است."), fg="#86efac" if status == "done" else "#fca5a5" if status == "failed" else "#94a3b8")
+        fallback = "مرحله با موفقیت انجام شده است." if status == "done" else "هنوز گزارشی ثبت نشده است."
+        report.configure(text=str(state.get(key + "Report") or fallback), fg="#86efac" if status == "done" else "#fca5a5" if status == "failed" else "#94a3b8")
     footer_text.set(str(state.get("message") or "در انتظار مرحله بعد…"))
     window.after(700, refresh)
 refresh()
