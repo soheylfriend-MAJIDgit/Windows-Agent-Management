@@ -391,11 +391,11 @@ function parseScopes(value: string): string[] {
   }
 }
 
-export async function findOnlineCommandAgent(requiredCapability: string | string[] = "command_plane"): Promise<{ keyId: string; agentId: string; agentName: string; agentVersion: string | null; autoMode: boolean; busy: string | null }> {
+export async function findOnlineCommandAgent(requiredCapability: string | string[] = "command_plane"): Promise<{ keyId: string; agentId: string; agentName: string; agentVersion: string | null; heartbeatAt: string; autoMode: boolean; busy: string | null }> {
   const requiredCapabilities = Array.isArray(requiredCapability) ? requiredCapability : [requiredCapability];
   const cutoff = new Date(Date.now() - 90_000).toISOString();
-  const rows = await dbAll<{ agent_key_id: string; agent_id: string; agent_name: string; agent_version: string | null; scopes: string; capabilities: string; state: string }>(
-    `SELECT a.agent_key_id, a.id AS agent_id, a.name AS agent_name, a.version AS agent_version, a.capabilities, a.state, k.scopes
+  const rows = await dbAll<{ agent_key_id: string; agent_id: string; agent_name: string; agent_version: string | null; last_seen_at: string; scopes: string; capabilities: string; state: string }>(
+    `SELECT a.agent_key_id, a.id AS agent_id, a.name AS agent_name, a.version AS agent_version, a.last_seen_at, a.capabilities, a.state, k.scopes
      FROM managed_agents a
      JOIN agent_keys k ON k.id = a.agent_key_id
      WHERE a.last_seen_at >= ? AND k.status = 'active'
@@ -445,8 +445,57 @@ export async function findOnlineCommandAgent(requiredCapability: string | string
     agentId: match.agent_id,
     agentName: match.agent_name,
     agentVersion: match.agent_version,
+    heartbeatAt: match.last_seen_at,
     autoMode: runtimeState.auto_mode === true,
     busy: typeof runtimeState.busy === "string" && runtimeState.busy.trim() ? runtimeState.busy.trim() : null,
+  };
+}
+
+export async function commandAgentPreflight(requiredCapability: string | string[] = "d1_automations") {
+  const agent = await findOnlineCommandAgent(requiredCapability);
+  const [queue, latest] = await Promise.all([
+    dbFirst<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM commands
+       WHERE agent_id = ? AND status IN ('pending', 'claimed', 'waiting_confirmation', 'running')`,
+      [agent.agentId],
+    ),
+    dbFirst<{ id: string; title: string; status: string; created_at: string; last_event_at: string }>(
+      `SELECT id, title, status, created_at, last_event_at FROM commands
+       WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1`,
+      [agent.agentId],
+    ),
+  ]);
+  const activeCommands = Number(queue?.count ?? 0);
+  const checkedAt = new Date().toISOString();
+  return {
+    ok: true as const,
+    ready: !agent.busy && activeCommands === 0,
+    checkedAt,
+    agent: {
+      name: agent.agentName,
+      version: agent.agentVersion,
+      heartbeatAt: agent.heartbeatAt,
+      autoMode: agent.autoMode,
+      busy: agent.busy,
+    },
+    queue: {
+      activeCommands,
+      latest: latest ? {
+        id: latest.id,
+        title: latest.title,
+        status: latest.status,
+        createdAt: latest.created_at,
+        lastEventAt: latest.last_event_at,
+      } : null,
+    },
+    checks: [
+      { key: "heartbeat", ok: true, label: "Heartbeat تازه‌تر از ۹۰ ثانیه" },
+      { key: "command_plane", ok: true, label: "مسیر دریافت فرمان فعال" },
+      { key: "d1_automations", ok: true, label: "دریافت اتوماسیون immutable از D1" },
+      { key: "scopes", ok: true, label: "scopeهای خواندن فرمان و ثبت نتیجه کامل" },
+      { key: "availability", ok: !agent.busy, label: agent.busy ? `ایجنت مشغول است: ${agent.busy}` : "ایجنت برای claim فرمان آزاد است" },
+      { key: "queue", ok: activeCommands === 0, label: activeCommands ? `${activeCommands} فرمان فعال یا در صف وجود دارد` : "صف فرمان فعال خالی است" },
+    ],
   };
 }
 
