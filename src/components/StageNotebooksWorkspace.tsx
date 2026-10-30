@@ -167,10 +167,9 @@ function formatWholeNotebook(notebook:Notebook):string{
 }
 
 function parseWholeNotebook(source:string):{title:string;goal:string;chatbotGuide:string;cells:Cell[]}{
-  const normalized=source.replace(/\r\n?/g,"\n");
-  const marker=/^# %% \[stage-notebook-cell(?::\d+)?\]\s*$/m;
-  const parts=normalized.split(marker);
+  const parts=splitWholeNotebook(source);
   const header=metadata(parts.shift()??"");
+  if(parts.length===0)throw new Error("هیچ جداکننده سلولی شناخته نشد. هر سلول را با یک خط مستقل مانند # %% [stage-notebook-cell:001] جدا کنید.");
   const cells=parts.map((part,index)=>{
     const lines=part.replace(/^\n/,"").split("\n");
     const meta:Record<string,unknown>={};
@@ -203,6 +202,36 @@ function parseWholeNotebook(source:string):{title:string;goal:string;chatbotGuid
     chatbotGuide:typeof header["chatbot-guide"]==="string"?header["chatbot-guide"]:"",
     cells,
   };
+}
+
+function splitWholeNotebook(source:string):string[]{
+  let normalized=source.replace(/\r\n?/g,"\n").trim();
+  const fenced=normalized.match(/^```(?:python|py|text)?\s*\n([\s\S]*?)\n```\s*$/i);
+  if(fenced)normalized=fenced[1];
+  const formatAnchor=normalized.lastIndexOf("# STAGE NOTEBOOK FORMAT v1");
+  if(formatAnchor>0)normalized=normalized.slice(formatAnchor);
+  const lines=normalized.split("\n");
+  const parts:string[]=[];
+  let current:string[]=[];
+  let found=false;
+  for(const line of lines){
+    if(isNotebookCellSeparator(line)){
+      parts.push(current.join("\n"));
+      current=[];
+      found=true;
+      continue;
+    }
+    current.push(line);
+  }
+  if(found)parts.push(current.join("\n"));
+  return found?parts:[normalized];
+}
+function isNotebookCellSeparator(line:string):boolean{
+  const value=line.trim();
+  if(/^#\s*%%\s*\[\s*stage-notebook-cell(?:\s*[:#-]\s*[0-9۰-۹]+)?\s*\]\s*$/iu.test(value))return true;
+  if(/^#\s*[-_=]{3,}\s*(?:(?:stage-notebook-)?cell|stage|سلول|مرحله)(?:\s*[:#-]?\s*[0-9۰-۹]+)?\s*[-_=]{3,}\s*$/iu.test(value))return true;
+  if(/^(?:#\s*)?(?:"{3}|'{3})?\s*[-_=]{8,}\s*(?:"{3}|'{3})?\s*$/.test(value))return true;
+  return false;
 }
 
 function metadata(source:string):Record<string,unknown>{
