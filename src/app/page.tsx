@@ -1,12 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
 import { useOverview } from "@/components/OverviewProvider";
 import { PageHeader, Banner, ErrorBanner, EmptyState, StatusChip } from "@/components/ui";
 import { Icon, type IconName } from "@/components/icons";
 import { useToast } from "@/components/ToastProvider";
-import { ApiRequestError } from "@/hooks/useApi";
 import { faDuration } from "@/lib/format";
 import { faNumber, formatJalaliDateTime, relativeFa } from "@/lib/jalali";
 import type { EventRecord, JobView, Run } from "@/lib/types";
@@ -14,12 +12,10 @@ import type { EventRecord, JobView, Run } from "@/lib/types";
 type Tone = "accent" | "ok" | "warn" | "danger";
 
 export default function DashboardPage() {
-  const { data, error, loading, refreshing, reload, refresh, runSync, syncState } = useOverview();
+  const { data, error, loading, refreshing, reload, refresh } = useOverview();
   const notify = useToast();
-  const [syncBusy, setSyncBusy] = useState(false);
 
   const stats = data?.stats;
-  const driveConfigured = Boolean(data?.connections.drive.configured);
   const setupIssue = error && !data && (error.code?.startsWith("db_") || error.code === "internal_error");
   const lastChecked = data ? formatJalaliDateTime(data.fetchedAt) : "—";
 
@@ -28,27 +24,6 @@ export default function DashboardPage() {
     notify.ok("داده‌های داشبورد تازه شد.");
   }
 
-  async function handleSync() {
-    if (!driveConfigured) {
-      notify.warn("گوگل درایو پیکربندی نشده است؛ در تنظیمات راهنمای اتصال را ببینید.");
-      return;
-    }
-    setSyncBusy(true);
-    try {
-      const result = await runSync({});
-      if (!result.configured) {
-        notify.warn(result.message ?? "درایو پیکربندی نشده است.");
-      } else if (result.warnings.length) {
-        notify.warn(result.warnings[0]);
-      } else {
-        notify.ok(result.message ?? "همگام‌سازی انجام شد.");
-      }
-    } catch (err) {
-      notify.error(err instanceof ApiRequestError ? err.message : "همگام‌سازی ناموفق بود.");
-    } finally {
-      setSyncBusy(false);
-    }
-  }
 
   return (
     <>
@@ -58,16 +33,10 @@ export default function DashboardPage() {
         subtitle={`نمای کلی کدهای ایجنت همکار، نتیجه‌ی اجراها و سلامت اتصال‌ها — آخرین بررسی: ${lastChecked}`}
         actions={
           <>
-            <button
-              type="button"
-              className="btn btn-small"
-              onClick={handleSync}
-              disabled={syncBusy || !driveConfigured}
-              title={driveConfigured ? "خواندن فایل‌های تازه از گوگل درایو" : "برای فعال‌سازی، درایو را در تنظیمات وصل کنید"}
-            >
-              {syncBusy ? <span className="spinner" /> : <Icon name="drive" size={14} />}
-              همگام‌سازی درایو
-            </button>
+            <Link href="/screenshots" className="btn btn-small">
+              <Icon name="image" size={14} />
+              اسکرین‌شات‌ها
+            </Link>
             <button type="button" className="btn btn-small" onClick={handleRefresh} disabled={refreshing}>
               {refreshing ? <span className="spinner" /> : <Icon name="refresh" size={14} />}
               به‌روزرسانی
@@ -108,9 +77,7 @@ export default function DashboardPage() {
           <ol className="steps">
             <li>
               <strong>استقرار</strong>
-              یک بار <span className="mono">npm run deploy</span> را اجرا کنید؛ Wrangler دیتابیس D1 را از روی{" "}
-              <span className="mono">database_name</span> خودکار می‌سازد و شناسه را در <span className="mono">wrangler.jsonc</span>
-              می‌نویسد.
+              در Vercel Project از تب Storage یک PostgreSQL متصل کنید و وجود <span className="mono">DATABASE_URL</span> را بررسی کنید؛ سپس Redeploy بزنید.
             </li>
             <li>
               <strong>جدول‌ها</strong>
@@ -118,7 +85,7 @@ export default function DashboardPage() {
             </li>
             <li>
               <strong>بررسی</strong>
-              بعد از بالا آمدن Worker، همین صفحه را تازه کنید. وضعیت هر اتصال در بخش «سلامت اتصال‌ها» دیده می‌شود.
+              بعد از بالا آمدن Deployment، همین صفحه را تازه کنید. وضعیت هر اتصال در بخش «سلامت اتصال‌ها» دیده می‌شود.
             </li>
           </ol>
           <div className="actions-inline" style={{ marginTop: 10 }}>
@@ -274,7 +241,7 @@ export default function DashboardPage() {
             <EmptyState
               icon="terminal"
               title="هنوز اجرایی ثبت نشده"
-              text="پس از اجرا توسط پنل ویندوز، فایل نتیجه در درایو ساخته می‌شود. می‌توانید آن را دستی هم وارد کنید."
+              text="پس از اجرا، Windows Agent نتیجه را مستقیماً در PostgreSQL ثبت می‌کند؛ ورود دستی داده‌های قدیمی نیز فعال است."
               actions={
                 <Link href="/reports" className="btn btn-small">
                   ورود دستی نتیجه
@@ -311,23 +278,15 @@ export default function DashboardPage() {
                   badge={data.connections.github.ok ? "متصل" : "قطع"}
                 />
                 <ConnectionRow
-                  icon="drive"
-                  label="گوگل درایو (logs)"
-                  ok={data.connections.drive.configured && !data.connections.drive.lastError}
-                  text={
-                    !data.connections.drive.configured
-                      ? "پیکربندی نشده؛ نتیجه‌ها را دستی وارد کنید"
-                      : data.connections.drive.lastError
-                        ? data.connections.drive.lastError
-                        : syncState?.lastSyncAt ?? data.connections.drive.lastSyncAt
-                          ? `آخرین همگام‌سازی: ${relativeFa(syncState?.lastSyncAt ?? data.connections.drive.lastSyncAt ?? "")}`
-                          : "آماده‌ی همگام‌سازی"
-                  }
-                  badge={!data.connections.drive.configured ? "اختیاری" : data.connections.drive.lastError ? "خطا" : "متصل"}
+                  icon="image"
+                  label="فضای تصاویر Vercel"
+                  ok={true}
+                  text="فایل‌ها در Blob و متادیتا و گزارش‌ها در PostgreSQL نگهداری می‌شوند"
+                  badge="Blob + PostgreSQL"
                 />
                 <ConnectionRow
                   icon="database"
-                  label="پایگاه داده D1"
+                  label="پایگاه داده PostgreSQL"
                   ok={data.connections.db.ok}
                   text={data.connections.db.message}
                   badge={data.connections.db.ok ? "آماده" : "خطا"}
@@ -362,9 +321,7 @@ export default function DashboardPage() {
               <Icon name="clock" size={17} />
               رویدادهای اخیر
             </h2>
-            {syncState?.lastSyncAt ? (
-              <span className="card-head-sub">درایو: {relativeFa(syncState.lastSyncAt)}</span>
-            ) : null}
+            <span className="card-head-sub">رخدادهای PostgreSQL</span>
           </div>
           {data && data.events.length ? (
             <ul className="timeline">

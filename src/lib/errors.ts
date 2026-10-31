@@ -27,7 +27,7 @@ export function githubFailure(status: number, body?: string): AppError {
     return new AppError("توکن گیت‌هاب معتبر نیست.", {
       status: 502,
       code: "github_unauthorized",
-      hint: "مقدار GITHUB_TOKEN را در Cloudflare (secret) دوباره تنظیم کنید.",
+      hint: "مقدار GITHUB_TOKEN را در Vercel Environment Variables دوباره تنظیم کنید.",
     });
   }
   if (status === 403) {
@@ -64,10 +64,10 @@ export function toUserMessage(err: unknown): { message: string; hint?: string; s
     return { message: err.message, hint: err.hint, status: err.status, code: err.code };
   }
   const message = err instanceof Error ? err.message : String(err);
-  if (/D1|database|SQL|no such table|binding/i.test(message)) {
+  if (/PostgreSQL|database|SQL|no such table|binding/i.test(message)) {
     return {
       message: "پایگاه داده در دسترس نیست یا آماده نشد.",
-      hint: "با اولین درخواست، جدول‌ها خودکار ساخته می‌شوند. اگر ادامه داشت، در تنظیمات وضعیت D1 را بررسی کنید.",
+      hint: "با اولین درخواست، جدول‌ها خودکار ساخته می‌شوند. اگر ادامه داشت، در تنظیمات وضعیت PostgreSQL را بررسی کنید.",
       status: 503,
       code: "db_unavailable",
     };
@@ -82,7 +82,7 @@ export function toUserMessage(err: unknown): { message: string; hint?: string; s
   }
   return {
     message: "خطای غیرمنتظره رخ داد.",
-    hint: "لاگ Worker را در Cloudflare بررسی کنید (Observability روشن است).",
+    hint: "لاگ Function را در Vercel → Logs بررسی کنید.",
     status: 500,
     code: "internal_error",
   };

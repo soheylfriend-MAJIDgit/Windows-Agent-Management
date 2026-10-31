@@ -1,6 +1,5 @@
 import { getRepoConfig } from "./config";
 import { dbHealthy, envVar } from "./db";
-import { driveStatus, getDriveState, testDrive } from "./drive";
 import { fetchArchive, fetchRateLimit } from "./github";
 import { authEnabled } from "./auth";
 import type { HealthCheck } from "./types";
@@ -17,17 +16,17 @@ export async function runHealthCheck(deep: boolean): Promise<HealthResult> {
   try {
     const ok = await dbHealthy();
     checks.push({
-      name: "پایگاه داده D1",
+      name: "پایگاه داده PostgreSQL",
       ok,
       message: ok ? "اتصال و جدول‌ها آماده است." : "اتصال برقرار نشد.",
-      hint: ok ? undefined : "binding با نام DB در wrangler.jsonc و اجرای اولیه‌ی Worker را بررسی کنید.",
+      hint: ok ? undefined : "DATABASE_URL و اتصال Prisma Postgres/Neon در Vercel را بررسی کنید.",
     });
   } catch (err) {
     checks.push({
-      name: "پایگاه داده D1",
+      name: "پایگاه داده PostgreSQL",
       ok: false,
       message: err instanceof Error ? err.message : "خطای نامشخص",
-      hint: "با اولین deploy، D1 خودکار ساخته می‌شود؛ سپس جدول‌ها در اولین درخواست.",
+      hint: "اتصال PostgreSQL و اجرای prisma migrate deploy را بررسی کنید.",
     });
   }
 
@@ -36,7 +35,7 @@ export async function runHealthCheck(deep: boolean): Promise<HealthResult> {
     name: "توکن گیت‌هاب",
     ok: Boolean(token),
     message: token ? "تنظیم شده (سمت سرور)." : "تنظیم نشده؛ دکمه‌های نوشتن غیرفعال‌اند.",
-    hint: token ? undefined : "wrangler secret put GITHUB_TOKEN — یا در .dev.vars برای اجرای محلی.",
+    hint: token ? undefined : "در Vercel Environment Variables یا فایل .env.local تنظیم کنید.",
   });
   if (deep && token) {
     const rate = await fetchRateLimit(token);
@@ -75,46 +74,22 @@ export async function runHealthCheck(deep: boolean): Promise<HealthResult> {
     });
   }
 
-  const driveConfigured = (await driveStatus()).configured;
+  const blobToken = await envVar("BLOB_READ_WRITE_TOKEN");
+  const blobStoreId = await envVar("BLOB_STORE_ID");
+  const blobReady = Boolean(blobStoreId || blobToken);
   checks.push({
-    name: "همگام‌سازی گوگل درایو",
-    ok: driveConfigured,
-    optional: !driveConfigured,
-    message: driveConfigured ? "حساب سرویس و پوشه تنظیم شده‌اند." : "پیکربندی نشده؛ گزارش‌ها را دستی وارد کنید.",
-    hint: driveConfigured
-      ? undefined
-      : "GOOGLE_SERVICE_ACCOUNT_JSON و GOOGLE_DRIVE_LOGS_FOLDER_ID را تنظیم کنید (راهنما در تنظیمات).",
+    name: "ذخیره اسکرین‌شات‌ها",
+    ok: blobReady,
+    message: blobReady ? "Vercel Blob عمومی با دسترسی OIDC سمت سرور متصل است." : "Vercel Blob به پروژه متصل نیست.",
+    hint: blobReady ? undefined : "از تب Storage پروژه یک Blob Store بسازید و آن را به پروژه متصل کنید.",
   });
-  if (deep && driveConfigured) {
-    const result = await testDrive();
-    checks.push({
-      name: "اتصال گوگل درایو",
-      ok: result.ok,
-      message: result.message,
-      hint: result.hint,
-    });
-  }
-  if (driveConfigured) {
-    const state = await getDriveState();
-    checks.push({
-      name: "آخرین همگام‌سازی درایو",
-      ok: !state.lastError,
-      message: state.lastSyncAt
-        ? state.lastError
-          ? `آخرین تلاش ناموفق: ${state.lastError}`
-          : "آخرین همگام‌سازی موفق بود."
-        : "هنوز همگام‌سازی انجام نشده.",
-      detail: state.lastSyncAt ?? undefined,
-    });
-  }
 
   checks.push({
     name: "ورود مدیریت",
     ok: true,
     message: (await authEnabled())
       ? "کد مدیریت تنظیم شده؛ ورود لازم است."
-      : "بدون رمز (باز). برای محیط عمومی، MANAGER_PASSCODE را تنظیم کنید.",
-    hint: (await authEnabled()) ? undefined : "wrangler secret put MANAGER_PASSCODE",
+      : "ورود مدیریتی طبق تنظیم فعلی غیرفعال است و سایت مستقیم باز می‌شود.",
   });
 
   return { ok: checks.every((c) => c.ok || c.optional), checks, checkedAt: new Date().toISOString() };

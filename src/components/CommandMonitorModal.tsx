@@ -85,11 +85,8 @@ function durationLabel(seconds: number): string {
   return `${faNumber(seconds)} ثانیه`;
 }
 
-function artifactHref(artifact: { driveUrl: string | null; name: string }): string {
-  if (artifact.driveUrl) return artifact.driveUrl;
-  // نسخه فعلی Windows Agent فقط metadata و نام فایل همگام‌شده را می‌فرستد.
-  // تا زمانی که File ID آنلاین گزارش شود، جست‌وجوی دقیق همان نام در Drive یک لینک عملی فراهم می‌کند.
-  return `https://drive.google.com/drive/u/0/search?q=${encodeURIComponent(`"${artifact.name}"`)}`;
+function artifactHref(artifact: { driveUrl: string | null; name: string }): string | null {
+  return artifact.driveUrl || null;
 }
 
 function artifactStageLabel(stage: string | null, kind: string): string {
@@ -429,17 +426,16 @@ export function CommandMonitorModal({ commandId, onClose }: { commandId: string;
               <h3 id="command-artifacts-title">لینک تصویرهای مرحله‌ای</h3>
               <span>{faNumber(imageArtifacts.length)} مورد</span>
             </div>
-            <p className="command-storage-note">فقط metadata و لینک در D1 است؛ بایت تصویر منحصراً در Google Drive می‌ماند.</p>
+            <p className="command-storage-note">فایل تصویر در Vercel Blob و متادیتا در PostgreSQL نگهداری می‌شود؛ لینک داخلی تصویر دقیق را باز می‌کند.</p>
             <div className="command-artifact-list">
-              {!imageArtifacts.length ? <p className="command-empty">هنوز لینک تصویری گزارش نشده است.</p> : null}
-              {imageArtifacts.map((artifact) => (
-                <article className="command-artifact" key={artifact.id}>
+              {!imageArtifacts.length ? <p className="command-empty">هنوز تصویری از Agent دریافت نشده است.</p> : null}
+              {imageArtifacts.map((artifact) => {
+                const href=artifactHref(artifact);
+                return <article className="command-artifact" key={artifact.id}>
                   <div><strong>{artifact.name}</strong><span>{artifactStageLabel(artifact.stage, artifact.kind)}</span></div>
-                  <a href={artifactHref(artifact)} target="_blank" rel="noopener noreferrer" title={artifact.driveUrl ? "بازکردن مستقیم تصویر در Google Drive" : "جست‌وجوی نام دقیق تصویر همگام‌شده در Google Drive"}>
-                    {artifact.driveUrl ? "بازکردن تصویر ↗" : "یافتن تصویر در Drive ↗"}
-                  </a>
-                </article>
-              ))}
+                  {href?<a href={href} target="_blank" rel="noopener noreferrer" title="بازکردن مستقیم تصویر ذخیره‌شده در Blob">بازکردن تصویر ↗</a>:<span className="artifact-pending">در انتظار Upload فایل به Blob</span>}
+                </article>;
+              })}
             </div>
           </section>
         </div>

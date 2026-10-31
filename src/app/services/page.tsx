@@ -224,7 +224,7 @@ export default function ServicesPage() {
       );
       setSelected(null);
       setActiveCommandId(result.commandId);
-      notify.ok(`نسخه ${result.version} سرویس در D1 ثبت شد و اجرای ویندوز آغاز شد.`);
+      notify.ok(`نسخه ${result.version} سرویس در PostgreSQL ثبت شد و اجرای ویندوز آغاز شد.`);
     } catch (error) {
       const parsed = error instanceof ApiRequestError ? error : new ApiRequestError("اجرای سرویس ممکن نشد.");
       setSubmitError(parsed);
@@ -239,7 +239,7 @@ export default function ServicesPage() {
       <PageHeader
         eyebrow="اجرای تعاملی"
         title="سرویس‌ها"
-        subtitle="هر سرویس یک فرم محدود و مشخص دارد؛ پس از ثبت ورودی‌ها، نسخه immutable در D1 ساخته و با پایش زنده روی Windows Agent اجرا می‌شود."
+        subtitle="هر سرویس یک فرم محدود و مشخص دارد؛ پس از ثبت ورودی‌ها، نسخه immutable در PostgreSQL ساخته و با پایش زنده روی Windows Agent اجرا می‌شود."
       />
 
       <Banner tone="info" title="تفاوت سرویس با کد اتوماسیون">

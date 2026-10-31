@@ -277,7 +277,7 @@ export async function rerunAutomation(identifier: unknown, actor: string, dryRun
     description: detail.automation.description,
     target: detail.automation.target,
     sourceCode,
-    changeSummary: "درخواست اجرای دوباره با تغییر واقعی نسخه D1",
+    changeSummary: "درخواست اجرای دوباره با تغییر واقعی نسخه PostgreSQL",
     actor,
     activate: true,
   });
