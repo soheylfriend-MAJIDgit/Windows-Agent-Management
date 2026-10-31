@@ -425,6 +425,62 @@ def find_chrome_window():
     # اگر چند پنجره Chrome باز باشد، پنجره‌ای که عنوان Arena دارد بر پنجره صرفاً بزرگ‌تر مقدم است.
     return max(windows, default=None, key=lambda item: (1 if "arena" in item[3].lower() else 0, item[0]))
 
+def capture_chrome_for_ocr(rect, path):
+    width, height = rect.right - rect.left, rect.bottom - rect.top
+    env = os.environ.copy()
+    env.update({"SHOT_X": str(rect.left), "SHOT_Y": str(rect.top), "SHOT_W": str(width), "SHOT_H": str(height), "SHOT_PATH": path})
+    script = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Drawing; $b=New-Object Drawing.Bitmap([int]$env:SHOT_W,[int]$env:SHOT_H); $g=[Drawing.Graphics]::FromImage($b); try{$g.CopyFromScreen([int]$env:SHOT_X,[int]$env:SHOT_Y,0,0,$b.Size);$b.Save($env:SHOT_PATH,[Drawing.Imaging.ImageFormat]::Png)}finally{$g.Dispose();$b.Dispose()}"
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], env=env, text=True, capture_output=True, timeout=30, creationflags=flags)
+    if result.returncode or not os.path.isfile(path):
+        raise RuntimeError((result.stderr or result.stdout or "OCR screenshot failed").strip())
+
+def composer_point_from_local_ocr(rect, image_path):
+    local = os.environ.get("LOCALAPPDATA", "")
+    python_path = os.environ.get("WINDOWS_AGENT_OCR_PYTHON", "") or os.path.join(local, "Windows-Agent", "vision", ".venv", "Scripts", "python.exe")
+    helper_path = os.environ.get("WINDOWS_AGENT_OCR_HELPER", "") or os.path.join(local, "Windows-Agent", "vision", "paddle_ocr_helper.py")
+    if not os.path.isfile(python_path) or not os.path.isfile(helper_path):
+        print("ARENA_STAGE5_OCR_UNAVAILABLE: local PaddleOCR helper paths were not found", flush=True)
+        return None
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run([python_path, helper_path, "--image", image_path, "--json"], text=True, capture_output=True, encoding="utf-8", errors="replace", timeout=75, creationflags=flags)
+    if result.returncode:
+        print("ARENA_STAGE5_OCR_ERROR: " + (result.stderr or result.stdout or "helper failed")[-800:], flush=True)
+        return None
+    try:
+        payload = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError) as exc:
+        print("ARENA_STAGE5_OCR_INVALID_JSON: " + str(exc), flush=True)
+        return None
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict) or not payload.get("ok") or not isinstance(items, list):
+        print("ARENA_STAGE5_OCR_INVALID_PAYLOAD", flush=True)
+        return None
+    phrases = ("what would you like", "what do you want", "ask arena", "ask anything", "send a message", "type a message", "message arena", "how can i help")
+    matches = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").casefold().strip()
+        bounds = item.get("bounds")
+        confidence = float(item.get("confidence") or 0)
+        if confidence < 0.42 or not isinstance(bounds, list) or len(bounds) != 4:
+            continue
+        if not any(phrase in text or (len(text) >= 8 and text in phrase) for phrase in phrases):
+            continue
+        left, top, right, bottom = [float(value) for value in bounds]
+        x = rect.left + ((left + right) / 2)
+        y = rect.top + ((top + bottom) / 2)
+        if x <= rect.left or x >= rect.right or y <= rect.top + 140 or y >= rect.bottom:
+            continue
+        matches.append({"x": x, "y": y, "text": text[:160], "confidence": confidence, "bottom": bottom})
+    if not matches:
+        print("ARENA_STAGE5_OCR_PLACEHOLDER_NOT_FOUND: items=" + str(len(items)), flush=True)
+        return None
+    chosen = max(matches, key=lambda item: (item["bottom"], item["confidence"]))
+    print("ARENA_STAGE5_OCR_PLACEHOLDER: confidence=" + format(chosen["confidence"], ".3f") + " text=" + chosen["text"], flush=True)
+    return chosen
+
 UIA_PASTE_SCRIPT = r'''$ErrorActionPreference = "Stop"
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -564,6 +620,24 @@ foreach ($element in $all) {
 }
 $candidates = @($candidates | Sort-Object Score -Descending)
 Write-Output ("ARENA_STAGE5_UIA_CANDIDATES=" + $candidates.Count)
+# وقتی Chrome درخت accessibility صفحه را منتشر نمی‌کند، فقط مختصات placeholder
+# تأییدشده با PaddleOCR محلی پذیرفته می‌شود؛ fallback هندسی کور وجود ندارد.
+if ($candidates.Count -eq 0 -and $env:ARENA_OCR_X -and $env:ARENA_OCR_Y) {
+    try {
+        $ocrX = [double]::Parse($env:ARENA_OCR_X, [System.Globalization.CultureInfo]::InvariantCulture)
+        $ocrY = [double]::Parse($env:ARENA_OCR_Y, [System.Globalization.CultureInfo]::InvariantCulture)
+        if ($ocrX -gt ($windowRect.Left + 10) -and $ocrX -lt ($windowRect.Right - 10) -and $ocrY -gt ($windowRect.Top + ($windowRect.Height * 0.42)) -and $ocrY -lt ($windowRect.Bottom - 5)) {
+            $ocrPoint = [System.Windows.Point]::new($ocrX, $ocrY)
+            $ocrElement = [System.Windows.Automation.AutomationElement]::FromPoint($ocrPoint)
+            if (-not $ocrElement) { $ocrElement = $window }
+            $ocrRect = [System.Windows.Rect]::new($ocrX - 3, $ocrY - 3, 6, 6)
+            $candidates = @([pscustomobject]@{ Element=$ocrElement; Rect=$ocrRect; Score=5000.0; Type="OCR.Placeholder"; Name=$env:ARENA_OCR_TEXT; Id=""; Source="paddleocr-placeholder" })
+            Write-Output ("ARENA_STAGE5_OCR_CANDIDATE=" + [int]$ocrX + "," + [int]$ocrY)
+        }
+    } catch {
+        Write-Output ("ARENA_STAGE5_OCR_CANDIDATE_ERROR=" + $_.Exception.Message)
+    }
+}
 for ($candidateIndex = 0; $candidateIndex -lt [Math]::Min(8, $candidates.Count); $candidateIndex++) {
     $candidate = $candidates[$candidateIndex]
     $candidateName = ([string]$candidate.Name -replace '[\r\n]+', ' ')
@@ -665,7 +739,14 @@ try:
     target = find_chrome_window()
     if not target:
         raise RuntimeError("پنجره واقعی Chrome پیدا نشد؛ هیچ Paste انجام نشد")
-    _, hwnd, _rect, title = target
+    _, hwnd, rect, title = target
+    user32 = ctypes.windll.user32
+    user32.ShowWindow(hwnd, 9)
+    user32.SetForegroundWindow(hwnd)
+    time.sleep(0.8)
+    ocr_shot_path = os.path.join(ROOT, "stage5-before-paste-ocr.png")
+    capture_chrome_for_ocr(rect, ocr_shot_path)
+    ocr_point = composer_point_from_local_ocr(rect, ocr_shot_path)
     script_path = os.path.join(ROOT, "stage5-uia-paste.ps1")
     with open(script_path, "w", encoding="utf-8-sig", newline="\n") as handle:
         handle.write(UIA_PASTE_SCRIPT)
@@ -676,7 +757,15 @@ try:
     except FileNotFoundError:
         pass
     env = os.environ.copy()
-    env.update({"ARENA_HWND": str(hwnd), "PROMPT_FILE": prompt_path, "SHOT_PATH": shot_path, "RESULT_PATH": result_path})
+    env.update({
+        "ARENA_HWND": str(hwnd),
+        "PROMPT_FILE": prompt_path,
+        "SHOT_PATH": shot_path,
+        "RESULT_PATH": result_path,
+        "ARENA_OCR_X": str(ocr_point["x"]) if ocr_point else "",
+        "ARENA_OCR_Y": str(ocr_point["y"]) if ocr_point else "",
+        "ARENA_OCR_TEXT": str(ocr_point["text"]) if ocr_point else "",
+    })
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File", script_path], env=env, text=True, capture_output=True, timeout=60, creationflags=flags)
     stdout = result.stdout or ""
@@ -797,7 +886,7 @@ export function arenaApiNotebookCells(): ArenaApiNotebookCellTemplate[] {
     { id: "arena-api-credentials", title: "۲. دریافت امن API Key از Python", language: "python", content: CREDENTIALS_CODE, notes: "دامنه https://salitest.ir ثابت است و فقط Key در خود دسکتاپ گرفته می‌شود. Key با Windows DPAPI رمز می‌شود و در stdout یا PostgreSQL قرار نمی‌گیرد.", transition: "manual", executionMode: "blocking", executable: true },
     { id: "arena-fetch-next-prompt", title: "۳. خواندن decision از GET /handoff", language: "python", content: FETCH_PROMPT_CODE, notes: "فقط GET https://salitest.ir/api/agent/v1/handoff با Bearer اجرا می‌شود. decision.action ملاک قطعی است؛ Prompt تنها در run_next پذیرفته و از ارسال تکراری جلوگیری می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
     { id: "arena-open-and-stabilize", title: "۴. بازکردن Chrome واقعی و انتظار برای پایداری", language: "python", content: BROWSER_CODE, notes: "Chrome واقعی کاربر با پروفایل عادی Windows باز می‌شود؛ بدون Playwright، CDP، remote-debugging یا user-data-dir. پایداری با سه تصویر ادراکیِ مشابه سنجیده می‌شود تا انیمیشن‌های کوچک باعث خطای کاذب نشوند؛ تصویربرداری بدون پنجره کنسول انجام می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
-    { id: "arena-paste-once", title: "۵. Paste یک‌باره از Clipboard واقعی", language: "python", content: PASTE_CODE, notes: "composer واقعی Arena با UI Automation و محافظ فوکوس پیدا می‌شود؛ Ctrl+V دقیقاً یک بار اجرا و با UIA و Copy مستقل تأیید می‌شود. این مرحله Enter نمی‌زند و در خطا Paste را تکرار نمی‌کند.", transition: "manual", executionMode: "blocking", executable: true },
+    { id: "arena-paste-once", title: "۵. Paste یک‌باره از Clipboard واقعی", language: "python", content: PASTE_CODE, notes: "composer واقعی Arena ابتدا با UI Automation و در صورت نبود درخت accessibility فقط با placeholder تأییدشده PaddleOCR محلی پیدا می‌شود؛ Ctrl+V دقیقاً یک بار اجرا و با Copy مستقل تأیید می‌شود. این مرحله Enter نمی‌زند و در خطا Paste را تکرار نمی‌کند.", transition: "manual", executionMode: "blocking", executable: true },
     { id: "arena-submit-enter", title: "۶. Enter واقعی برای Send / Submit", language: "python", content: SUBMIT_CODE, notes: "متن کنترل فعال دوباره با Clipboard واقعی بررسی می‌شود و Enter بدون Shift/Ctrl/Alt دقیقاً یک بار ارسال می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
   ];
 }
