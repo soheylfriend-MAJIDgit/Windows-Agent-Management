@@ -490,8 +490,22 @@ Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 public static class Stage5Native {
-    [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public UIntPtr dwExtraInfo; }
-    [StructLayout(LayoutKind.Explicit)] public struct INPUTUNION { [FieldOffset(0)] public KEYBDINPUT ki; }
+    [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT {
+        public int dx; public int dy; public uint mouseData; public uint dwFlags;
+        public uint time; public UIntPtr dwExtraInfo;
+    }
+    [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT {
+        public ushort wVk; public ushort wScan; public uint dwFlags;
+        public uint time; public UIntPtr dwExtraInfo;
+    }
+    [StructLayout(LayoutKind.Sequential)] public struct HARDWAREINPUT {
+        public uint uMsg; public ushort wParamL; public ushort wParamH;
+    }
+    [StructLayout(LayoutKind.Explicit)] public struct INPUTUNION {
+        [FieldOffset(0)] public MOUSEINPUT mi;
+        [FieldOffset(0)] public KEYBDINPUT ki;
+        [FieldOffset(0)] public HARDWAREINPUT hi;
+    }
     [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public INPUTUNION U; }
     [DllImport("user32.dll", SetLastError=true)] static extern uint SendInput(uint count, INPUT[] inputs, int size);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
@@ -499,6 +513,8 @@ public static class Stage5Native {
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
     static INPUT Key(ushort vk, uint flags) { INPUT i = new INPUT(); i.type = 1; i.U.ki.wVk = vk; i.U.ki.dwFlags = flags; return i; }
+    public static int InputSize() { return Marshal.SizeOf(typeof(INPUT)); }
+    public static int LastError() { return Marshal.GetLastWin32Error(); }
     public static bool Chord(ushort modifier, ushort key) {
         INPUT[] values = new INPUT[] { Key(modifier, 0), Key(key, 0), Key(key, 2), Key(modifier, 2) };
         return SendInput((uint)values.Length, values, Marshal.SizeOf(typeof(INPUT))) == values.Length;
@@ -510,6 +526,11 @@ public static class Stage5Native {
     public static void Click(int x, int y) { SetCursorPos(x, y); mouse_event(2, 0, 0, 0, UIntPtr.Zero); mouse_event(4, 0, 0, 0, UIntPtr.Zero); }
 }
 "@
+
+$inputSize = [Stage5Native]::InputSize()
+$expectedInputSize = if ([IntPtr]::Size -eq 8) { 40 } else { 28 }
+Write-Output ("ARENA_STAGE5_SENDINPUT_SIZE=" + $inputSize + ";expected=" + $expectedInputSize)
+if ($inputSize -ne $expectedInputSize) { throw "Native INPUT structure size is invalid; no keyboard input was attempted" }
 
 function Canonical([string]$value) {
     return (([string]$value -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\s+', ' ').Trim()
@@ -679,9 +700,9 @@ $prompt = [IO.File]::ReadAllText($env:PROMPT_FILE)
 $expectedNormalized = $prompt -replace '\r', ''
 $preflightSentinel = "__ARENA_STAGE5_PREFLIGHT_$([Guid]::NewGuid().ToString('N'))__"
 Set-Clipboard -Value $preflightSentinel
-if (-not [Stage5Native]::Chord(0x11, 0x41)) { throw "Safe pre-paste Select All failed; paste was not attempted" }
+if (-not [Stage5Native]::Chord(0x11, 0x41)) { throw ("Safe pre-paste Select All failed; nativeError=" + [Stage5Native]::LastError() + "; paste was not attempted") }
 Start-Sleep -Milliseconds 120
-if (-not [Stage5Native]::Chord(0x11, 0x43)) { throw "Safe pre-paste Copy failed; paste was not attempted" }
+if (-not [Stage5Native]::Chord(0x11, 0x43)) { throw ("Safe pre-paste Copy failed; nativeError=" + [Stage5Native]::LastError() + "; paste was not attempted") }
 Start-Sleep -Milliseconds 350
 $currentCopied = [string](Get-Clipboard -Raw)
 $currentNormalized = $currentCopied -replace '\r', ''
@@ -700,7 +721,7 @@ Write-Output "ARENA_STAGE5_COMPOSER_EMPTY_VERIFIED"
 
 Get-Content -Raw -LiteralPath $env:PROMPT_FILE | Set-Clipboard
 Start-Sleep -Milliseconds 250
-if (-not [Stage5Native]::Chord(0x11, 0x56)) { throw "The single native Ctrl+V operation failed" }
+if (-not [Stage5Native]::Chord(0x11, 0x56)) { throw ("The single native Ctrl+V operation failed; nativeError=" + [Stage5Native]::LastError()) }
 Write-Output "ARENA_STAGE5_SINGLE_PASTE_SENT"
 Start-Sleep -Milliseconds 1200
 $focusedAfter = [System.Windows.Automation.AutomationElement]::FocusedElement
@@ -726,9 +747,9 @@ Write-Output ("ARENA_STAGE5_UIA_PROBE=" + [bool]$probeHit)
 
 $sentinel = "__ARENA_STAGE5_VERIFY_$([Guid]::NewGuid().ToString('N'))__"
 Set-Clipboard -Value $sentinel
-if (-not [Stage5Native]::Chord(0x11, 0x41)) { throw "Safe Select All verification failed after paste" }
+if (-not [Stage5Native]::Chord(0x11, 0x41)) { throw ("Safe Select All verification failed after paste; nativeError=" + [Stage5Native]::LastError()) }
 Start-Sleep -Milliseconds 120
-if (-not [Stage5Native]::Chord(0x11, 0x43)) { throw "Safe Copy verification failed after paste" }
+if (-not [Stage5Native]::Chord(0x11, 0x43)) { throw ("Safe Copy verification failed after paste; nativeError=" + [Stage5Native]::LastError()) }
 Start-Sleep -Milliseconds 450
 $copied = [string](Get-Clipboard -Raw)
 $expectedNormalized = $prompt -replace '\r', ''
