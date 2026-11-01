@@ -11,6 +11,28 @@ def read_state():
     except (FileNotFoundError, OSError, ValueError):
         return {}
 
+def progress_path(stage):
+    return os.path.join(ROOT, stage + "-progress.jsonl")
+
+def reset_progress(stage):
+    with open(progress_path(stage), "w", encoding="utf-8"):
+        pass
+
+_PROGRESS_CURRENT = {}
+def progress_event(stage, step_id, status, detail=""):
+    event = {"id": str(step_id), "status": str(status), "detail": str(detail), "at": time.strftime("%H:%M:%S")}
+    if status == "running":
+        _PROGRESS_CURRENT[stage] = str(step_id)
+    elif _PROGRESS_CURRENT.get(stage) == str(step_id):
+        _PROGRESS_CURRENT.pop(stage, None)
+    with open(progress_path(stage), "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+def fail_current_progress(stage, detail):
+    step_id = _PROGRESS_CURRENT.get(stage)
+    if step_id:
+        progress_event(stage, step_id, "failed", detail)
+
 def write_state(**changes):
     state = read_state()
     message = str(changes.get("message") or "").strip()
@@ -47,12 +69,26 @@ STAGES = [
 ]
 LABELS = {"waiting": "منتظر", "running": "در حال اجرا", "done": "انجام شد", "failed": "متوقف شد", "skipped": "اجرا نمی‌شود"}
 COLORS = {"waiting": "#64748b", "running": "#f59e0b", "done": "#10b981", "failed": "#ef4444", "skipped": "#8b5cf6"}
+SUBSTEPS = [
+    ("s5-01", "۵.۱ کنترل decision و هش Prompt"), ("s5-02", "۵.۲ بررسی/نصب pywinauto"),
+    ("s5-03", "۵.۳ یافتن و foreground کردن Chrome Arena"), ("s5-04", "۵.۴ ثبت تصویر قبل از OCR"),
+    ("s5-05", "۵.۵ اجرای PaddleOCR محلی"), ("s5-06", "۵.۶ جست‌وجوی UIA و انتخاب کاندید امن"),
+    ("s5-07", "۵.۷ کلیک و اثبات فوکوس composer"), ("s5-08", "۵.۸ قرار دادن sentinel در Clipboard"),
+    ("s5-09", "۵.۹ Ctrl+A و Ctrl+C پیش از Paste"), ("s5-10", "۵.۱۰ طبقه‌بندی Clipboard: خالی/همان Prompt/متن دیگر"),
+    ("s5-11", "۵.۱۱ قرار دادن کامل Prompt در Clipboard"), ("s5-12", "۵.۱۲ ارسال دقیقاً یک Ctrl+V"),
+    ("s5-13", "۵.۱۳ تصویر بعد از Paste و قبل از Send"), ("s5-14", "۵.۱۴ کنترل فوکوس پس از Paste"),
+    ("s5-15", "۵.۱۵ Ctrl+A/C و خواندن دوباره Clipboard"), ("s5-16", "۵.۱۶ تطبیق طول، هش و متن نرمال‌شده"),
+    ("s5-17", "۵.۱۷ ثبت محافظ ضد Enter تکراری"), ("s5-18", "۵.۱۸ ارسال دقیقاً یک Enter"),
+    ("s5-19", "۵.۱۹ تصویر و ثبت نتیجه نهایی"),
+    ("s6-01", "۶.۱ خواندن state و هش Prompt"), ("s6-02", "۶.۲ تطبیق ثبت ارسال مرحله ۵"),
+    ("s6-03", "۶.۳ تضمین عدم ارسال کلید مجدد"),
+]
 write_state(dashboard="running", message="رابط گزارش باز شد؛ وضعیت و نتیجه مرحله‌های قبلی حفظ شده است.")
 
 window = tk.Tk()
 window.title("Arena · اجرای پرامپت بعدی")
-window.geometry("820x620")
-window.minsize(700, 540)
+window.geometry("1040x900")
+window.minsize(820, 680)
 window.configure(bg="#0f172a")
 window.attributes("-topmost", True)
 window.after(1800, lambda: window.attributes("-topmost", False))
@@ -78,8 +114,33 @@ for key, title in STAGES:
     report = tk.Label(details, text="هنوز گزارشی ثبت نشده است.", bg="#172033", fg="#94a3b8", font=("Segoe UI", 9), anchor="e", justify="right", wraplength=600)
     report.pack(fill="x", pady=(4, 0))
     rows[key] = (badge, report)
+subframe = tk.Frame(window, bg="#111827", highlightthickness=1, highlightbackground="#334155")
+subframe.pack(fill="both", expand=True, padx=24, pady=(8, 0))
+tk.Label(subframe, text="ریزگزارش مرحله‌های ۵ و ۶ · وضعیت Clipboard، Paste و Enter", bg="#111827", fg="#f8fafc", font=("Segoe UI", 10, "bold"), anchor="e").pack(fill="x", padx=10, pady=(8, 4))
+subscroll = tk.Scrollbar(subframe)
+subscroll.pack(side="left", fill="y")
+substeps_view = tk.Text(subframe, height=13, bg="#0b1220", fg="#cbd5e1", insertbackground="white", relief="flat", font=("Segoe UI", 9), wrap="word", yscrollcommand=subscroll.set)
+substeps_view.pack(side="right", fill="both", expand=True, padx=(0, 8), pady=(0, 8))
+subscroll.configure(command=substeps_view.yview)
+substeps_view.configure(state="disabled")
 footer_text = tk.StringVar(value="پنجره وضعیت فعال است…")
 tk.Label(window, textvariable=footer_text, bg="#0f172a", fg="#7dd3fc", font=("Segoe UI", 9), anchor="e").pack(fill="x", padx=24, pady=14)
+
+def read_progress_events():
+    latest = {}
+    for stage in ("stage5", "stage6"):
+        try:
+            with open(progress_path(stage), "r", encoding="utf-8-sig") as handle:
+                for line in handle:
+                    try:
+                        event = json.loads(line.lstrip("\ufeff"))
+                        if isinstance(event, dict) and event.get("id"):
+                            latest[str(event["id"])] = event
+                    except (ValueError, TypeError):
+                        pass
+        except OSError:
+            pass
+    return latest
 
 def refresh():
     state = read_state()
@@ -91,6 +152,19 @@ def refresh():
         badge.configure(text=LABELS.get(status, status), bg=COLORS.get(status, "#334155"))
         fallback = "مرحله با موفقیت انجام شده است." if status == "done" else "هنوز گزارشی ثبت نشده است."
         report.configure(text=str(state.get(key + "Report") or fallback), fg="#86efac" if status == "done" else "#fca5a5" if status == "failed" else "#94a3b8")
+    latest = read_progress_events()
+    symbols = {"done": "✓", "running": "◉", "failed": "✗", "skipped": "—", "waiting": "○"}
+    lines = []
+    for step_id, title in SUBSTEPS:
+        event = latest.get(step_id, {})
+        status = str(event.get("status") or "waiting")
+        detail = str(event.get("detail") or "")
+        at = str(event.get("at") or "")
+        lines.append(f"{symbols.get(status, '○')}  {title}" + (f"  [{at}] — {detail}" if detail else ""))
+    substeps_view.configure(state="normal")
+    substeps_view.delete("1.0", "end")
+    substeps_view.insert("1.0", "\n".join(lines))
+    substeps_view.configure(state="disabled")
     footer_text.set(str(state.get("message") or "در انتظار مرحله بعد…"))
     window.after(700, refresh)
 refresh()
@@ -393,10 +467,13 @@ except Exception as exc:
 `;
 
 const PASTE_CODE = String.raw`${ROOT_SETUP}
-import ctypes, hashlib, subprocess
+import ctypes, hashlib, re, subprocess
 from ctypes import wintypes
 
+reset_progress("stage5")
+progress_event("stage5", "s5-01", "running", "در حال کنترل مجوز زنجیره و هش Prompt")
 if read_state().get("chainStatus") != "continue":
+    progress_event("stage5", "s5-01", "failed", "decision.action اجازه ادامه زنجیره را نمی‌دهد")
     write_state(paste="skipped", message="decision.action اجازه ادامه نمی‌دهد؛ هیچ Paste انجام نمی‌شود.")
     print("ARENA_PASTE_SKIPPED: decision does not allow continuation", flush=True)
     raise SystemExit(0)
@@ -435,7 +512,7 @@ def capture_chrome_for_ocr(rect, path):
     if result.returncode or not os.path.isfile(path):
         raise RuntimeError((result.stderr or result.stdout or "OCR screenshot failed").strip())
 
-def composer_point_from_local_ocr(rect, image_path):
+def composer_point_from_local_ocr(rect, image_path, prompt):
     local = os.environ.get("LOCALAPPDATA", "")
     python_path = os.environ.get("WINDOWS_AGENT_OCR_PYTHON", "") or os.path.join(local, "Windows-Agent", "vision", ".venv", "Scripts", "python.exe")
     helper_path = os.environ.get("WINDOWS_AGENT_OCR_HELPER", "") or os.path.join(local, "Windows-Agent", "vision", "paddle_ocr_helper.py")
@@ -457,6 +534,9 @@ def composer_point_from_local_ocr(rect, image_path):
         print("ARENA_STAGE5_OCR_INVALID_PAYLOAD", flush=True)
         return None
     phrases = ("what would you like", "what do you want", "ask arena", "ask anything", "send a message", "type a message", "message arena", "how can i help")
+    def semantic_key(value):
+        return " ".join(re.findall(r"[\w\u0600-\u06ff]+", str(value).casefold(), flags=re.UNICODE))
+    prompt_key = semantic_key(prompt)
     matches = []
     for item in items:
         if not isinstance(item, dict):
@@ -466,14 +546,21 @@ def composer_point_from_local_ocr(rect, image_path):
         confidence = float(item.get("confidence") or 0)
         if confidence < 0.42 or not isinstance(bounds, list) or len(bounds) != 4:
             continue
-        if not any(phrase in text or (len(text) >= 8 and text in phrase) for phrase in phrases):
+        placeholder_match = any(phrase in text or (len(text) >= 8 and text in phrase) for phrase in phrases)
+        item_key = semantic_key(text)
+        # متن موجود فقط وقتی مدرک معنایی است که یک قطعه نسبتاً بلند و چندواژه‌ای
+        # از Prompt معلوم باشد؛ واژه‌های کوتاه/عمومی هرگز مختصات تولید نمی‌کنند.
+        prompt_match = len(item_key) >= 20 and len(item_key.split()) >= 3 and item_key in prompt_key
+        if not placeholder_match and not prompt_match:
             continue
+        source = "paddleocr-placeholder" if placeholder_match else "paddleocr-existing-prompt"
         left, top, right, bottom = [float(value) for value in bounds]
         x = rect.left + ((left + right) / 2)
         y = rect.top + ((top + bottom) / 2)
-        if x <= rect.left or x >= rect.right or y <= rect.top + 140 or y >= rect.bottom:
+        lower_safe_top = rect.top + max(140, int((rect.bottom - rect.top) * 0.55))
+        if x <= rect.left or x >= rect.right or y <= lower_safe_top or y >= rect.bottom:
             continue
-        matches.append({"x": x, "y": y, "text": text[:160], "confidence": confidence, "bottom": bottom})
+        matches.append({"x": x, "y": y, "text": text[:160], "confidence": confidence, "bottom": bottom, "source": source})
     if not matches:
         print("ARENA_STAGE5_OCR_PLACEHOLDER_NOT_FOUND: items=" + str(len(items)), flush=True)
         return None
@@ -482,6 +569,7 @@ def composer_point_from_local_ocr(rect, image_path):
     return chosen
 
 def ensure_pywinauto_input():
+    progress_event("stage5", "s5-02", "running", "بررسی import و نصب خودکار در صورت نیاز")
     local = os.environ.get("LOCALAPPDATA", "")
     python_path = os.environ.get("WINDOWS_AGENT_OCR_PYTHON", "") or os.path.join(local, "Windows-Agent", "vision", ".venv", "Scripts", "python.exe")
     if not os.path.isfile(python_path):
@@ -521,6 +609,7 @@ else:
 '''
     with open(helper_path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(helper)
+    progress_event("stage5", "s5-02", "done", "pywinauto آماده است")
     return python_path, helper_path
 
 UIA_PASTE_SCRIPT = r'''$ErrorActionPreference = "Stop"
@@ -538,11 +627,21 @@ public static class Stage5Native {
 }
 "@
 
+function Progress-Step([string]$id, [string]$status, [string]$detail) {
+    $script:CurrentProgressStep = $id
+    $event = @{ id=$id; status=$status; detail=$detail; at=(Get-Date -Format "HH:mm:ss") } | ConvertTo-Json -Compress
+    Add-Content -LiteralPath $env:PROGRESS_PATH -Value $event -Encoding UTF8
+}
+trap {
+    if ($script:CurrentProgressStep) { Progress-Step $script:CurrentProgressStep "failed" $_.Exception.Message }
+    break
+}
 function Input-Action([Parameter(ValueFromRemainingArguments=$true)][string[]]$ActionArgs) {
     $inputOutput = & $env:INPUT_PYTHON $env:INPUT_HELPER @ActionArgs 2>&1
     if ($LASTEXITCODE -ne 0) { throw ("pywinauto input failed: " + (($inputOutput | Out-String).Trim())) }
 }
 function Submit-VerifiedPrompt([IntPtr]$hwnd) {
+    Progress-Step "s5-17" "running" "کنترل foreground/modifiers و guard ارسال تکراری"
     if ([Stage5Native]::GetForegroundWindow() -ne $hwnd) { throw "Target Chrome lost foreground immediately before Enter; submit was not attempted" }
     foreach ($vk in @(0x10, 0x11, 0x12)) {
         if (([Stage5Native]::GetAsyncKeyState($vk) -band 0x8000) -ne 0) { throw "Shift/Ctrl/Alt is physically down; Enter was not attempted" }
@@ -551,8 +650,11 @@ function Submit-VerifiedPrompt([IntPtr]$hwnd) {
     Start-Sleep -Milliseconds 180
     if ([Stage5Native]::GetForegroundWindow() -ne $hwnd) { throw "Target Chrome lost foreground after verification; Enter was not attempted" }
     [IO.File]::WriteAllText($env:SUBMIT_GUARD_PATH, ("enter-attempted:" + $env:PROMPT_SHA256), [Text.UTF8Encoding]::new($false))
+    Progress-Step "s5-17" "done" "enter-attempted guard پیش از ورودی ثبت شد"
+    Progress-Step "s5-18" "running" "ارسال دقیقاً یک Enter"
     Input-Action press enter
     [IO.File]::WriteAllText($env:SUBMIT_GUARD_PATH, ("submitted:" + $env:PROMPT_SHA256), [Text.UTF8Encoding]::new($false))
+    Progress-Step "s5-18" "done" "one Enter sent; submitted guard ثبت شد"
     Write-Output "ARENA_STAGE5_SINGLE_ENTER_SENT"
 }
 
@@ -641,6 +743,7 @@ if ([Stage5Native]::GetForegroundWindow() -ne $hwnd) { throw "Chrome could not b
 $window = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
 if (-not $window) { throw "Chrome UI Automation root was not available; paste was not attempted" }
 $windowRect = $window.Current.BoundingRectangle
+Progress-Step "s5-06" "running" "اسکن UI Automation و fallback معنایی OCR"
 $all = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
 $candidates = @()
 foreach ($element in $all) {
@@ -692,7 +795,8 @@ if ($candidates.Count -eq 0 -and $env:ARENA_OCR_X -and $env:ARENA_OCR_Y) {
             $ocrElement = [System.Windows.Automation.AutomationElement]::FromPoint($ocrPoint)
             if (-not $ocrElement) { $ocrElement = $window }
             $ocrRect = [System.Windows.Rect]::new($ocrX - 3, $ocrY - 3, 6, 6)
-            $candidates = @([pscustomobject]@{ Element=$ocrElement; Rect=$ocrRect; Score=5000.0; Type="OCR.Placeholder"; Name=$env:ARENA_OCR_TEXT; Id=""; Source="paddleocr-placeholder" })
+            $ocrSource = if ($env:ARENA_OCR_SOURCE) { $env:ARENA_OCR_SOURCE } else { "paddleocr-placeholder" }
+            $candidates = @([pscustomobject]@{ Element=$ocrElement; Rect=$ocrRect; Score=5000.0; Type="OCR.Semantic"; Name=$env:ARENA_OCR_TEXT; Id=""; Source=$ocrSource })
             Write-Output ("ARENA_STAGE5_OCR_CANDIDATE=" + [int]$ocrX + "," + [int]$ocrY)
         }
     } catch {
@@ -707,6 +811,7 @@ for ($candidateIndex = 0; $candidateIndex -lt [Math]::Min(8, $candidates.Count);
 }
 if ($candidates.Count -eq 0) { throw "No safe Arena composer or composer placeholder was exposed by Chrome UI Automation; paste was not attempted" }
 $chosen = $candidates[0]
+Progress-Step "s5-06" "done" ("source=" + $chosen.Source + "; candidates=" + $candidates.Count)
 if ($chosen.Source -eq "editable-role" -and $candidates.Count -gt 1 -and $candidates[1].Source -eq "editable-role" -and [Math]::Abs($chosen.Score - $candidates[1].Score) -lt 12) {
     throw "Editable composer detection was ambiguous; paste was not attempted"
 }
@@ -716,6 +821,7 @@ $x = [int]($composerRect.Left + ($composerRect.Width / 2))
 $y = [int]($composerRect.Top + ([Math]::Min($composerRect.Height - 10, [Math]::Max(14, $composerRect.Height / 2))))
 Write-Output ("ARENA_STAGE5_COMPOSER_TYPE=" + $chosen.Type)
 Write-Output ("ARENA_STAGE5_COMPOSER_RECT=" + [int]$composerRect.Left + "," + [int]$composerRect.Top + "," + [int]$composerRect.Width + "," + [int]$composerRect.Height)
+Progress-Step "s5-07" "running" "کلیک و کنترل foreground/focus"
 try { $composer.SetFocus() } catch {}
 Start-Sleep -Milliseconds 250
 Input-Action click ([string][int]$x) ([string][int]$y)
@@ -723,7 +829,7 @@ Start-Sleep -Milliseconds 450
 $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
 if ($env:FOCUS_SHOT_PATH) { Save-Shot $env:FOCUS_SHOT_PATH }
 $focusViaUia = Focus-Belongs-To $focused $composer $x $y
-$focusViaOcr = ($chosen.Source -eq "paddleocr-placeholder") -and ([Stage5Native]::GetForegroundWindow() -eq $hwnd)
+$focusViaOcr = ([string]$chosen.Source).StartsWith("paddleocr-") -and ([Stage5Native]::GetForegroundWindow() -eq $hwnd)
 # در Chromeهایی که accessibility tree صفحه را منتشر نمی‌کنند، عنصر فوکوس‌شده
 # الزاماً با عنصر FromPoint قابل مقایسه نیست. در مسیر OCR فقط foreground بودن همان
 # Chrome و خارج‌بودن از omnibox پذیرفته می‌شود؛ سپس SelectAll/Copy پیش از Paste
@@ -733,50 +839,72 @@ Write-Output ("ARENA_STAGE5_FOCUS_PROOF_UIA=" + [bool]$focusViaUia)
 Write-Output ("ARENA_STAGE5_FOCUS_PROOF_OCR=" + [bool]$focusViaOcr)
 Write-Output ("ARENA_STAGE5_FOCUS_SAFE_BEFORE_PASTE=" + [bool]$focusSafe)
 if (-not $focusSafe) { throw "The focused element could not be safely associated with the Arena composer; paste was not attempted" }
+Progress-Step "s5-07" "done" ("uia=" + [bool]$focusViaUia + "; ocr=" + [bool]$focusViaOcr)
 
 # بازیابی امن پس از خطای گزارش‌گیری: پیش از هر Paste بررسی می‌شود آیا متن همین حالا
 # کامل داخل composer است. در این حالت مرحله بدون Ctrl+V دوم موفق اعلام می‌شود.
 $prompt = [IO.File]::ReadAllText($env:PROMPT_FILE)
 $expectedNormalized = Comparable-ComposerText $prompt
+Progress-Step "s5-08" "running" "ثبت sentinel تصادفی در Clipboard"
 $preflightSentinel = "__ARENA_STAGE5_PREFLIGHT_$([Guid]::NewGuid().ToString('N'))__"
 Set-Clipboard -Value $preflightSentinel
+if ([string](Get-Clipboard -Raw) -ne $preflightSentinel) { throw "Clipboard sentinel round-trip failed" }
+Progress-Step "s5-08" "done" "sentinel بدون افشای محتوا بازیابی شد"
+Progress-Step "s5-09" "running" "یک Ctrl+A/C برای preflight"
 Input-Action hotkey ctrl a
 Start-Sleep -Milliseconds 120
 Input-Action hotkey ctrl c
 Start-Sleep -Milliseconds 350
 $currentCopied = [string](Get-Clipboard -Raw)
 $currentNormalized = Comparable-ComposerText $currentCopied
+Progress-Step "s5-09" "done" ("copied-length=" + $currentCopied.Length)
+Progress-Step "s5-10" "running" "طبقه‌بندی empty / exact / conflict"
 Write-Output ("ARENA_STAGE5_PREFLIGHT_LENGTHS=expected:" + $expectedNormalized.Length + ";copied:" + $currentNormalized.Length)
 Write-Output ("ARENA_STAGE5_PREFLIGHT_HASHES=expected:" + (Text-Sha256 $expectedNormalized) + ";copied:" + (Text-Sha256 $currentNormalized))
 Input-Action press end
 if ($currentNormalized -eq $expectedNormalized) {
+    Progress-Step "s5-10" "done" "exact: Prompt کامل از قبل حاضر است"
+    foreach ($skipId in @("s5-11","s5-12","s5-13","s5-14","s5-15","s5-16")) { Progress-Step $skipId "done" "بازیابی امن: Prompt موجود exact بود؛ Paste دوباره انجام نشد" }
     Write-Output "ARENA_STAGE5_ALREADY_PRESENT_VERIFIED"
     Submit-VerifiedPrompt $hwnd
+    Progress-Step "s5-19" "running" "ثبت تصویر و result نهایی"
     Start-Sleep -Seconds 3
     Save-Shot $env:SHOT_PATH
     [IO.File]::WriteAllText($env:RESULT_PATH, "verified-existing-submitted", [Text.UTF8Encoding]::new($false))
+    Progress-Step "s5-19" "done" ("verified-existing-submitted; screenshot=" + $env:SHOT_PATH)
     Write-Output "ARENA_STAGE5_EXISTING_PROMPT_SUBMITTED"
     exit 0
 }
 if ($currentCopied -ne $preflightSentinel -and $currentNormalized.Length -gt 0) {
     throw "The verified composer already contains different text; paste was not attempted"
 }
+Progress-Step "s5-10" "done" "empty: composer خالی تأیید شد"
 Write-Output "ARENA_STAGE5_COMPOSER_EMPTY_VERIFIED"
 
+Progress-Step "s5-11" "running" "قرار دادن Prompt کامل در Clipboard و کنترل length/SHA-256"
 Get-Content -Raw -LiteralPath $env:PROMPT_FILE | Set-Clipboard
 Start-Sleep -Milliseconds 250
+$clipboardPrompt = [string](Get-Clipboard -Raw)
+if ((Text-Sha256 $clipboardPrompt) -ne (Text-Sha256 $prompt) -or $clipboardPrompt.Length -ne $prompt.Length) { throw "Full Prompt Clipboard length/hash verification failed" }
+Progress-Step "s5-11" "done" ("length=" + $clipboardPrompt.Length + "; sha256=" + (Text-Sha256 $clipboardPrompt))
+Progress-Step "s5-12" "running" "ارسال دقیقاً یک Ctrl+V"
 Input-Action hotkey ctrl v
+Progress-Step "s5-12" "done" "one Ctrl+V sent"
 Write-Output "ARENA_STAGE5_SINGLE_PASTE_SENT"
 Start-Sleep -Milliseconds 2600
+Progress-Step "s5-13" "running" "ثبت تصویر بعد از Paste و پیش از Enter"
 if ($env:PASTE_SHOT_PATH) { Save-Shot $env:PASTE_SHOT_PATH }
+Progress-Step "s5-13" "done" $env:PASTE_SHOT_PATH
+Progress-Step "s5-14" "running" "بازبینی foreground/focus بعد از Paste"
 $focusedAfter = [System.Windows.Automation.AutomationElement]::FocusedElement
 $focusAfterViaUia = Focus-Belongs-To $focusedAfter $composer $x $y
-$focusAfterViaOcr = ($chosen.Source -eq "paddleocr-placeholder") -and ([Stage5Native]::GetForegroundWindow() -eq $hwnd)
+$focusAfterViaOcr = ([string]$chosen.Source).StartsWith("paddleocr-") -and ([Stage5Native]::GetForegroundWindow() -eq $hwnd)
 $focusSafeAfter = (-not (Is-Omnibox $focusedAfter $windowRect.Top)) -and ($focusAfterViaUia -or $focusAfterViaOcr)
 Write-Output ("ARENA_STAGE5_FOCUS_AFTER_UIA=" + [bool]$focusAfterViaUia)
 Write-Output ("ARENA_STAGE5_FOCUS_AFTER_OCR=" + [bool]$focusAfterViaOcr)
 Write-Output ("ARENA_STAGE5_FOCUS_SAFE_AFTER_PASTE=" + [bool]$focusSafeAfter)
 if (-not $focusSafeAfter) { throw "Focus left the verified Arena composer after the single paste; paste was not repeated" }
+Progress-Step "s5-14" "done" ("uia=" + [bool]$focusAfterViaUia + "; ocr=" + [bool]$focusAfterViaOcr)
 
 $promptCanonical = Canonical $prompt
 $uiaCanonical = Canonical ((Element-Text $focusedAfter) + " " + (Element-Text $composer))
@@ -790,6 +918,7 @@ if ($probeLength -gt 0) {
 }
 Write-Output ("ARENA_STAGE5_UIA_PROBE=" + [bool]$probeHit)
 
+Progress-Step "s5-15" "running" "Copy-back مستقل با Ctrl+A/C"
 $sentinel = "__ARENA_STAGE5_VERIFY_$([Guid]::NewGuid().ToString('N'))__"
 Set-Clipboard -Value $sentinel
 Input-Action hotkey ctrl a
@@ -797,6 +926,8 @@ Start-Sleep -Milliseconds 120
 Input-Action hotkey ctrl c
 Start-Sleep -Milliseconds 450
 $copied = [string](Get-Clipboard -Raw)
+Progress-Step "s5-15" "done" ("copied-length=" + $copied.Length)
+Progress-Step "s5-16" "running" "مقایسه length/hash/normalized equality"
 $expectedRawNormalized = $prompt -replace '\r', ''
 $copiedRawNormalized = $copied -replace '\r', ''
 $expectedNormalized = Comparable-ComposerText $prompt
@@ -808,10 +939,13 @@ Write-Output ("ARENA_STAGE5_COMPOSER_EQUIVALENT=" + [bool]$composerEquivalent)
 Write-Output ("ARENA_STAGE5_VERIFY_LENGTHS=expected:" + $expectedNormalized.Length + ";copied:" + $copiedNormalized.Length)
 Write-Output ("ARENA_STAGE5_VERIFY_HASHES=expected:" + (Text-Sha256 $expectedNormalized) + ";copied:" + (Text-Sha256 $copiedNormalized))
 if (-not $composerEquivalent) { throw "The composer selection did not match the prompt after normalization of contenteditable boundary whitespace; paste and Enter were not repeated" }
+Progress-Step "s5-16" "done" ("normalized-length=" + $expectedNormalized.Length + "; sha256=" + (Text-Sha256 $expectedNormalized))
 Submit-VerifiedPrompt $hwnd
+Progress-Step "s5-19" "running" "ثبت تصویر و result نهایی"
 Start-Sleep -Seconds 3
 Save-Shot $env:SHOT_PATH
 [IO.File]::WriteAllText($env:RESULT_PATH, "verified-pasted-submitted", [Text.UTF8Encoding]::new($false))
+Progress-Step "s5-19" "done" ("verified-pasted-submitted; screenshot=" + $env:SHOT_PATH)
 Write-Output "ARENA_STAGE5_PASTE_VERIFIED_AND_SUBMITTED"
 '''
 
@@ -822,6 +956,7 @@ try:
     expected_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     if expected_hash != read_state().get("promptSha256"):
         raise RuntimeError("هش Prompt ذخیره‌شده با پاسخ API تطبیق ندارد")
+    progress_event("stage5", "s5-01", "done", "decision و SHA-256 معتبر است")
     submit_guard_path = os.path.join(ROOT, "stage5-submit-guard.txt")
     try:
         with open(submit_guard_path, "r", encoding="utf-8") as handle:
@@ -831,6 +966,7 @@ try:
     if prior_submit_guard in ("enter-attempted:" + expected_hash, "submitted:" + expected_hash):
         raise RuntimeError("برای همین Prompt قبلاً Enter ارسال یا تلاش شده است؛ برای جلوگیری از ارسال تکراری مرحله دوباره اجرا نشد")
     input_python, input_helper = ensure_pywinauto_input()
+    progress_event("stage5", "s5-03", "running", "جست‌وجوی HWND پنجره Chrome Arena")
     target = find_chrome_window()
     if not target:
         raise RuntimeError("پنجره واقعی Chrome پیدا نشد؛ هیچ Paste انجام نشد")
@@ -839,9 +975,14 @@ try:
     user32.ShowWindow(hwnd, 9)
     user32.SetForegroundWindow(hwnd)
     time.sleep(0.8)
+    progress_event("stage5", "s5-03", "done", "Chrome Arena foreground شد؛ HWND=" + str(hwnd))
+    progress_event("stage5", "s5-04", "running", "ثبت تصویر پنجره واقعی Chrome")
     ocr_shot_path = os.path.join(ROOT, "stage5-before-paste-ocr.png")
     capture_chrome_for_ocr(rect, ocr_shot_path)
-    ocr_point = composer_point_from_local_ocr(rect, ocr_shot_path)
+    progress_event("stage5", "s5-04", "done", ocr_shot_path)
+    progress_event("stage5", "s5-05", "running", "اجرای helper محلی PaddleOCR")
+    ocr_point = composer_point_from_local_ocr(rect, ocr_shot_path, prompt)
+    progress_event("stage5", "s5-05", "done" if ocr_point else "failed", (ocr_point.get("source") + ": " + ocr_point.get("text", "")[:80]) if ocr_point else "هیچ placeholder یا بخش شناخته‌شده Prompt پیدا نشد")
     script_path = os.path.join(ROOT, "stage5-uia-paste.ps1")
     with open(script_path, "w", encoding="utf-8-sig", newline="\n") as handle:
         handle.write(UIA_PASTE_SCRIPT)
@@ -868,6 +1009,8 @@ try:
         "ARENA_OCR_X": str(ocr_point["x"]) if ocr_point else "",
         "ARENA_OCR_Y": str(ocr_point["y"]) if ocr_point else "",
         "ARENA_OCR_TEXT": str(ocr_point["text"]) if ocr_point else "",
+        "ARENA_OCR_SOURCE": str(ocr_point["source"]) if ocr_point else "",
+        "PROGRESS_PATH": progress_path("stage5"),
     })
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File", script_path], env=env, text=True, capture_output=True, timeout=60, creationflags=flags)
@@ -900,25 +1043,39 @@ try:
     print(("ARENA_EXISTING_PROMPT_SUBMITTED" if recovered else "ARENA_PROMPT_PASTED_AND_SUBMITTED") + ": sha256=" + expected_hash + " chars=" + str(len(prompt)), flush=True)
     print("ARENA_STAGE5_DIAGNOSTICS: " + diagnostics, flush=True)
 except Exception as exc:
+    fail_current_progress("stage5", str(exc))
     write_state(paste="failed", pasteVerified=False, submit="failed", message="مرحله Paste/Submit امن متوقف شد؛ Paste یا Enter تکرار نمی‌شود: " + str(exc))
     raise
 `;
 const SUBMIT_CODE = String.raw`${ROOT_SETUP}
 import hashlib
 
-state = read_state()
-prompt_path = os.path.join(ROOT, "next-prompt.txt")
+reset_progress("stage6")
+current_step = "s6-01"
+progress_event("stage6", current_step, "running", "خواندن state، Prompt و SHA-256")
 try:
+    state = read_state()
+    prompt_path = os.path.join(ROOT, "next-prompt.txt")
     with open(prompt_path, "r", encoding="utf-8") as handle:
         prompt = handle.read()
-except OSError as exc:
-    raise RuntimeError("فایل Prompt برای بررسی وضعیت ارسال پیدا نشد: " + str(exc))
-digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-if state.get("submit") == "done" and state.get("lastSubmittedPromptSha256") == digest:
+    digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    progress_event("stage6", current_step, "done", "length=" + str(len(prompt)) + "; sha256=" + digest)
+
+    current_step = "s6-02"
+    progress_event("stage6", current_step, "running", "تطبیق submit=done و lastSubmittedPromptSha256")
+    if state.get("submit") != "done" or state.get("lastSubmittedPromptSha256") != digest:
+        raise RuntimeError("مرحله ۵ ارسال تأییدشده‌ای برای این Prompt ثبت نکرده است")
+    progress_event("stage6", current_step, "done", "ثبت مرحله ۵ دقیقاً با هش فعلی منطبق است")
+
+    current_step = "s6-03"
+    progress_event("stage6", current_step, "running", "این سلول هیچ کتابخانه ورودی یا فرمان صفحه‌کلید اجرا نمی‌کند")
+    progress_event("stage6", current_step, "done", "NO-INPUT: بدون Ctrl+V و بدون Enter")
     print("ARENA_STAGE6_NOOP_ALREADY_SUBMITTED_IN_STAGE5: sha256=" + digest, flush=True)
-    write_state(message="Prompt در مرحله ۵ با یک Enter ارسال شده است؛ مرحله ۶ برای جلوگیری از ارسال تکراری هیچ کلیدی نزد.")
-else:
-    raise RuntimeError("مرحله ۵ ارسال تأییدشده‌ای برای این Prompt ثبت نکرده است؛ مرحله ۶ مستقل عمداً Enter نمی‌زند")
+    write_state(message="Prompt در مرحله ۵ با یک Enter ارسال شده است؛ مرحله ۶ فقط state/hash را خواند و هیچ کلیدی نزد.")
+except Exception as exc:
+    progress_event("stage6", current_step, "failed", str(exc))
+    write_state(submit="failed", message="کنترل بدون ورودی مرحله ۶ متوقف شد: " + str(exc))
+    raise
 `;
 
 export interface ArenaApiNotebookCellTemplate {
