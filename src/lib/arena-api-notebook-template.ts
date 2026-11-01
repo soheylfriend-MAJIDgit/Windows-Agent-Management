@@ -562,7 +562,9 @@ function Canonical([string]$value) {
 function Comparable-ComposerText([string]$value) {
     if ($null -eq $value) { return "" }
     $normalized = ([string]$value).Normalize([Text.NormalizationForm]::FormC)
-    $normalized = $normalized.Replace("`r`n", "`n").Replace("`r", "`n").Replace([string][char]0x00A0, " ")
+    $cr = [string][char]13
+    $lf = [string][char]10
+    $normalized = $normalized.Replace(($cr + $lf), $lf).Replace($cr, $lf).Replace([string][char]0x00A0, " ")
     $normalized = $normalized -replace '[\u200B\u200C\u200D\u200E\u200F\uFEFF]', ''
     # contenteditable در زمان Copy ممکن است فقط یک newline یا فاصله مرزی اضافه کند.
     # اختلاف داخلی، نشانه‌گذاری یا واژه‌ها همچنان پذیرفته نمی‌شود.
