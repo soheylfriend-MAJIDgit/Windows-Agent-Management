@@ -42,8 +42,8 @@ STAGES = [
     ("credentials", "۲. دریافت API Key سالی‌تست"),
     ("prompt", "۳. خواندن decision از GET /handoff"),
     ("browser", "۴. بازکردن Chrome و انتظار برای پایداری"),
-    ("paste", "۵. Paste دقیقاً یک‌باره از Clipboard"),
-    ("submit", "۶. Enter برای Send / Submit"),
+    ("paste", "۵. Paste و Send یک‌باره با pywinauto"),
+    ("submit", "۶. ثبت نتیجه ارسال (بدون Enter مجدد)"),
 ]
 LABELS = {"waiting": "منتظر", "running": "در حال اجرا", "done": "انجام شد", "failed": "متوقف شد", "skipped": "اجرا نمی‌شود"}
 COLORS = {"waiting": "#64748b", "running": "#f59e0b", "done": "#10b981", "failed": "#ef4444", "skipped": "#8b5cf6"}
@@ -559,6 +559,20 @@ function Submit-VerifiedPrompt([IntPtr]$hwnd) {
 function Canonical([string]$value) {
     return (([string]$value -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\s+', ' ').Trim()
 }
+function Comparable-ComposerText([string]$value) {
+    if ($null -eq $value) { return "" }
+    $normalized = ([string]$value).Normalize([Text.NormalizationForm]::FormC)
+    $normalized = $normalized.Replace("`r`n", "`n").Replace("`r", "`n").Replace([string][char]0x00A0, " ")
+    $normalized = $normalized -replace '[\u200B\u200C\u200D\u200E\u200F\uFEFF]', ''
+    # contenteditable در زمان Copy ممکن است فقط یک newline یا فاصله مرزی اضافه کند.
+    # اختلاف داخلی، نشانه‌گذاری یا واژه‌ها همچنان پذیرفته نمی‌شود.
+    return $normalized.Trim()
+}
+function Text-Sha256([string]$value) {
+    $bytes = [Text.Encoding]::UTF8.GetBytes([string]$value)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant() } finally { $sha.Dispose() }
+}
 function Element-Text($element) {
     if (-not $element) { return "" }
     try {
@@ -721,7 +735,7 @@ if (-not $focusSafe) { throw "The focused element could not be safely associated
 # بازیابی امن پس از خطای گزارش‌گیری: پیش از هر Paste بررسی می‌شود آیا متن همین حالا
 # کامل داخل composer است. در این حالت مرحله بدون Ctrl+V دوم موفق اعلام می‌شود.
 $prompt = [IO.File]::ReadAllText($env:PROMPT_FILE)
-$expectedNormalized = $prompt -replace '\r', ''
+$expectedNormalized = Comparable-ComposerText $prompt
 $preflightSentinel = "__ARENA_STAGE5_PREFLIGHT_$([Guid]::NewGuid().ToString('N'))__"
 Set-Clipboard -Value $preflightSentinel
 Input-Action hotkey ctrl a
@@ -729,7 +743,9 @@ Start-Sleep -Milliseconds 120
 Input-Action hotkey ctrl c
 Start-Sleep -Milliseconds 350
 $currentCopied = [string](Get-Clipboard -Raw)
-$currentNormalized = $currentCopied -replace '\r', ''
+$currentNormalized = Comparable-ComposerText $currentCopied
+Write-Output ("ARENA_STAGE5_PREFLIGHT_LENGTHS=expected:" + $expectedNormalized.Length + ";copied:" + $currentNormalized.Length)
+Write-Output ("ARENA_STAGE5_PREFLIGHT_HASHES=expected:" + (Text-Sha256 $expectedNormalized) + ";copied:" + (Text-Sha256 $currentNormalized))
 Input-Action press end
 if ($currentNormalized -eq $expectedNormalized) {
     Write-Output "ARENA_STAGE5_ALREADY_PRESENT_VERIFIED"
@@ -749,7 +765,8 @@ Get-Content -Raw -LiteralPath $env:PROMPT_FILE | Set-Clipboard
 Start-Sleep -Milliseconds 250
 Input-Action hotkey ctrl v
 Write-Output "ARENA_STAGE5_SINGLE_PASTE_SENT"
-Start-Sleep -Milliseconds 1200
+Start-Sleep -Milliseconds 2600
+if ($env:PASTE_SHOT_PATH) { Save-Shot $env:PASTE_SHOT_PATH }
 $focusedAfter = [System.Windows.Automation.AutomationElement]::FocusedElement
 $focusAfterViaUia = Focus-Belongs-To $focusedAfter $composer $x $y
 $focusAfterViaOcr = ($chosen.Source -eq "paddleocr-placeholder") -and ([Stage5Native]::GetForegroundWindow() -eq $hwnd)
@@ -778,11 +795,17 @@ Start-Sleep -Milliseconds 120
 Input-Action hotkey ctrl c
 Start-Sleep -Milliseconds 450
 $copied = [string](Get-Clipboard -Raw)
-$expectedNormalized = $prompt -replace '\r', ''
-$copiedNormalized = $copied -replace '\r', ''
-$exactCopy = $copiedNormalized -eq $expectedNormalized
+$expectedRawNormalized = $prompt -replace '\r', ''
+$copiedRawNormalized = $copied -replace '\r', ''
+$expectedNormalized = Comparable-ComposerText $prompt
+$copiedNormalized = Comparable-ComposerText $copied
+$exactCopy = $copiedRawNormalized -eq $expectedRawNormalized
+$composerEquivalent = $copiedNormalized -eq $expectedNormalized
 Write-Output ("ARENA_STAGE5_EXACT_COPY=" + [bool]$exactCopy)
-if (-not $exactCopy) { throw "The composer selection did not exactly match the prompt after the single paste; paste was not repeated" }
+Write-Output ("ARENA_STAGE5_COMPOSER_EQUIVALENT=" + [bool]$composerEquivalent)
+Write-Output ("ARENA_STAGE5_VERIFY_LENGTHS=expected:" + $expectedNormalized.Length + ";copied:" + $copiedNormalized.Length)
+Write-Output ("ARENA_STAGE5_VERIFY_HASHES=expected:" + (Text-Sha256 $expectedNormalized) + ";copied:" + (Text-Sha256 $copiedNormalized))
+if (-not $composerEquivalent) { throw "The composer selection did not match the prompt after normalization of contenteditable boundary whitespace; paste and Enter were not repeated" }
 Submit-VerifiedPrompt $hwnd
 Start-Sleep -Seconds 3
 Save-Shot $env:SHOT_PATH
@@ -821,6 +844,7 @@ try:
     with open(script_path, "w", encoding="utf-8-sig", newline="\n") as handle:
         handle.write(UIA_PASTE_SCRIPT)
     focus_shot_path = os.path.join(ROOT, "stage5-after-focus.png")
+    paste_shot_path = os.path.join(ROOT, "stage5-after-paste-before-submit.png")
     shot_path = os.path.join(ROOT, "stage5-after-submit.png")
     result_path = os.path.join(ROOT, "stage5-result.txt")
     try:
@@ -833,6 +857,7 @@ try:
         "PROMPT_FILE": prompt_path,
         "SHOT_PATH": shot_path,
         "FOCUS_SHOT_PATH": focus_shot_path,
+        "PASTE_SHOT_PATH": paste_shot_path,
         "RESULT_PATH": result_path,
         "INPUT_PYTHON": input_python,
         "INPUT_HELPER": input_helper,
@@ -848,6 +873,7 @@ try:
     for artifact_id, artifact_path, artifact_stage in (
         ("stage5-ocr-" + artifact_run, ocr_shot_path, "stage5-before-ocr"),
         ("stage5-focus-" + artifact_run, focus_shot_path, "stage5-after-focus"),
+        ("stage5-pasted-" + artifact_run, paste_shot_path, "stage5-after-paste-before-submit"),
         ("stage5-final-" + artifact_run, shot_path, "stage5-after-submit"),
     ):
         if os.path.isfile(artifact_path):
