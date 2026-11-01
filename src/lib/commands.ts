@@ -453,7 +453,7 @@ export async function findOnlineCommandAgent(requiredCapability: string | string
     );
     const lastSeenHint = latest
       ? `آخرین Heartbeat از ${latest.agent_name}${latest.agent_version ? ` نسخه ${latest.agent_version}` : ""} در ${tehranHeartbeatTime(latest.last_seen_at)} ثبت شده است${latest.key_status !== "active" ? `؛ وضعیت کلید: ${latest.key_status}` : latest.expires_at && latest.expires_at <= new Date().toISOString() ? "؛ کلید منقضی شده است" : ""}.`
-      : "هنوز هیچ Heartbeat ثبت‌شده‌ای در D1 وجود ندارد.";
+      : "هنوز هیچ Heartbeat ثبت‌شده‌ای در PostgreSQL وجود ندارد.";
     throw new AppError("Windows Agent آنلاین و آماده‌ی دریافت فرمان پیدا نشد.", {
       status: 409,
       code: "command_agent_offline",
@@ -512,7 +512,7 @@ export async function commandAgentPreflight(requiredCapability: string | string[
     checks: [
       { key: "heartbeat", ok: true, label: "Heartbeat تازه‌تر از ۹۰ ثانیه" },
       { key: "command_plane", ok: true, label: "مسیر دریافت فرمان فعال" },
-      { key: "d1_automations", ok: true, label: "دریافت اتوماسیون immutable از D1" },
+      { key: "d1_automations", ok: true, label: "دریافت اتوماسیون immutable از PostgreSQL" },
       { key: "scopes", ok: true, label: "scopeهای خواندن فرمان و ثبت نتیجه کامل" },
       { key: "mode", ok: true, label: agent.autoMode ? "حالت محلی Automatic؛ بدون پنجره Yes/No" : "حالت محلی Manual؛ نیازمند تأیید Yes/No" },
       { key: "availability", ok: !agent.busy, label: agent.busy ? `ایجنت مشغول است: ${agent.busy}` : "ایجنت برای claim فرمان آزاد است" },
@@ -578,7 +578,7 @@ export async function createManagedCommand(input: {
     {
       sql: `INSERT INTO command_events (command_id, seq, stage, level, message, data, created_at)
             VALUES (?, 0, 'queued', 'info', ?, '{}', ?)`,
-      params: [id, `فرمان برای ${target.agentName ?? target.agentId} در D1 ثبت شد.`, now],
+      params: [id, `فرمان برای ${target.agentName ?? target.agentId} در PostgreSQL ثبت شد.`, now],
     },
     {
       sql: `INSERT INTO events (kind, title, detail, job_name, created_at)
@@ -857,7 +857,7 @@ export async function appendCommandEvent(
     24_000,
   );
   const autoTrigger = row.auto_stop_on_anomaly === 1 && (levelValue === "fatal" || parsed.autoStop === true);
-  // ترتیب و زمان timeline بر اساس ساعت قابل‌اعتماد Cloudflare ثبت می‌شود؛
+  // ترتیب و زمان timeline بر اساس ساعت UTC قابل‌اعتماد سرور ثبت می‌شود؛
   // زمان گزارش‌شده‌ی ویندوز برای عیب‌یابی داخل data باقی می‌ماند.
   const now = new Date().toISOString();
   const queries = [

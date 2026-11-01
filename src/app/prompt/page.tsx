@@ -35,8 +35,8 @@ interface PromptResponse {
 }
 
 const RULES = [
-  "شناسه یکتا در D1، با نام اجرایی job_ و پسوند .py",
-  "کد D1 فقط استاندارد پایتون ۳.۹+؛ PaddleOCR از helper محلی و ایزوله Windows Agent",
+  "شناسه یکتا در PostgreSQL، با نام اجرایی job_ و پسوند .py",
+  "کد PostgreSQL فقط استاندارد پایتون ۳.۹+؛ PaddleOCR از helper محلی و ایزوله Windows Agent",
   "بدون input() و بدون کنسول تعاملی",
   "حداکثر ۶۰۰ ثانیه زمان اجرا",
   "بدون مسیر مطلق ویندوزی مثل C:\\Users\\...",
@@ -84,7 +84,7 @@ export default function PromptPage() {
   const jobs = useMemo(() => (jobsApi.data?.automations ?? []).map((automation) => ({
     name: `job_${automation.slug}.py`,
     status: automation.enabled ? "pending" as const : "error" as const,
-    statusNote: automation.enabled ? "نسخه فعال در D1" : "غیرفعال",
+    statusNote: automation.enabled ? "نسخه فعال در PostgreSQL" : "غیرفعال",
     docstring: automation.description ?? automation.name,
     commitDate: automation.updatedAt,
   })), [jobsApi.data]);
@@ -193,8 +193,8 @@ export default function PromptPage() {
         }
       />
 
-      <Banner tone="info" title="مسیر مستقیم D1 · Arena Bridge 7 آماده">
-        پرامپت و نسخه تازه در D1 ثبت می‌شود؛ مکان‌یابی پشتیبان با PaddleOCR محلی و توقف امن هنگام قطعی اینترنت نیازمند Windows Agent سازگار است.
+      <Banner tone="info" title="مسیر مستقیم PostgreSQL · Arena Bridge 7 آماده">
+        پرامپت و نسخه تازه در PostgreSQL ثبت می‌شود؛ مکان‌یابی پشتیبان با PaddleOCR محلی و توقف امن هنگام قطعی اینترنت نیازمند Windows Agent سازگار است.
       </Banner>
 
       <div className="split-grid">
@@ -204,7 +204,7 @@ export default function PromptPage() {
               <Icon name="send" size={17} />
               پرامپت جدید
             </h2>
-            <span className="card-head-sub">ثبت نسخه مستقیم در کاتالوگ D1</span>
+            <span className="card-head-sub">ثبت نسخه مستقیم در کاتالوگ PostgreSQL</span>
           </div>
 
           <form onSubmit={submit}>
@@ -232,7 +232,7 @@ export default function PromptPage() {
                 <div>
                   <strong>مسیر اختصاصی Arena آماده است</strong>
                   <p className="field-helper">
-                    مقصد ثابت: <bdi className="mono" dir="ltr">job_arena.py</bdi> در کاتالوگ D1. هر ارسال یک
+                    مقصد ثابت: <bdi className="mono" dir="ltr">job_arena.py</bdi> در کاتالوگ PostgreSQL. هر ارسال یک
                     نسخه و hash یکتا می‌سازد و اجرای پنل ویندوز را فعال می‌کند.
                   </p>
                 </div>
@@ -258,7 +258,7 @@ export default function PromptPage() {
                 <div className="preview-file">
                   فایل نهایی: <b>{previewName}</b>
                 </div>
-                <span className="field-helper">فقط حروف لاتین، عدد و زیرخط. این شناسه در کاتالوگ D1 ساخته می‌شود.</span>
+                <span className="field-helper">فقط حروف لاتین، عدد و زیرخط. این شناسه در کاتالوگ PostgreSQL ساخته می‌شود.</span>
               </div>
             ) : (
               <div className="field" style={{ marginTop: 12 }}>
@@ -267,7 +267,7 @@ export default function PromptPage() {
                   <option value="">یک کد را انتخاب کنید…</option>
                   {jobs.map((job) => (
                     <option key={job.name} value={job.name}>
-                      {job.name} — {job.status === "error" ? "غیرفعال" : "نسخه فعال D1"}
+                      {job.name} — {job.status === "error" ? "غیرفعال" : "نسخه فعال PostgreSQL"}
                     </option>
                   ))}
                 </select>
@@ -280,7 +280,7 @@ export default function PromptPage() {
                     </span>
                   </div>
                 ) : jobs.length === 0 && !jobsApi.loading ? (
-                  <span className="field-helper">هنوز کدی در D1 نیست؛ از حالت «کد جدید» شروع کنید یا انتقال اولیه را انجام دهید.</span>
+                  <span className="field-helper">هنوز کدی در PostgreSQL نیست؛ از حالت «کد جدید» شروع کنید یا انتقال اولیه را انجام دهید.</span>
                 ) : null}
               </div>
             )}
@@ -323,11 +323,11 @@ export default function PromptPage() {
                 </select>
                 <span className="field-helper">
                   پیام از طریق bot_api.json خود Windows Agent به مقصد پیش‌فرض ربات می‌رود؛ هیچ توکن تلگرامی وارد
-                  این سایت، D1 یا GitHub نمی‌شود.
+                  این سایت، PostgreSQL یا GitHub نمی‌شود.
                 </span>
                 <div className="callout" style={{ marginTop: 8 }}>
                   <strong>اصلاح خودکار شکست:</strong> اگر job_arena.py خطای جدی بدهد، ابتدا لاگ و اسکرین‌شات شکست در
-                  Google Drive ذخیره می‌شود؛ سپس برنامه گزینه No را برای نتیجه‌ی ناموفق می‌زند و تا سه بار تلاش می‌کند
+                  Vercel Blob ذخیره و متادیتای آن در PostgreSQL ثبت می‌شود؛ سپس برنامه گزینه No را برای نتیجه‌ی ناموفق می‌زند و تا سه بار تلاش می‌کند
                   پیام بررسی گزارش‌ها و بازنویسی کد را به ایجنت همکار برگرداند. اجرای موفق بدون پیام اصلاح ادامه می‌یابد.
                 </div>
               </div>
@@ -417,7 +417,7 @@ export default function PromptPage() {
               </button>
               <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
                 {submitting ? <span className="spinner" /> : <Icon name="send" size={15} />}
-                {submitting ? "در حال ثبت نسخه D1…" : mode === "arena" ? "ارسال به Arena از طریق ویندوز" : "ثبت و اجرا از طریق D1"}
+                {submitting ? "در حال ثبت نسخه PostgreSQL…" : mode === "arena" ? "ارسال به Arena از طریق ویندوز" : "ثبت و اجرا از طریق PostgreSQL"}
               </button>
             </div>
           </form>
@@ -436,12 +436,12 @@ export default function PromptPage() {
                   {promptModeMeta(result.mode).label}
                 </span>
                 <StatusChip status="pending" label="در انتظار اجرا" />
-                <span>هش نسخه D1: {result.commitSha.slice(0, 12)}</span>
+                <span>هش نسخه PostgreSQL: {result.commitSha.slice(0, 12)}</span>
               </div>
               <p className="field-helper">
                 {result.mode === "arena"
-                  ? "نسخه تازه job_arena.py در D1 فعال شد. پنل ویندوز همان نسخه را با بررسی SHA-256 می‌گیرد، Arena را باز می‌کند و نتیجه را گزارش می‌دهد."
-                  : "نسخه تازه در D1 فعال و برای Windows Agent صف شد؛ نتیجه در گزارش زنده اجرا دیده می‌شود."}
+                  ? "نسخه تازه job_arena.py در PostgreSQL فعال شد. پنل ویندوز همان نسخه را با بررسی SHA-256 می‌گیرد، Arena را باز می‌کند و نتیجه را گزارش می‌دهد."
+                  : "نسخه تازه در PostgreSQL فعال و برای Windows Agent صف شد؛ نتیجه در گزارش زنده اجرا دیده می‌شود."}
               </p>
               <div className="actions-inline">
                 <Link href="/codes" className="btn btn-small btn-primary">
@@ -466,7 +466,7 @@ export default function PromptPage() {
             </div>
             <ol className="steps">
               <li>
-                <strong>ثبت نسخه اختصاصی در D1</strong>
+                <strong>ثبت نسخه اختصاصی در PostgreSQL</strong>
                 متن و تنظیم گزارش داخل نسخه immutable از job_arena.py ثبت و SHA-256 آن محاسبه می‌شود.
               </li>
               <li>
@@ -515,7 +515,7 @@ export default function PromptPage() {
               </h2>
             </div>
             <p className="prose" style={{ fontSize: 12.3 }}>
-              اجرای دوباره یک نسخه واقعی تازه در D1 می‌سازد. Windows Agent فقط نسخه و SHA-256 ثبت‌شده در همان فرمان را اجرا می‌کند؛ Git یا <span className="mono">version.txt</span> در این مسیر نقشی ندارد.
+              اجرای دوباره یک نسخه واقعی تازه در PostgreSQL می‌سازد. Windows Agent فقط نسخه و SHA-256 ثبت‌شده در همان فرمان را اجرا می‌کند؛ Git یا <span className="mono">version.txt</span> در این مسیر نقشی ندارد.
             </p>
           </section>
         </aside>
@@ -538,7 +538,7 @@ export default function PromptPage() {
         {historyApi.loading && !historyApi.data ? (
           <div className="skeleton skeleton-line" />
         ) : history.length === 0 ? (
-          <EmptyState icon="send" title="هنوز پرامپتی فرستاده نشده" text="اولین پرامپت را از فرم بالا بفرستید؛ نسخه D1، وضعیت فرمان و نتیجه اینجا می‌آید." />
+          <EmptyState icon="send" title="هنوز پرامپتی فرستاده نشده" text="اولین پرامپت را از فرم بالا بفرستید؛ نسخه PostgreSQL، وضعیت فرمان و نتیجه اینجا می‌آید." />
         ) : (
           <div>
             {history.map((item) => {

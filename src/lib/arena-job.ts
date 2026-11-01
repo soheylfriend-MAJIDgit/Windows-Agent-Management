@@ -109,7 +109,7 @@ def run_hidden_powershell_file(script_text, *, extra_env=None, timeout=180, work
 
 
 def register_step_artifact(path, stage, kind="screenshot", mime_type="image/png"):
-    """فقط metadata قطعی را می‌فرستد؛ بایت تصویر همچنان بیرون D1 و در Drive می‌ماند."""
+    """فقط metadata قطعی را می‌فرستد؛ بایت تصویر همچنان بیرون PostgreSQL و در Drive می‌ماند."""
     if not path:
         return
     normalized = os.path.abspath(path)
@@ -1277,7 +1277,7 @@ function hardenArenaTyping(source: string): string {
       + source.slice(legacyCopyEnd);
   }
 
-  // فایل فعال D1 ممکن است markerهای Bridge 11/12 را داشته باشد اما بلوک verifier آن
+  // فایل فعال PostgreSQL ممکن است markerهای Bridge 11/12 را داشته باشد اما بلوک verifier آن
   // با فاصله‌گذاری یا آستانه‌ای متفاوت ذخیره شده باشد. به‌جای اتکا به تطبیق یک خط،
   // کل بلوک canonical/probe را بین دو anchor پایدار با نسخه Bridge 13 جایگزین می‌کنیم.
   const latestVerifierStart = VERIFIED_PASTE_LOOP.indexOf("        # contenteditable ممکن است");
@@ -1401,7 +1401,7 @@ function hardenArenaTyping(source: string): string {
     );
   }
   // Bridge 18: بلوک ارسال در همه نسخه‌های قبلی بدون اتکا به متن comment تعویض می‌شود.
-  // این کار نسخه فعال D1 را نیز که Bridge 17 در marker و Bridge 5 در بدنه دارد واقعاً ارتقا می‌دهد.
+  // این کار نسخه فعال PostgreSQL را نیز که Bridge 17 در marker و Bridge 5 در بدنه دارد واقعاً ارتقا می‌دهد.
   const submitEndAnchor = "\nif ($sent) { Write-Output 'ARENA_SENT_VERIFIED' }";
   const submitStart = source.indexOf("$sent = $false");
   const submitEnd = source.indexOf(submitEndAnchor, submitStart);

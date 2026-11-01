@@ -143,7 +143,7 @@ WINDOWS_AGENT_OCR_HELPER=%LOCALAPPDATA%\Windows-Agent\vision\paddle_ocr_helper.p
 - اگر hook تازه‌ای لازم است، diff جداگانه ارائه کن و پیش از اعمال از کاربر اجازه بگیر.
 - فایل helper و installer در زیرپوشه مستقل مخزن مادر نگهداری شوند؛ runtime آن‌ها فقط زیر LocalAppData نصب شود.
 - هیچ فایل تولیدی کنار `app.py` نوشته نشود.
-- کد D1 و ایجنت همکار حق تغییر `manager_client.py`، helper OCR یا فایل‌های پایه را ندارند.
+- کد PostgreSQL و ایجنت همکار حق تغییر `manager_client.py`، helper OCR یا فایل‌های پایه را ندارند.
 - GitHub Desktop و کنترل انسانی روش به‌روزرسانی کد پایه باقی می‌ماند.
 
 ## ۶. تست‌های پذیرش اجباری

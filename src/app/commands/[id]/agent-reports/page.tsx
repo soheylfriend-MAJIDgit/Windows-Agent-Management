@@ -161,7 +161,7 @@ export default function AgentReportsPage() {
               <span>{faNumber(report.meta.chars)} نویسه · SHA-256: <code dir="ltr">{report.meta.sha256.slice(0, 12)}…</code></span>
               <div className="actions-inline">
                 <button type="button" className="button secondary" onClick={() => downloadReport(report)}>دانلود Markdown</button>
-                {report.driveUrl ? <a className="button secondary" href={report.driveUrl} target="_blank" rel="noreferrer">بازکردن فایل در Drive</a> : <span className="artifact-pending">در انتظار لینک Drive</span>}
+                {report.driveUrl ? <a className="button secondary" href={report.driveUrl} target="_blank" rel="noreferrer">بازکردن فایل ذخیره‌شده</a> : <span className="artifact-pending">در انتظار Upload فایل به Blob</span>}
               </div>
             </footer>
           </article>

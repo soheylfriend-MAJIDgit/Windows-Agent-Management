@@ -35,7 +35,8 @@ export type IconName =
   | "shield"
   | "mail"
   | "layers"
-  | "inbox";
+  | "inbox"
+  | "image";
 
 interface IconProps extends Omit<SVGProps<SVGSVGElement>, "name"> {
   name: IconName;
@@ -266,6 +267,13 @@ const paths: Record<IconName, ReactNode> = {
     <>
       <path d="M4 13h4l1.5 2h5L16 13h4" />
       <path d="M5 4h14l2 9v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5Z" />
+    </>
+  ),
+  image: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <circle cx="8.5" cy="9" r="1.5" />
+      <path d="m4 17 5-5 3 3 2-2 6 5" />
     </>
   ),
 };

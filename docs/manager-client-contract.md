@@ -1,13 +1,13 @@
 # قرارداد اتصال `manager_client.py` به ایجنت مدیریت
 
-این سند نامه‌ی اجرایی ایجنت مدیریت به ایجنت مادر است. هدف، وصل‌کردن Windows Agent به Control Plane کلادفلر است؛ بدون خودبه‌روزرسانی و بدون نوشتن فایل کنار `app.py`.
+این سند نامه‌ی اجرایی ایجنت مدیریت به ایجنت مادر است. هدف، وصل‌کردن Windows Agent به Control Plane تولیدی Vercel است؛ بدون خودبه‌روزرسانی و بدون نوشتن فایل کنار `app.py`.
 
 ## مرز مسئولیت چهار ایجنت
 
 1. **ایجنت ویندوز:** برنامه‌ی در حال اجرا روی ویندوز؛ مجری فرمان، فرستنده‌ی Heartbeat، رخداد، نتیجه و metadata فایل‌ها.
 2. **ایجنت مادر:** سازنده و تنها نگهدارنده‌ی کد پایه‌ی ایجنت ویندوز (`app.py` و `run.bat`).
 3. **ایجنت همکار:** نویسنده‌ی `job_*.py`؛ بدون دسترسی به کد پایه‌ی ایجنت ویندوز.
-4. **ایجنت مدیریت:** سایت Cloudflare؛ پایش و فرماندهی ویندوز، کدنویسی و مدیریت کامل مخزن همکار، بدون تغییر خودکار کد پایه‌ی ایجنت ویندوز.
+4. **ایجنت مدیریت:** سایت Vercel؛ پایش و فرماندهی ویندوز، کدنویسی و مدیریت کامل مخزن همکار، بدون تغییر خودکار کد پایه‌ی ایجنت ویندوز.
 
 ## کار موردنیاز از ایجنت مادر
 
@@ -37,7 +37,7 @@ except ImportError:
 
 ```json
 {
-  "base_url": "https://windows-agent-management-cloudflare.soheylfriend.workers.dev/api/agent",
+  "base_url": "https://windows-agent-management.vercel.app/api/agent",
   "agent_key": "wam_agent_..."
 }
 ```
@@ -71,13 +71,16 @@ POST /heartbeat
     "run_single": true,
     "take_screenshot": true,
     "open_report": true,
-    "telegram_queue": true
+    "telegram_queue": true,
+    "vercel_blob_screenshot_upload": true,
+    "google_drive_artifacts": false
   },
   "state": {
     "auto_mode": false,
     "busy": null,
     "internet": true,
-    "drive": true
+    "manager_base": "vercel",
+    "drive": false
   },
   "message": "Windows Agent آماده است"
 }
@@ -152,6 +155,6 @@ api.status_note["manager"] = "وصل"  # «قطع»، «کلید نامعتبر�
 
 1. سایت در صفحه دیتابیس، Heartbeat ایجنت را حداکثر ۳۰ ثانیه پس از اجرا نشان دهد.
 2. با زدن «شروع تست اتصال»، Windows Agent درخواست را حداکثر پنج ثانیه بعد دریافت کند.
-3. پاسخ دقیق «سلام ایجنت مدیریت.» در D1 ثبت و وضعیت سایت «اتصال برقرار» شود.
+3. پاسخ دقیق «سلام ایجنت مدیریت.» در PostgreSQL ثبت و وضعیت سایت «اتصال برقرار» شود.
 4. بعد از غیرفعال‌کردن کلید، Heartbeat و تست با HTTP 401 رد شوند.
 5. نبود اینترنت یا سایت، UI و اجرای jobهای ویندوز را مختل نکند.

@@ -1,34 +1,12 @@
-import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { PrismaClient } from "@prisma/client";
 import { AppError } from "./errors";
 
-/** شکل حداقلی D1 تا بدون وابستگی به تایپ‌های Workers کامپایل شود. */
-export interface D1Result<T = unknown> {
-  success: boolean;
-  results?: T[];
-  meta?: { changes?: number; duration?: number; rows_read?: number; rows_written?: number };
-}
-
-export interface D1PreparedStatement {
-  bind(...values: unknown[]): D1PreparedStatement;
-  first<T = unknown>(colName?: string): Promise<T | null>;
-  all<T = unknown>(): Promise<D1Result<T>>;
-  run<T = unknown>(): Promise<D1Result<T>>;
-}
-
-export interface D1Database {
-  prepare(query: string): D1PreparedStatement;
-  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
-  exec(query: string): Promise<{ count: number; duration?: number }>;
-}
-
 export interface AppEnv {
-  DB?: D1Database;
+  DATABASE_URL?: string;
+  DIRECT_URL?: string;
+  BLOB_READ_WRITE_TOKEN?: string;
+  BLOB_STORE_ID?: string;
   GITHUB_TOKEN?: string;
-  GOOGLE_SERVICE_ACCOUNT_JSON?: string;
-  GOOGLE_SERVICE_ACCOUNT_JSON_B64?: string;
-  GOOGLE_DRIVE_LOGS_FOLDER_ID?: string;
-  GOOGLE_DRIVE_ERRORS_FOLDER_ID?: string;
-  GOOGLE_DRIVE_ROOT_FOLDER_ID?: string;
   MANAGER_PASSCODE?: string;
   AUTH_SECRET?: string;
   COLLAB_OWNER?: string;
@@ -40,105 +18,105 @@ export interface AppEnv {
   [key: string]: unknown;
 }
 
-let cachedEnv: AppEnv | null = null;
-
-export async function getEnv(): Promise<AppEnv> {
-  if (cachedEnv) return cachedEnv;
-  try {
-    const ctx = await getCloudflareContext({ async: true });
-    const env = (ctx?.env ?? {}) as AppEnv;
-    // فقط محیط واقعی را کش می‌کنیم؛ یک نتیجه‌ی خالی/خطا نباید برای همیشه بماند
-    // (مثلاً اولین فراخوانی پیش از آماده شدن bindingها).
-    if (Object.keys(env).length > 0) cachedEnv = env;
-    return env;
-  } catch {
-    return {};
-  }
+export interface DbResult {
+  success: boolean;
+  meta?: { changes?: number; duration?: number; rows_read?: number; rows_written?: number };
 }
 
-/** ابتدا binding کلادفلر، بعد process.env (برای اجرای محلی بدون wrangler). */
+type PrismaGlobal = typeof globalThis & { managementPrisma?: PrismaClient };
+const prismaGlobal = globalThis as PrismaGlobal;
+let schemaPromise: Promise<void> | null = null;
+
+/** متغیرهای Vercel و اجرای محلی فقط از محیط سرور خوانده می‌شوند. */
 export async function envVar(name: keyof AppEnv | string): Promise<string | undefined> {
-  const env = await getEnv();
-  const fromBinding = env[name];
-  if (typeof fromBinding === "string" && fromBinding.trim()) return fromBinding.trim();
-  const fromProcess = typeof process !== "undefined" ? process.env?.[name] : undefined;
-  if (fromProcess && fromProcess.trim()) return fromProcess.trim();
-  return undefined;
+  const value = typeof process !== "undefined" ? process.env?.[name] : undefined;
+  return value?.trim() || undefined;
 }
 
 export async function hasEnv(name: string): Promise<boolean> {
   return Boolean(await envVar(name));
 }
 
-/** D1؛ در صورت نبودن binding، خطای فارسی قابل‌فهم با راهنما. */
-export async function getDb(): Promise<D1Database> {
-  const env = await getEnv();
-  if (!env.DB) {
-    throw new AppError("پایگاه داده D1 به Worker وصل نیست.", {
+/** یک PrismaClient مشترک؛ در توسعه از اتصال‌های اضافی Hot Reload جلوگیری می‌کند. */
+export async function getDb(): Promise<PrismaClient> {
+  if (!(await envVar("DATABASE_URL"))) {
+    throw new AppError("نشانی اتصال PostgreSQL تنظیم نشده است.", {
       status: 503,
-      code: "db_binding_missing",
-      hint:
-        "در wrangler.jsonc بخش d1_databases با binding=DB وجود دارد. با «npm run deploy» اولین deploy دیتابیس را خودکار می‌سازد. برای اجرای محلی، npm run dev (با initOpenNextCloudflareForDev) D1 محلی می‌سازد.",
+      code: "database_url_missing",
+      hint: "در Vercel یک Prisma Postgres یا Neon database متصل کنید تا DATABASE_URL ساخته شود؛ برای اجرای محلی آن را در .env.local قرار دهید.",
     });
   }
-  return env.DB;
+  if (!prismaGlobal.managementPrisma) {
+    prismaGlobal.managementPrisma = new PrismaClient({
+      log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
+    });
+  }
+  return prismaGlobal.managementPrisma;
 }
 
-let schemaPromise: Promise<void> | null = null;
-
-/** ساخت خودکار جدول‌ها؛ در اولین درخواست هر isolate یک بار اجرا می‌شود. */
-export async function ensureSchema(): Promise<void> {
-  if (schemaPromise) {
-    await schemaPromise;
-    return;
+/** تبدیل SQL سازگار با PostgreSQL به PostgreSQL بدون تغییر قرارداد helperهای موجود. */
+function postgresQuery(sql: string): string {
+  let index = 0;
+  let result = sql.replace(/\?/g, () => `$${++index}`);
+  if (/^\s*INSERT\s+OR\s+IGNORE\s+/i.test(result)) {
+    result = result.replace(/INSERT\s+OR\s+IGNORE/i, "INSERT").replace(/;?\s*$/, " ON CONFLICT DO NOTHING");
   }
+  return result;
+}
+
+function postgresDdl(sql: string): string {
+  return sql
+    .replace(/INTEGER PRIMARY KEY AUTOINCREMENT/gi, "SERIAL PRIMARY KEY")
+    .replace(/\bREAL\b/gi, "DOUBLE PRECISION")
+    .replace(/\bBLOB\b/gi, "BYTEA");
+}
+
+/** bootstrap idempotent؛ migration اصلی نیز همین ساختار را پیش از deploy ایجاد می‌کند. */
+export async function ensureSchema(): Promise<void> {
+  if (schemaPromise) return schemaPromise;
   schemaPromise = (async () => {
     const db = await getDb();
-    const statements = SCHEMA_SQL.map((sql) => db.prepare(sql));
     try {
-      await db.batch(statements);
-    } catch (err) {
+      for (const statement of SCHEMA_SQL) await db.$executeRawUnsafe(postgresDdl(statement));
+    } catch (error) {
       schemaPromise = null;
-      throw new AppError("ساخت خودکار جدول‌های D1 ممکن نشد.", {
+      throw new AppError("آماده‌سازی جدول‌های PostgreSQL ممکن نشد.", {
         status: 503,
         code: "db_schema_failed",
-        hint: "سطح دسترسی دیتابیس یا صحت binding را بررسی کنید.",
-        details: err instanceof Error ? err.message : String(err),
+        hint: "DATABASE_URL، دسترسی ساخت جدول و وضعیت Prisma Postgres/Neon را بررسی کنید.",
+        details: error instanceof Error ? error.message : String(error),
       });
     }
   })();
-  await schemaPromise;
+  return schemaPromise;
 }
 
 export async function dbAll<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> {
   const db = await getDb();
   await ensureSchema();
-  const stmt = params.length ? db.prepare(sql).bind(...params) : db.prepare(sql);
-  const res = await stmt.all<T>();
-  return res.results ?? [];
+  return db.$queryRawUnsafe<T[]>(postgresQuery(sql), ...params);
 }
 
 export async function dbFirst<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T | null> {
-  const db = await getDb();
-  await ensureSchema();
-  const stmt = params.length ? db.prepare(sql).bind(...params) : db.prepare(sql);
-  return (await stmt.first<T>()) ?? null;
+  const rows = await dbAll<T>(sql, params);
+  return rows[0] ?? null;
 }
 
-export async function dbRun(sql: string, params: unknown[] = []): Promise<D1Result> {
+export async function dbRun(sql: string, params: unknown[] = []): Promise<DbResult> {
   const db = await getDb();
   await ensureSchema();
-  const stmt = params.length ? db.prepare(sql).bind(...params) : db.prepare(sql);
-  return stmt.run();
+  const started = Date.now();
+  const changes = await db.$executeRawUnsafe(postgresQuery(sql), ...params);
+  return { success: true, meta: { changes, duration: Date.now() - started } };
 }
 
 export async function dbBatch(queries: Array<{ sql: string; params?: unknown[] }>): Promise<void> {
   if (!queries.length) return;
   const db = await getDb();
   await ensureSchema();
-  const statements = queries.map((q) => (q.params?.length ? db.prepare(q.sql).bind(...q.params) : db.prepare(q.sql)));
-  for (let i = 0; i < statements.length; i += 40) {
-    await db.batch(statements.slice(i, i + 40));
+  for (let i = 0; i < queries.length; i += 40) {
+    const chunk = queries.slice(i, i + 40);
+    await db.$transaction(chunk.map((query) => db.$executeRawUnsafe(postgresQuery(query.sql), ...(query.params ?? []))));
   }
 }
 
@@ -152,7 +130,7 @@ export async function dbHealthy(): Promise<boolean> {
 }
 
 export async function dbCounts(): Promise<{ jobs: number; runs: number; errors: number; prompts: number; events: number }> {
-  const row = await dbFirst<Record<string, number>>(`
+  const row = await dbFirst<Record<string, number | bigint>>(`
     SELECT
       (SELECT COUNT(*) FROM jobs) AS jobs,
       (SELECT COUNT(*) FROM runs) AS runs,
@@ -161,11 +139,8 @@ export async function dbCounts(): Promise<{ jobs: number; runs: number; errors: 
       (SELECT COUNT(*) FROM events) AS events
   `);
   return {
-    jobs: Number(row?.jobs ?? 0),
-    runs: Number(row?.runs ?? 0),
-    errors: Number(row?.errors ?? 0),
-    prompts: Number(row?.prompts ?? 0),
-    events: Number(row?.events ?? 0),
+    jobs: Number(row?.jobs ?? 0), runs: Number(row?.runs ?? 0), errors: Number(row?.errors ?? 0),
+    prompts: Number(row?.prompts ?? 0), events: Number(row?.events ?? 0),
   };
 }
 
@@ -381,6 +356,30 @@ const SCHEMA_SQL: string[] = [
     created_at TEXT NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_command_artifacts_command ON command_artifacts(command_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS screenshots (
+    id TEXT PRIMARY KEY,
+    object_key TEXT NOT NULL UNIQUE,
+    command_id TEXT,
+    execution_id TEXT,
+    agent_key_id TEXT NOT NULL,
+    agent_id TEXT,
+    stage TEXT,
+    name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    width INTEGER,
+    height INTEGER,
+    occurred_at TEXT,
+    visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('private', 'public')),
+    share_token TEXT UNIQUE,
+    created_at TEXT NOT NULL,
+    deleted_at TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_screenshots_created ON screenshots(created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_screenshots_command ON screenshots(command_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_screenshots_agent ON screenshots(agent_key_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_screenshots_share ON screenshots(share_token)`,
   `CREATE TABLE IF NOT EXISTS automations (
     id TEXT PRIMARY KEY,
     slug TEXT NOT NULL UNIQUE,

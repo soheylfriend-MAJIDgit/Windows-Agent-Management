@@ -19,10 +19,10 @@ async function existingSource(slug: string): Promise<{ id: string; source: strin
     return { id: detail.automation.id, source: detail.activeVersion.sourceCode };
   } catch (error) {
     if (error instanceof AppError && error.status === 404) {
-      throw new AppError("این کد هنوز به کاتالوگ اتوماسیون D1 منتقل نشده است.", {
+      throw new AppError("این کد هنوز به کاتالوگ اتوماسیون PostgreSQL منتقل نشده است.", {
         status: 409,
         code: "automation_not_migrated",
-        hint: "در تب «کدهای اتوماسیون» یک‌بار «انتقال اولیه از GitHub» را اجرا کنید یا کد را مستقیم در D1 بسازید.",
+        hint: "در تب «کدهای اتوماسیون» یک‌بار «انتقال اولیه از GitHub» را اجرا کنید یا کد را مستقیم در PostgreSQL بسازید.",
       });
     }
     throw error;
@@ -75,7 +75,7 @@ export async function submitAutomationPrompt(input: PromptInput): Promise<Prompt
       commitUrl: "",
       commitLink: "",
       commandId: undefined,
-      message: "پیش‌نمایش نسخه D1",
+      message: "پیش‌نمایش نسخه PostgreSQL",
       issues,
       dryRun: true,
       content: source,
@@ -83,7 +83,7 @@ export async function submitAutomationPrompt(input: PromptInput): Promise<Prompt
   }
 
   // پیش از ساخت نسخه فعال مطمئن می‌شویم Windows Agent سازگار آماده دریافت است؛
-  // در قطع بودن ایجنت، نسخه‌ای بدون فرمان اجرا در D1 باقی نمی‌ماند.
+  // در قطع بودن ایجنت، نسخه‌ای بدون فرمان اجرا در PostgreSQL باقی نمی‌ماند.
   const commandTarget = await findOnlineCommandAgent(
     mode === "arena"
       ? ["d1_automations", "arena_vision_ocr", "network_resilience"]
@@ -110,8 +110,8 @@ export async function submitAutomationPrompt(input: PromptInput): Promise<Prompt
     await updatePromptResult(promptId, { commitSha: saved.version.sourceSha256, commitUrl: null, status: "pending" });
     await insertEvent({
       kind: "automation_prompt",
-      title: mode === "arena" ? "پرامپت Arena در D1 ثبت شد" : `نسخه تازه ${saved.automation.name}`,
-      detail: `نسخه ${saved.version.version} منبع اصلی D1 · ${saved.version.sourceSha256.slice(0, 12)}`,
+      title: mode === "arena" ? "پرامپت Arena در PostgreSQL ثبت شد" : `نسخه تازه ${saved.automation.name}`,
+      detail: `نسخه ${saved.version.version} منبع اصلی PostgreSQL · ${saved.version.sourceSha256.slice(0, 12)}`,
       jobName: `job_${slug}.py`,
     });
     return {
@@ -126,7 +126,7 @@ export async function submitAutomationPrompt(input: PromptInput): Promise<Prompt
       commitUrl: "",
       commitLink: "",
       commandId: run.commandId,
-      message: `نسخه ${saved.version.version} در D1 ثبت و برای ویندوز صف شد.`,
+      message: `نسخه ${saved.version.version} در PostgreSQL ثبت و برای ویندوز صف شد.`,
       issues,
     };
   } catch (error) {

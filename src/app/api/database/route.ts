@@ -12,14 +12,15 @@ const EXPECTED_TABLES = [
   ["prompts", "پرامپت‌ها"],
   ["events", "رویدادها"],
   ["sync_state", "وضعیت همگام‌سازی"],
-  ["drive_files", "فایل‌های درایو"],
+  ["drive_files", "آرشیو میراثی Drive"],
   ["agent_keys", "کلیدهای ایجنت"],
   ["managed_agents", "ایجنت‌های متصل"],
   ["agent_control_requests", "کنترل‌های اضطراری ایجنت"],
   ["agent_connection_tests", "تست‌های اتصال"],
   ["commands", "فرمان‌های ویندوز"],
   ["command_events", "رخدادهای فرمان"],
-  ["command_artifacts", "فراداده تصویرها"],
+  ["command_artifacts", "فراداده Artifactهای فرمان"],
+  ["screenshots", "اسکرین‌شات‌های Blob"],
   ["automations", "کدهای اتوماسیون"],
   ["automation_versions", "نسخه‌های اتوماسیون"],
   ["automation_runs", "اجرای اتوماسیون"],
@@ -38,9 +39,13 @@ export async function GET() {
     await dbFirst<{ ok: number }>("SELECT 1 AS ok");
 
     const objects = await dbAll<{ name: string; type: "table" | "index" }>(`
-      SELECT name, type
-      FROM sqlite_master
-      WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'
+      SELECT tablename AS name, 'table' AS type
+      FROM pg_catalog.pg_tables
+      WHERE schemaname = 'public'
+      UNION ALL
+      SELECT indexname AS name, 'index' AS type
+      FROM pg_catalog.pg_indexes
+      WHERE schemaname = 'public'
       ORDER BY type DESC, name ASC
     `);
     const counts = await dbFirst<CountRow>(`
@@ -60,12 +65,12 @@ export async function GET() {
         (SELECT COUNT(*) FROM commands) AS commands,
         (SELECT COUNT(*) FROM command_events) AS command_events,
         (SELECT COUNT(*) FROM command_artifacts) AS command_artifacts,
+        (SELECT COUNT(*) FROM screenshots) AS screenshots,
         (SELECT COUNT(*) FROM automations) AS automations,
         (SELECT COUNT(*) FROM automation_versions) AS automation_versions,
         (SELECT COUNT(*) FROM automation_runs) AS automation_runs
     `);
-    // D1 تعداد termهای compound SELECT را محدود می‌کند؛ timestampها جداگانه خوانده
-    // و چون ISO/UTC هستند به‌صورت واژه‌نامه‌ای مقایسه می‌شوند.
+    // timestampهای ISO/UTC جداگانه خوانده و واژه‌نامه‌ای مقایسه می‌شوند.
     const activityQueries = [
       "SELECT MAX(updated_at) AS value FROM jobs",
       "SELECT MAX(created_at) AS value FROM runs",
@@ -82,6 +87,7 @@ export async function GET() {
       "SELECT MAX(COALESCE(completed_at, last_event_at, created_at)) AS value FROM commands",
       "SELECT MAX(created_at) AS value FROM command_events",
       "SELECT MAX(created_at) AS value FROM command_artifacts",
+      "SELECT MAX(created_at) AS value FROM screenshots",
       "SELECT MAX(updated_at) AS value FROM automations",
       "SELECT MAX(created_at) AS value FROM automation_versions",
       "SELECT MAX(created_at) AS value FROM automation_runs",
@@ -106,9 +112,9 @@ export async function GET() {
 
     return jsonOk({
       connected: true,
-      binding: "DB",
-      engine: "Cloudflare D1 / SQLite",
-      schemaVersion: 6,
+      binding: "DATABASE_URL",
+      engine: "PostgreSQL / Prisma",
+      schemaVersion: 8,
       schemaReady: tables.every((table) => table.ready),
       tables,
       tableCount: tables.filter((table) => table.ready).length,

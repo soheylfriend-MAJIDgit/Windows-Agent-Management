@@ -1,0 +1,18 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+}
+
+// The application deliberately retains its stable SQL helper API while Prisma
+// provides connection management, deployment-safe PostgreSQL access and migrations.
+model Setting {
+  key       String @id
+  value     String
+  updatedAt String @map("updated_at")
+
+  @@map("settings")
+}

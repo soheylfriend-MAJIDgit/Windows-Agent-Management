@@ -69,7 +69,7 @@ export async function getRepoConfig(kind: RepoKind = "collab", useCache = true):
       branch: map.get(`${kind}.branch`) || defaults.branch,
     };
   } catch {
-    // D1 آماده نیست؛ از پیش‌فرض محیطی استفاده می‌کنیم تا صفحه‌ها باز شوند.
+    // PostgreSQL آماده نیست؛ از پیش‌فرض محیطی استفاده می‌کنیم تا صفحه‌ها باز شوند.
     config = defaults;
   }
   cache.set(kind, { value: config, at: Date.now() });

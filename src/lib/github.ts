@@ -250,7 +250,7 @@ export async function requireGithubToken(token: string | undefined): Promise<str
       status: 503,
       code: "github_token_missing",
       hint:
-        "برای نوشتن در مخزن، secret با نام GITHUB_TOKEN لازم است. در Cloudflare: wrangler secret put GITHUB_TOKEN — برای محلی: فایل .dev.vars",
+        "برای نوشتن در مخزن، GITHUB_TOKEN را در Vercel Environment Variables یا فایل محلی .env.local تنظیم کنید.",
     });
   }
   return token;

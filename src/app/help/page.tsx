@@ -8,7 +8,7 @@ export default function HelpPage() {
       <PageHeader
         eyebrow="راهنما"
         title="چطور این پنل کار می‌کند"
-        subtitle="چهار ایجنت با مرز مسئولیت روشن: سایت مدیریت از راه D1، کلید ایجنت، گیت‌هاب و گزارش‌ها ویندوز را پایش و فرماندهی می‌کند، بدون تغییر خودکار کد پایه."
+        subtitle="چهار ایجنت با مرز مسئولیت روشن: سایت مدیریت از راه PostgreSQL، کلید ایجنت، گیت‌هاب و گزارش‌ها ویندوز را پایش و فرماندهی می‌کند، بدون تغییر خودکار کد پایه."
         actions={
           <>
             <Link href="/settings" className="btn btn-small">
@@ -56,7 +56,7 @@ export default function HelpPage() {
           </div>
           <div className="actor-card">
             <b>۴. ایجنت مدیریت (این سایت)</b>
-            <span>ویندوز را می‌بیند و پایش می‌کند، از راه D1 فرمان می‌دهد، گزارش و اتصال را بررسی می‌کند، کدنویسی می‌کند و مخزن ایجنت همکار کاملاً در اختیار اوست؛ ولی کد پایه‌ی ایجنت ویندوز را تغییر نمی‌دهد.</span>
+            <span>ویندوز را می‌بیند و پایش می‌کند، از راه PostgreSQL فرمان می‌دهد، گزارش و اتصال را بررسی می‌کند، کدنویسی می‌کند و مخزن ایجنت همکار کاملاً در اختیار اوست؛ ولی کد پایه‌ی ایجنت ویندوز را تغییر نمی‌دهد.</span>
           </div>
         </div>
         <div className="callout" style={{ marginTop: 12 }}>
@@ -78,7 +78,7 @@ export default function HelpPage() {
         </div>
         <p className="prose">
           ایجنت مادر ماژول مستقل <span className="mono">manager_client.py</span> را به پنل ویندوز وصل می‌کند. این ماژول
-          با کلید ساخته‌شده در تب «کلید ایجنت» هر ۳۰ ثانیه Heartbeat می‌فرستد و درخواست تست D1 را پاسخ می‌دهد. تست موفق
+          با کلید ساخته‌شده در تب «کلید ایجنت» هر ۳۰ ثانیه Heartbeat می‌فرستد و درخواست تست PostgreSQL را پاسخ می‌دهد. تست موفق
           باید پیام دقیق <strong>«سلام ایجنت مدیریت.»</strong> را از ویندوز به سایت برگرداند.
         </p>
         <div className="callout" style={{ marginTop: 10 }}>
@@ -209,57 +209,18 @@ export default function HelpPage() {
         </section>
 
         <section id="setup" className="card help-anchor full">
-          <div className="card-head">
-            <h2>
-              <Icon name="database" size={17} />
-              راه‌اندازی روی کلادفلر
-            </h2>
-            <span className="card-head-sub">کمترین مداخله‌ی دستی</span>
-          </div>
+          <div className="card-head"><h2><Icon name="database" size={17} />راه‌اندازی روی Vercel</h2><span className="card-head-sub">یک‌بار تنظیم، سپس Deploy خودکار</span></div>
           <div className="help-grid" style={{ gap: 12 }}>
-            <div>
-              <h3 style={{ marginBottom: 4 }}>۱. استقرار</h3>
-              <pre className="code-block">{`npm install
-npx wrangler login
-npm run deploy`}</pre>
-              <p className="prose" style={{ marginTop: 6 }}>
-                <strong>D1 خودکار ساخته می‌شود.</strong> wrangler نسخه ۴٫۴۵+ دیتابیس را از روی نام می‌سازد و شناسه را
-                در wrangler.jsonc می‌نویسد. جدول‌ها هم در اولین درخواست به‌صورت خودکار ساخته می‌شوند
-                (CREATE TABLE IF NOT EXISTS).
-              </p>
-            </div>
-            <div>
-              <h3 style={{ marginBottom: 4 }}>۲. کلیدها</h3>
-              <pre className="code-block">{`wrangler secret put GITHUB_TOKEN
-wrangler secret put MANAGER_PASSCODE
-# اختیاری — گزارش‌های درایو:
-wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
-wrangler secret put GOOGLE_DRIVE_LOGS_FOLDER_ID`}</pre>
-              <p className="prose" style={{ marginTop: 6 }}>
-                توکن فقط سمت سرور است و هرگز به مرورگر نمی‌رود. بدون توکن، سایت فقط خواندنی می‌شود.
-              </p>
-            </div>
-            <div>
-              <h3 style={{ marginBottom: 4 }}>۳. اجرای محلی</h3>
-              <pre className="code-block">{`npm run dev        # D1 محلی + Hot Reload
-npm run preview    # اجرای واقعی Worker
-npm run self-test  # آزمون پارسرها و قواعد`}</pre>
-              <p className="prose" style={{ marginTop: 6 }}>
-                برای اجرای محلی، کلیدها را در <span className="mono">.dev.vars</span> بگذارید (این فایل در gitignore است).
-              </p>
-            </div>
-            <div>
-              <h3 style={{ marginBottom: 4 }}>۴. درایو</h3>
-              <p className="prose">
-                پوشه‌ی <span className="mono">Windows-Agent-DB/logs</span> را با ایمیل حساب سرویس (دسترسی بیننده) به
-                اشتراک بگذارید. شناسه‌ی پوشه از انتهای آدرس آن گرفته می‌شود. همگام‌سازی خودکار هر چند دقیقه انجام
-                می‌شود؛ برای نتیجه‌ی فوری، فایل را دستی در گزارش اجرا وارد کنید.
-              </p>
-            </div>
+            <div><h3>۱. PostgreSQL</h3><p className="prose">در Storage پروژه، Prisma Postgres یا Neon را متصل و وجود <span className="mono">DATABASE_URL</span> را بررسی کنید.</p></div>
+            <div><h3>۲. Blob</h3><p className="prose">یک Vercel Blob Store عمومی متصل کنید؛ <span className="mono">BLOB_STORE_ID</span> و OIDC سمت سرور استفاده می‌شوند.</p></div>
+            <div><h3>۳. کلیدهای امنیتی</h3><pre className="code-block">{`MANAGER_PASSCODE=…
+AUTH_SECRET=…
+GITHUB_TOKEN=…`}</pre><p className="prose">آن‌ها را در Project → Settings → Environment Variables ثبت و Redeploy کنید.</p></div>
+            <div><h3>۴. اجرای محلی</h3><pre className="code-block">{`cp .env.example .env.local
+npm run db:migrate
+npm run dev`}</pre></div>
           </div>
-          <div className="callout" style={{ marginTop: 12 }}>
-            کدهای پایه مادر و مدیریت در GitHub می‌مانند؛ اما منبع اصلی «کدهای اتوماسیون» D1 است. GitHub مخزن همکار فقط برای انتقال اولیه/پشتیبان قدیمی لازم است و ایجنت همکار از API محدود D1 استفاده می‌کند.
-          </div>
+          <div className="callout" style={{ marginTop: 12 }}>Agent تصویر را فقط به API مدیریت می‌فرستد؛ بایت در Vercel Blob و فراداده در PostgreSQL ثبت می‌شود. Google Drive در این مسیر بازنشسته است.</div>
         </section>
 
         <section id="test" className="card help-anchor full">
@@ -273,26 +234,25 @@ npm run self-test  # آزمون پارسرها و قواعد`}</pre>
             <ol className="steps">
               <li>
                 <strong>انتقال اولیه</strong>
-                در «کدهای اتوماسیون» یک‌بار انتقال از GitHub را اجرا کنید؛ پس از آن D1 منبع اصلی است و Git برای کار روزمره ایجنت همکار لازم نیست.
+                در «کدهای اتوماسیون» یک‌بار انتقال از GitHub را اجرا کنید؛ پس از آن PostgreSQL منبع اصلی است و Git برای کار روزمره ایجنت همکار لازم نیست.
               </li>
               <li>
-                <strong>نسخه‌بندی D1</strong>
+                <strong>نسخه‌بندی PostgreSQL</strong>
                 یک کد را باز و نسخه تازه ثبت کنید؛ شماره نسخه و SHA-256 جدید باید در تاریخچه دیده شود.
               </li>
               <li>
                 <strong>اجرای دوباره</strong>
-                هر اجرای دوباره یک نسخه واقعی تازه در D1 می‌سازد و فرمان دارای version ID و hash برای Windows Agent ثبت می‌کند.
+                هر اجرای دوباره یک نسخه واقعی تازه در PostgreSQL می‌سازد و فرمان دارای version ID و hash برای Windows Agent ثبت می‌کند.
               </li>
             </ol>
             <ol className="steps" start={4}>
               <li>
                 <strong>ارسال پرامپت به Arena</strong>
-                متن و گزارش تلگرام را انتخاب کنید؛ نسخه تازه job_arena.py در D1 فعال و modal پایش فرمان ویندوز باز می‌شود.
+                متن و گزارش تلگرام را انتخاب کنید؛ نسخه تازه job_arena.py در PostgreSQL فعال و modal پایش فرمان ویندوز باز می‌شود.
               </li>
               <li>
                 <strong>گزارش</strong>
-                یا درایو را همگام کنید، یا متن فایل نتیجه را در «ورود دستی» بچسبانید؛ باید کارت نتیجه با کد خروج ۰ و
-                خروجی متنی دیده شود.
+                نتیجه Agent باید مستقیماً در PostgreSQL ثبت شود؛ برای داده قدیمی می‌توانید متن فایل را در «ورود دستی» بچسبانید. کارت نتیجه باید کد خروج و خروجی متنی را نشان دهد.
               </li>
               <li>
                 <strong>خطا</strong>
@@ -314,11 +274,10 @@ npm run self-test  # آزمون پارسرها و قواعد`}</pre>
               <strong>چرا اجرای دوباره نسخه تازه می‌سازد؟</strong> برای اینکه هر اجرا به محتوای immutable، شماره نسخه و SHA-256 دقیق متصل باشد؛ دیگر Commit یا Push لازم نیست.
             </p>
             <p>
-              <strong>چرا نتیجه فوراً نمی‌آید؟</strong> همگام‌سازی گوگل درایو ۱ تا ۳ دقیقه تأخیر دارد. تا آن زمان
-              می‌توانید فایل را دستی وارد کنید.
+              <strong>چرا نتیجه فوراً نمی‌آید؟</strong> وضعیت Heartbeat و صف فرمان Agent را بررسی کنید. گزارش PostgreSQL و تصویر Blob پس از ارسال Agent بدون همگام‌سازی واسط نمایش داده می‌شوند.
             </p>
             <p>
-              <strong>اگر توکن GitHub نباشد چه می‌شود؟</strong> کاتالوگ، ویرایش، پرامپت و اجرای D1 ادامه دارد؛ فقط انتقال اولیه از مخزن قدیمی و کارهای کد پایه GitHub در دسترس نیست.
+              <strong>اگر توکن GitHub نباشد چه می‌شود؟</strong> کاتالوگ، ویرایش، پرامپت و اجرای PostgreSQL ادامه دارد؛ فقط انتقال اولیه از مخزن قدیمی و کارهای کد پایه GitHub در دسترس نیست.
             </p>
             <p>
               <strong>آیا ایجنت همکار کد پایه را تغییر می‌دهد؟</strong> نه. API او فقط کدهای اتوماسیون نسخه‌بندی‌شده و فرمان‌های مربوط را مدیریت می‌کند؛ تغییر Next.js و Windows Agent همچنان از مخزن‌های مدیریت و مادر است.
