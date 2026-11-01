@@ -605,7 +605,7 @@ except Exception as exc:
 `;
 
 const PASTE_CODE = String.raw`${ROOT_SETUP}
-import ctypes, hashlib, re, subprocess
+import ctypes, difflib, hashlib, re, subprocess
 from ctypes import wintypes
 
 reset_progress("stage5")
@@ -641,69 +641,139 @@ def find_chrome_window():
     return max(windows, default=None, key=lambda item: (1 if "arena" in item[3].lower() else 0, item[0]))
 
 def capture_chrome_for_ocr(rect, path):
-    width, height = rect.right - rect.left, rect.bottom - rect.top
+    full_width, full_height = rect.right - rect.left, rect.bottom - rect.top
+    # OCR فقط ناحیه امن پایین-راست Chrome را می‌بیند؛ sidebar، پاسخ‌های بالای صفحه
+    # و omnibox حذف می‌شوند. این crop کوچک‌تر مانع downscale داخلی PaddleOCR می‌شود.
+    offset_x = int(full_width * 0.20)
+    offset_y = int(full_height * 0.55)
+    width, height = full_width - offset_x, full_height - offset_y
+    scale = 1
     env = os.environ.copy()
-    env.update({"SHOT_X": str(rect.left), "SHOT_Y": str(rect.top), "SHOT_W": str(width), "SHOT_H": str(height), "SHOT_PATH": path})
-    script = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Drawing; $b=New-Object Drawing.Bitmap([int]$env:SHOT_W,[int]$env:SHOT_H); $g=[Drawing.Graphics]::FromImage($b); try{$g.CopyFromScreen([int]$env:SHOT_X,[int]$env:SHOT_Y,0,0,$b.Size);$b.Save($env:SHOT_PATH,[Drawing.Imaging.ImageFormat]::Png)}finally{$g.Dispose();$b.Dispose()}"
+    env.update({"SHOT_X": str(rect.left + offset_x), "SHOT_Y": str(rect.top + offset_y), "SHOT_W": str(width), "SHOT_H": str(height), "SHOT_SCALE": str(scale), "SHOT_PATH": path})
+    script = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Drawing; $w=[int]$env:SHOT_W;$h=[int]$env:SHOT_H;$s=[int]$env:SHOT_SCALE;$ow=$w*$s;$oh=$h*$s;$src=New-Object Drawing.Bitmap($w,$h);$g=[Drawing.Graphics]::FromImage($src);$dst=$null;$gd=$null;try{$g.CopyFromScreen([int]$env:SHOT_X,[int]$env:SHOT_Y,0,0,$src.Size);$dst=New-Object Drawing.Bitmap($ow,$oh);$gd=[Drawing.Graphics]::FromImage($dst);$gd.InterpolationMode=[Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic;$gd.DrawImage($src,0,0,$ow,$oh);$dst.Save($env:SHOT_PATH,[Drawing.Imaging.ImageFormat]::Png)}finally{if($gd){$gd.Dispose()};if($dst){$dst.Dispose()};$g.Dispose();$src.Dispose()}"
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], env=env, text=True, capture_output=True, timeout=30, creationflags=flags)
     if result.returncode or not os.path.isfile(path):
         raise RuntimeError((result.stderr or result.stdout or "OCR screenshot failed").strip())
+    return scale, offset_x, offset_y
 
-def composer_point_from_local_ocr(rect, image_path, prompt):
+OCR_LAST_DIAGNOSTICS = {"items": 0, "lowerItems": 0, "groups": 0, "scale": 1, "cropOffset": "0,0"}
+def composer_point_from_local_ocr(rect, image_path, prompt, image_scale=1, crop_offset_x=0, crop_offset_y=0):
+    global OCR_LAST_DIAGNOSTICS
     local = os.environ.get("LOCALAPPDATA", "")
     python_path = os.environ.get("WINDOWS_AGENT_OCR_PYTHON", "") or os.path.join(local, "Windows-Agent", "vision", ".venv", "Scripts", "python.exe")
     helper_path = os.environ.get("WINDOWS_AGENT_OCR_HELPER", "") or os.path.join(local, "Windows-Agent", "vision", "paddle_ocr_helper.py")
     if not os.path.isfile(python_path) or not os.path.isfile(helper_path):
+        OCR_LAST_DIAGNOSTICS = {"error": "helper-unavailable", "items": 0, "lowerItems": 0, "groups": 0, "scale": image_scale}
         print("ARENA_STAGE5_OCR_UNAVAILABLE: local PaddleOCR helper paths were not found", flush=True)
         return None
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     result = subprocess.run([python_path, helper_path, "--image", image_path, "--json"], text=True, capture_output=True, encoding="utf-8", errors="replace", timeout=75, creationflags=flags)
     if result.returncode:
-        print("ARENA_STAGE5_OCR_ERROR: " + (result.stderr or result.stdout or "helper failed")[-800:], flush=True)
+        OCR_LAST_DIAGNOSTICS = {"error": "helper-failed", "items": 0, "lowerItems": 0, "groups": 0, "scale": image_scale}
+        print("ARENA_STAGE5_OCR_ERROR: " + (result.stderr or "helper failed")[-800:], flush=True)
         return None
     try:
         payload = json.loads(result.stdout)
     except (TypeError, json.JSONDecodeError) as exc:
+        OCR_LAST_DIAGNOSTICS = {"error": "invalid-json", "items": 0, "lowerItems": 0, "groups": 0, "scale": image_scale}
         print("ARENA_STAGE5_OCR_INVALID_JSON: " + str(exc), flush=True)
         return None
     items = payload.get("items") if isinstance(payload, dict) else None
     if not isinstance(payload, dict) or not payload.get("ok") or not isinstance(items, list):
+        OCR_LAST_DIAGNOSTICS = {"error": "invalid-payload", "items": 0, "lowerItems": 0, "groups": 0, "scale": image_scale}
         print("ARENA_STAGE5_OCR_INVALID_PAYLOAD", flush=True)
         return None
-    phrases = ("what would you like", "what do you want", "ask arena", "ask anything", "send a message", "type a message", "message arena", "how can i help")
+
+    phrases = ("what would you like to do", "what would you like", "what do you want", "ask arena", "ask anything", "send a message", "type a message", "message arena", "how can i help")
     def semantic_key(value):
         return " ".join(re.findall(r"[\w\u0600-\u06ff]+", str(value).casefold(), flags=re.UNICODE))
+    phrase_keys = tuple(semantic_key(value) for value in phrases)
     prompt_key = semantic_key(prompt)
-    matches = []
+    lower_safe_local = max(140, int((rect.bottom - rect.top) * 0.55))
+    evidence = []
+    scale = max(1.0, float(image_scale or 1))
     for item in items:
         if not isinstance(item, dict):
             continue
-        text = str(item.get("text") or "").casefold().strip()
         bounds = item.get("bounds")
-        confidence = float(item.get("confidence") or 0)
-        if confidence < 0.42 or not isinstance(bounds, list) or len(bounds) != 4:
+        try:
+            confidence = float(item.get("confidence") or 0)
+            left, top, right, bottom = [float(value) / scale for value in bounds]
+            left += crop_offset_x
+            right += crop_offset_x
+            top += crop_offset_y
+            bottom += crop_offset_y
+        except (TypeError, ValueError):
             continue
-        placeholder_match = any(phrase in text or (len(text) >= 8 and text in phrase) for phrase in phrases)
-        item_key = semantic_key(text)
-        # متن موجود فقط وقتی مدرک معنایی است که یک قطعه نسبتاً بلند و چندواژه‌ای
-        # از Prompt معلوم باشد؛ واژه‌های کوتاه/عمومی هرگز مختصات تولید نمی‌کنند.
-        prompt_match = len(item_key) >= 20 and len(item_key.split()) >= 3 and item_key in prompt_key
+        if confidence < 0.18 or right <= left or bottom <= top:
+            continue
+        center_y = (top + bottom) / 2
+        if center_y <= lower_safe_local or center_y >= (rect.bottom - rect.top):
+            continue
+        key = semantic_key(item.get("text") or "")
+        if not key:
+            continue
+        evidence.append({"key": key, "left": left, "top": top, "right": right, "bottom": bottom, "confidence": confidence})
+
+    # PaddleOCR ممکن است placeholder را یک خط کامل یا چند token جدا تحویل دهد.
+    # ابتدا itemهای مستقل و سپس گروه‌های هم‌خط کنار هم بررسی می‌شوند.
+    groups = []
+    for item in sorted(evidence, key=lambda value: (((value["top"] + value["bottom"]) / 2), value["left"])):
+        center = (item["top"] + item["bottom"]) / 2
+        target = None
+        for group in groups:
+            group_left = min(part["left"] for part in group["items"])
+            group_right = max(part["right"] for part in group["items"])
+            horizontal_gap = group_left - item["right"] if item["right"] < group_left else item["left"] - group_right if item["left"] > group_right else 0
+            max_gap = max(90, (item["bottom"] - item["top"]) * 5)
+            if abs(center - group["center"]) <= max(18, (item["bottom"] - item["top"]) * 1.35) and horizontal_gap <= max_gap:
+                target = group
+                break
+        if target is None:
+            groups.append({"center": center, "items": [item]})
+        else:
+            target["items"].append(item)
+            target["center"] = sum((part["top"] + part["bottom"]) / 2 for part in target["items"]) / len(target["items"])
+
+    candidates = list(evidence)
+    for group in groups:
+        parts = sorted(group["items"], key=lambda value: value["left"])
+        if len(parts) < 2:
+            continue
+        candidates.append({
+            "key": " ".join(part["key"] for part in parts),
+            "left": min(part["left"] for part in parts), "top": min(part["top"] for part in parts),
+            "right": max(part["right"] for part in parts), "bottom": max(part["bottom"] for part in parts),
+            "confidence": sum(part["confidence"] for part in parts) / len(parts),
+        })
+
+    matches = []
+    for candidate in candidates:
+        key = candidate["key"]
+        fuzzy = max((difflib.SequenceMatcher(None, key, phrase).ratio() for phrase in phrase_keys), default=0.0)
+        fuzzy_placeholder = len(key) >= 12 and len(key.split()) >= 3 and fuzzy >= 0.68
+        placeholder_match = any(phrase in key or (len(key) >= 8 and key in phrase) for phrase in phrase_keys) or fuzzy_placeholder
+        prompt_match = len(key) >= 20 and len(key.split()) >= 3 and key in prompt_key
         if not placeholder_match and not prompt_match:
             continue
-        source = "paddleocr-placeholder" if placeholder_match else "paddleocr-existing-prompt"
-        left, top, right, bottom = [float(value) for value in bounds]
-        x = rect.left + ((left + right) / 2)
-        y = rect.top + ((top + bottom) / 2)
-        lower_safe_top = rect.top + max(140, int((rect.bottom - rect.top) * 0.55))
-        if x <= rect.left or x >= rect.right or y <= lower_safe_top or y >= rect.bottom:
+        source = "paddleocr-placeholder-fuzzy" if placeholder_match else "paddleocr-existing-prompt"
+        x = rect.left + ((candidate["left"] + candidate["right"]) / 2)
+        y = rect.top + ((candidate["top"] + candidate["bottom"]) / 2)
+        composer_safe_left = rect.left + int((rect.right - rect.left) * 0.20)
+        if x <= composer_safe_left or x >= rect.right or y <= rect.top + lower_safe_local or y >= rect.bottom:
             continue
-        matches.append({"x": x, "y": y, "text": text[:160], "confidence": confidence, "bottom": bottom, "source": source})
+        matches.append({
+            "x": x, "y": y, "confidence": candidate["confidence"], "bottom": candidate["bottom"], "source": source,
+            "evidenceHash": hashlib.sha256(key.encode("utf-8")).hexdigest(), "evidenceLength": len(key), "fuzzy": fuzzy,
+        })
+
+    OCR_LAST_DIAGNOSTICS = {"items": len(items), "lowerItems": len(evidence), "groups": len(groups), "scale": image_scale, "cropOffset": str(crop_offset_x) + "," + str(crop_offset_y)}
     if not matches:
-        print("ARENA_STAGE5_OCR_PLACEHOLDER_NOT_FOUND: items=" + str(len(items)), flush=True)
+        print("ARENA_STAGE5_OCR_NO_SEMANTIC_MATCH: items=" + str(len(items)) + " lowerItems=" + str(len(evidence)) + " groups=" + str(len(groups)) + " scale=" + str(image_scale), flush=True)
         return None
     chosen = max(matches, key=lambda item: (item["bottom"], item["confidence"]))
-    print("ARENA_STAGE5_OCR_PLACEHOLDER: confidence=" + format(chosen["confidence"], ".3f") + " text=" + chosen["text"], flush=True)
+    print("ARENA_STAGE5_OCR_MATCH: source=" + chosen["source"] + " confidence=" + format(chosen["confidence"], ".3f") + " fuzzy=" + format(chosen["fuzzy"], ".3f") + " evidenceLength=" + str(chosen["evidenceLength"]) + " evidenceSha256=" + chosen["evidenceHash"], flush=True)
     return chosen
 
 def ensure_pywinauto_input():
@@ -1040,12 +1110,18 @@ $promptCr = ([regex]::Matches($prompt, "\r")).Count
 $promptLf = ([regex]::Matches($prompt, "\n")).Count
 $clipboardCr = ([regex]::Matches($clipboardPrompt, "\r")).Count
 $clipboardLf = ([regex]::Matches($clipboardPrompt, "\n")).Count
-$clipboardProof = "expectedLength=" + $prompt.Length + "; actualLength=" + $clipboardPrompt.Length + "; expectedSha256=" + $promptHash + "; actualSha256=" + $clipboardHash + "; expectedCR/LF=" + $promptCr + "/" + $promptLf + "; actualCR/LF=" + $clipboardCr + "/" + $clipboardLf
-if ($clipboardHash -ne $promptHash -or $clipboardPrompt.Length -ne $prompt.Length) {
-    Progress-Step "s5-11" "failed" ("Clipboard mismatch; " + $clipboardProof)
-    throw ("Full Prompt Clipboard length/hash verification failed; " + $clipboardProof)
+$lineCr = [string][char]13
+$lineLf = [string][char]10
+$promptClipboardNormalized = $prompt.Replace(($lineCr + $lineLf), $lineLf).Replace($lineCr, $lineLf)
+$actualClipboardNormalized = $clipboardPrompt.Replace(($lineCr + $lineLf), $lineLf).Replace($lineCr, $lineLf)
+$promptNormalizedHash = Text-Sha256 $promptClipboardNormalized
+$actualNormalizedHash = Text-Sha256 $actualClipboardNormalized
+$clipboardProof = "rawExpectedLength=" + $prompt.Length + "; rawActualLength=" + $clipboardPrompt.Length + "; rawExpectedSha256=" + $promptHash + "; rawActualSha256=" + $clipboardHash + "; expectedCR/LF=" + $promptCr + "/" + $promptLf + "; actualCR/LF=" + $clipboardCr + "/" + $clipboardLf + "; normalizedExpectedLength=" + $promptClipboardNormalized.Length + "; normalizedActualLength=" + $actualClipboardNormalized.Length + "; normalizedExpectedSha256=" + $promptNormalizedHash + "; normalizedActualSha256=" + $actualNormalizedHash
+if ($actualNormalizedHash -ne $promptNormalizedHash -or $actualClipboardNormalized.Length -ne $promptClipboardNormalized.Length) {
+    Progress-Step "s5-11" "failed" ("Clipboard mismatch beyond CR/LF normalization; " + $clipboardProof)
+    throw ("Full Prompt Clipboard normalized length/hash verification failed; " + $clipboardProof)
 }
-Progress-Step "s5-11" "done" $clipboardProof
+Progress-Step "s5-11" "done" ("Prompt کامل در Clipboard تأیید شد؛ " + $clipboardProof)
 Progress-Step "s5-12" "running" "ارسال دقیقاً یک Ctrl+V"
 Input-Action hotkey ctrl v
 Progress-Step "s5-12" "done" "one Ctrl+V sent"
@@ -1137,11 +1213,14 @@ try:
     progress_event("stage5", "s5-03", "done", "Chrome Arena foreground شد؛ HWND=" + str(hwnd))
     progress_event("stage5", "s5-04", "running", "ثبت تصویر پنجره واقعی Chrome")
     ocr_shot_path = os.path.join(ROOT, "stage5-before-paste-ocr.png")
-    capture_chrome_for_ocr(rect, ocr_shot_path)
-    progress_event("stage5", "s5-04", "done", ocr_shot_path)
-    progress_event("stage5", "s5-05", "running", "اجرای helper محلی PaddleOCR")
-    ocr_point = composer_point_from_local_ocr(rect, ocr_shot_path, prompt)
-    progress_event("stage5", "s5-05", "done" if ocr_point else "failed", (ocr_point.get("source") + ": " + ocr_point.get("text", "")[:80]) if ocr_point else "هیچ placeholder یا بخش شناخته‌شده Prompt پیدا نشد")
+    ocr_scale, ocr_offset_x, ocr_offset_y = capture_chrome_for_ocr(rect, ocr_shot_path)
+    progress_event("stage5", "s5-04", "done", ocr_shot_path + "; OCR safe crop offset=" + str(ocr_offset_x) + "," + str(ocr_offset_y) + "; scale=" + str(ocr_scale))
+    progress_event("stage5", "s5-05", "running", "اجرای helper محلی PaddleOCR روی crop امن پایین composer")
+    ocr_point = composer_point_from_local_ocr(rect, ocr_shot_path, prompt, ocr_scale, ocr_offset_x, ocr_offset_y)
+    ocr_diag = "items=" + str(OCR_LAST_DIAGNOSTICS.get("items", 0)) + "; lowerItems=" + str(OCR_LAST_DIAGNOSTICS.get("lowerItems", 0)) + "; lineGroups=" + str(OCR_LAST_DIAGNOSTICS.get("groups", 0)) + "; scale=" + str(OCR_LAST_DIAGNOSTICS.get("scale", ocr_scale)) + "; cropOffset=" + str(OCR_LAST_DIAGNOSTICS.get("cropOffset", "?"))
+    if ocr_point:
+        ocr_diag += "; source=" + str(ocr_point.get("source")) + "; confidence=" + format(float(ocr_point.get("confidence") or 0), ".3f") + "; fuzzy=" + format(float(ocr_point.get("fuzzy") or 0), ".3f") + "; evidenceLength=" + str(ocr_point.get("evidenceLength")) + "; evidenceSha256=" + str(ocr_point.get("evidenceHash"))
+    progress_event("stage5", "s5-05", "done" if ocr_point else "failed", ocr_diag + ("" if ocr_point else "; هیچ تطبیق معنایی امن پیدا نشد"))
     script_path = os.path.join(ROOT, "stage5-uia-paste.ps1")
     with open(script_path, "w", encoding="utf-8-sig", newline="\n") as handle:
         handle.write(UIA_PASTE_SCRIPT)
@@ -1167,7 +1246,7 @@ try:
         "PROMPT_SHA256": expected_hash,
         "ARENA_OCR_X": str(ocr_point["x"]) if ocr_point else "",
         "ARENA_OCR_Y": str(ocr_point["y"]) if ocr_point else "",
-        "ARENA_OCR_TEXT": str(ocr_point["text"]) if ocr_point else "",
+        "ARENA_OCR_TEXT": "semantic OCR evidence (content redacted)" if ocr_point else "",
         "ARENA_OCR_SOURCE": str(ocr_point["source"]) if ocr_point else "",
         "PROGRESS_PATH": progress_path("stage5"),
     })
