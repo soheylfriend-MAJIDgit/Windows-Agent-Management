@@ -481,6 +481,48 @@ def composer_point_from_local_ocr(rect, image_path):
     print("ARENA_STAGE5_OCR_PLACEHOLDER: confidence=" + format(chosen["confidence"], ".3f") + " text=" + chosen["text"], flush=True)
     return chosen
 
+def ensure_pywinauto_input():
+    local = os.environ.get("LOCALAPPDATA", "")
+    python_path = os.environ.get("WINDOWS_AGENT_OCR_PYTHON", "") or os.path.join(local, "Windows-Agent", "vision", ".venv", "Scripts", "python.exe")
+    if not os.path.isfile(python_path):
+        raise RuntimeError("محیط ایزوله Windows Agent برای نصب pywinauto پیدا نشد")
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    probe = subprocess.run([python_path, "-c", "import pywinauto"], text=True, capture_output=True, timeout=30, creationflags=flags)
+    if probe.returncode:
+        print("ARENA_STAGE5_PYWINAUTO_INSTALLING: package is not installed", flush=True)
+        install = subprocess.run([python_path, "-m", "pip", "install", "--disable-pip-version-check", "pywinauto"], text=True, capture_output=True, encoding="utf-8", errors="replace", timeout=300, creationflags=flags)
+        if install.returncode:
+            detail = (install.stderr or install.stdout or "pip install failed")[-1600:]
+            raise RuntimeError("نصب خودکار pywinauto ناموفق بود: " + detail)
+        print("ARENA_STAGE5_PYWINAUTO_INSTALLED", flush=True)
+    else:
+        print("ARENA_STAGE5_PYWINAUTO_READY", flush=True)
+    helper_path = os.path.join(ROOT, "stage5_pywinauto_input.py")
+    helper = '''import sys
+from pywinauto import keyboard, mouse
+
+action = sys.argv[1] if len(sys.argv) > 1 else ""
+if action == "click" and len(sys.argv) == 4:
+    mouse.click(button="left", coords=(int(sys.argv[2]), int(sys.argv[3])))
+elif action == "hotkey" and len(sys.argv) == 4:
+    keys = {("ctrl", "a"): "^a", ("ctrl", "c"): "^c", ("ctrl", "v"): "^v"}
+    sequence = keys.get((sys.argv[2].lower(), sys.argv[3].lower()))
+    if not sequence:
+        raise SystemExit("unsupported hotkey")
+    keyboard.send_keys(sequence, pause=0.04)
+elif action == "press" and len(sys.argv) == 3:
+    keys = {"end": "{END}", "enter": "{ENTER}"}
+    sequence = keys.get(sys.argv[2].lower())
+    if not sequence:
+        raise SystemExit("unsupported key")
+    keyboard.send_keys(sequence, pause=0.04)
+else:
+    raise SystemExit("invalid pywinauto input action")
+'''
+    with open(helper_path, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(helper)
+    return python_path, helper_path
+
 UIA_PASTE_SCRIPT = r'''$ErrorActionPreference = "Stop"
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -490,47 +532,29 @@ Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 public static class Stage5Native {
-    [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT {
-        public int dx; public int dy; public uint mouseData; public uint dwFlags;
-        public uint time; public UIntPtr dwExtraInfo;
-    }
-    [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT {
-        public ushort wVk; public ushort wScan; public uint dwFlags;
-        public uint time; public UIntPtr dwExtraInfo;
-    }
-    [StructLayout(LayoutKind.Sequential)] public struct HARDWAREINPUT {
-        public uint uMsg; public ushort wParamL; public ushort wParamH;
-    }
-    [StructLayout(LayoutKind.Explicit)] public struct INPUTUNION {
-        [FieldOffset(0)] public MOUSEINPUT mi;
-        [FieldOffset(0)] public KEYBDINPUT ki;
-        [FieldOffset(0)] public HARDWAREINPUT hi;
-    }
-    [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public INPUTUNION U; }
-    [DllImport("user32.dll", SetLastError=true)] static extern uint SendInput(uint count, INPUT[] inputs, int size);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-    [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
-    static INPUT Key(ushort vk, uint flags) { INPUT i = new INPUT(); i.type = 1; i.U.ki.wVk = vk; i.U.ki.dwFlags = flags; return i; }
-    public static int InputSize() { return Marshal.SizeOf(typeof(INPUT)); }
-    public static int LastError() { return Marshal.GetLastWin32Error(); }
-    public static bool Chord(ushort modifier, ushort key) {
-        INPUT[] values = new INPUT[] { Key(modifier, 0), Key(key, 0), Key(key, 2), Key(modifier, 2) };
-        return SendInput((uint)values.Length, values, Marshal.SizeOf(typeof(INPUT))) == values.Length;
-    }
-    public static bool Press(ushort key) {
-        INPUT[] values = new INPUT[] { Key(key, 0), Key(key, 2) };
-        return SendInput((uint)values.Length, values, Marshal.SizeOf(typeof(INPUT))) == values.Length;
-    }
-    public static void Click(int x, int y) { SetCursorPos(x, y); mouse_event(2, 0, 0, 0, UIntPtr.Zero); mouse_event(4, 0, 0, 0, UIntPtr.Zero); }
+    [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int key);
 }
 "@
 
-$inputSize = [Stage5Native]::InputSize()
-$expectedInputSize = if ([IntPtr]::Size -eq 8) { 40 } else { 28 }
-Write-Output ("ARENA_STAGE5_SENDINPUT_SIZE=" + $inputSize + ";expected=" + $expectedInputSize)
-if ($inputSize -ne $expectedInputSize) { throw "Native INPUT structure size is invalid; no keyboard input was attempted" }
+function Input-Action([Parameter(ValueFromRemainingArguments=$true)][string[]]$ActionArgs) {
+    $inputOutput = & $env:INPUT_PYTHON $env:INPUT_HELPER @ActionArgs 2>&1
+    if ($LASTEXITCODE -ne 0) { throw ("pywinauto input failed: " + (($inputOutput | Out-String).Trim())) }
+}
+function Submit-VerifiedPrompt([IntPtr]$hwnd) {
+    if ([Stage5Native]::GetForegroundWindow() -ne $hwnd) { throw "Target Chrome lost foreground immediately before Enter; submit was not attempted" }
+    foreach ($vk in @(0x10, 0x11, 0x12)) {
+        if (([Stage5Native]::GetAsyncKeyState($vk) -band 0x8000) -ne 0) { throw "Shift/Ctrl/Alt is physically down; Enter was not attempted" }
+    }
+    Input-Action press end
+    Start-Sleep -Milliseconds 180
+    if ([Stage5Native]::GetForegroundWindow() -ne $hwnd) { throw "Target Chrome lost foreground after verification; Enter was not attempted" }
+    [IO.File]::WriteAllText($env:SUBMIT_GUARD_PATH, ("enter-attempted:" + $env:PROMPT_SHA256), [Text.UTF8Encoding]::new($false))
+    Input-Action press enter
+    [IO.File]::WriteAllText($env:SUBMIT_GUARD_PATH, ("submitted:" + $env:PROMPT_SHA256), [Text.UTF8Encoding]::new($false))
+    Write-Output "ARENA_STAGE5_SINGLE_ENTER_SENT"
+}
 
 function Canonical([string]$value) {
     return (([string]$value -replace '[\u200C\u200D\u200E\u200F\uFEFF]', '') -replace '\s+', ' ').Trim()
@@ -678,7 +702,7 @@ Write-Output ("ARENA_STAGE5_COMPOSER_TYPE=" + $chosen.Type)
 Write-Output ("ARENA_STAGE5_COMPOSER_RECT=" + [int]$composerRect.Left + "," + [int]$composerRect.Top + "," + [int]$composerRect.Width + "," + [int]$composerRect.Height)
 try { $composer.SetFocus() } catch {}
 Start-Sleep -Milliseconds 250
-[Stage5Native]::Click($x, $y)
+Input-Action click ([string][int]$x) ([string][int]$y)
 Start-Sleep -Milliseconds 450
 $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
 if ($env:FOCUS_SHOT_PATH) { Save-Shot $env:FOCUS_SHOT_PATH }
@@ -700,18 +724,20 @@ $prompt = [IO.File]::ReadAllText($env:PROMPT_FILE)
 $expectedNormalized = $prompt -replace '\r', ''
 $preflightSentinel = "__ARENA_STAGE5_PREFLIGHT_$([Guid]::NewGuid().ToString('N'))__"
 Set-Clipboard -Value $preflightSentinel
-if (-not [Stage5Native]::Chord(0x11, 0x41)) { throw ("Safe pre-paste Select All failed; nativeError=" + [Stage5Native]::LastError() + "; paste was not attempted") }
+Input-Action hotkey ctrl a
 Start-Sleep -Milliseconds 120
-if (-not [Stage5Native]::Chord(0x11, 0x43)) { throw ("Safe pre-paste Copy failed; nativeError=" + [Stage5Native]::LastError() + "; paste was not attempted") }
+Input-Action hotkey ctrl c
 Start-Sleep -Milliseconds 350
 $currentCopied = [string](Get-Clipboard -Raw)
 $currentNormalized = $currentCopied -replace '\r', ''
-[void][Stage5Native]::Press(0x23)
+Input-Action press end
 if ($currentNormalized -eq $expectedNormalized) {
     Write-Output "ARENA_STAGE5_ALREADY_PRESENT_VERIFIED"
+    Submit-VerifiedPrompt $hwnd
+    Start-Sleep -Seconds 3
     Save-Shot $env:SHOT_PATH
-    [IO.File]::WriteAllText($env:RESULT_PATH, "verified-existing", [Text.UTF8Encoding]::new($false))
-    Write-Output "ARENA_STAGE5_PASTE_VERIFIED"
+    [IO.File]::WriteAllText($env:RESULT_PATH, "verified-existing-submitted", [Text.UTF8Encoding]::new($false))
+    Write-Output "ARENA_STAGE5_EXISTING_PROMPT_SUBMITTED"
     exit 0
 }
 if ($currentCopied -ne $preflightSentinel -and $currentNormalized.Length -gt 0) {
@@ -721,7 +747,7 @@ Write-Output "ARENA_STAGE5_COMPOSER_EMPTY_VERIFIED"
 
 Get-Content -Raw -LiteralPath $env:PROMPT_FILE | Set-Clipboard
 Start-Sleep -Milliseconds 250
-if (-not [Stage5Native]::Chord(0x11, 0x56)) { throw ("The single native Ctrl+V operation failed; nativeError=" + [Stage5Native]::LastError()) }
+Input-Action hotkey ctrl v
 Write-Output "ARENA_STAGE5_SINGLE_PASTE_SENT"
 Start-Sleep -Milliseconds 1200
 $focusedAfter = [System.Windows.Automation.AutomationElement]::FocusedElement
@@ -747,9 +773,9 @@ Write-Output ("ARENA_STAGE5_UIA_PROBE=" + [bool]$probeHit)
 
 $sentinel = "__ARENA_STAGE5_VERIFY_$([Guid]::NewGuid().ToString('N'))__"
 Set-Clipboard -Value $sentinel
-if (-not [Stage5Native]::Chord(0x11, 0x41)) { throw ("Safe Select All verification failed after paste; nativeError=" + [Stage5Native]::LastError()) }
+Input-Action hotkey ctrl a
 Start-Sleep -Milliseconds 120
-if (-not [Stage5Native]::Chord(0x11, 0x43)) { throw ("Safe Copy verification failed after paste; nativeError=" + [Stage5Native]::LastError()) }
+Input-Action hotkey ctrl c
 Start-Sleep -Milliseconds 450
 $copied = [string](Get-Clipboard -Raw)
 $expectedNormalized = $prompt -replace '\r', ''
@@ -757,10 +783,11 @@ $copiedNormalized = $copied -replace '\r', ''
 $exactCopy = $copiedNormalized -eq $expectedNormalized
 Write-Output ("ARENA_STAGE5_EXACT_COPY=" + [bool]$exactCopy)
 if (-not $exactCopy) { throw "The composer selection did not exactly match the prompt after the single paste; paste was not repeated" }
-[void][Stage5Native]::Press(0x23)
+Submit-VerifiedPrompt $hwnd
+Start-Sleep -Seconds 3
 Save-Shot $env:SHOT_PATH
-[IO.File]::WriteAllText($env:RESULT_PATH, "verified-pasted", [Text.UTF8Encoding]::new($false))
-Write-Output "ARENA_STAGE5_PASTE_VERIFIED"
+[IO.File]::WriteAllText($env:RESULT_PATH, "verified-pasted-submitted", [Text.UTF8Encoding]::new($false))
+Write-Output "ARENA_STAGE5_PASTE_VERIFIED_AND_SUBMITTED"
 '''
 
 try:
@@ -770,6 +797,15 @@ try:
     expected_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     if expected_hash != read_state().get("promptSha256"):
         raise RuntimeError("هش Prompt ذخیره‌شده با پاسخ API تطبیق ندارد")
+    submit_guard_path = os.path.join(ROOT, "stage5-submit-guard.txt")
+    try:
+        with open(submit_guard_path, "r", encoding="utf-8") as handle:
+            prior_submit_guard = handle.read().strip()
+    except OSError:
+        prior_submit_guard = ""
+    if prior_submit_guard in ("enter-attempted:" + expected_hash, "submitted:" + expected_hash):
+        raise RuntimeError("برای همین Prompt قبلاً Enter ارسال یا تلاش شده است؛ برای جلوگیری از ارسال تکراری مرحله دوباره اجرا نشد")
+    input_python, input_helper = ensure_pywinauto_input()
     target = find_chrome_window()
     if not target:
         raise RuntimeError("پنجره واقعی Chrome پیدا نشد؛ هیچ Paste انجام نشد")
@@ -785,7 +821,7 @@ try:
     with open(script_path, "w", encoding="utf-8-sig", newline="\n") as handle:
         handle.write(UIA_PASTE_SCRIPT)
     focus_shot_path = os.path.join(ROOT, "stage5-after-focus.png")
-    shot_path = os.path.join(ROOT, "stage5-after-paste.png")
+    shot_path = os.path.join(ROOT, "stage5-after-submit.png")
     result_path = os.path.join(ROOT, "stage5-result.txt")
     try:
         os.remove(result_path)
@@ -798,6 +834,10 @@ try:
         "SHOT_PATH": shot_path,
         "FOCUS_SHOT_PATH": focus_shot_path,
         "RESULT_PATH": result_path,
+        "INPUT_PYTHON": input_python,
+        "INPUT_HELPER": input_helper,
+        "SUBMIT_GUARD_PATH": submit_guard_path,
+        "PROMPT_SHA256": expected_hash,
         "ARENA_OCR_X": str(ocr_point["x"]) if ocr_point else "",
         "ARENA_OCR_Y": str(ocr_point["y"]) if ocr_point else "",
         "ARENA_OCR_TEXT": str(ocr_point["text"]) if ocr_point else "",
@@ -808,7 +848,7 @@ try:
     for artifact_id, artifact_path, artifact_stage in (
         ("stage5-ocr-" + artifact_run, ocr_shot_path, "stage5-before-ocr"),
         ("stage5-focus-" + artifact_run, focus_shot_path, "stage5-after-focus"),
-        ("stage5-final-" + artifact_run, shot_path, "stage5-after-paste"),
+        ("stage5-final-" + artifact_run, shot_path, "stage5-after-submit"),
     ):
         if os.path.isfile(artifact_path):
             print("SERVICE_ARTIFACT: " + json.dumps({"artifactId": artifact_id, "kind": "screenshot", "stage": artifact_stage, "name": os.path.basename(artifact_path), "localPath": artifact_path, "mimeType": "image/png"}, ensure_ascii=False), flush=True)
@@ -820,97 +860,37 @@ try:
             result_marker = handle.read().strip()
     except OSError:
         result_marker = ""
-    if result.returncode or result_marker not in ("verified-pasted", "verified-existing"):
+    if result.returncode or result_marker not in ("verified-pasted-submitted", "verified-existing-submitted"):
         error = " | ".join(part for part in (diagnostics, stderr.strip()) if part) or "UI Automation paste verification failed"
         raise RuntimeError(error[-3000:])
     if not os.path.isfile(shot_path):
         raise RuntimeError("Paste تأیید شد اما تصویر مرحله پس از Paste ذخیره نشد")
-    recovered = result_marker == "verified-existing"
-    success_message = "متن همین Prompt از اجرای قبلی از قبل کامل داخل composer بود؛ بدون Ctrl+V دوباره تطبیق و تأیید شد. Enter ارسال نشد." if recovered else "composer واقعی Arena با UI Automation پیدا و فوکوس آن پیش و پس از Ctrl+V تأیید شد؛ Paste دقیقاً یک بار انجام و متن با Copy مستقل تطبیق داده شد. Enter ارسال نشد."
-    write_state(paste="done", pasteVerified=True, pasteMethod="uia-recovered-existing-prompt" if recovered else "uia-composer-single-ctrl-v", pasteScreenshot=shot_path, browserWindowTitle=title, message=success_message)
-    print(("ARENA_EXISTING_PROMPT_RECOVERED" if recovered else "ARENA_NATIVE_PROMPT_PASTED_ONCE") + ": sha256=" + expected_hash + " chars=" + str(len(prompt)), flush=True)
+    recovered = result_marker == "verified-existing-submitted"
+    success_message = "متن همین Prompt از قبل کامل داخل composer بود؛ بدون Paste تکراری تأیید و با یک Enter ارسال شد." if recovered else "composer واقعی Arena تأیید شد؛ pywinauto دقیقاً یک Ctrl+V و پس از تطبیق مستقل متن دقیقاً یک Enter برای Send ارسال کرد."
+    submitted_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    write_state(paste="done", pasteVerified=True, pasteMethod="pywinauto-existing-prompt-submit" if recovered else "pywinauto-single-ctrl-v-submit", pasteScreenshot=shot_path, submit="done", lastSubmittedPromptSha256=expected_hash, submittedAt=submitted_at, browserWindowTitle=title, message=success_message)
+    print(("ARENA_EXISTING_PROMPT_SUBMITTED" if recovered else "ARENA_PROMPT_PASTED_AND_SUBMITTED") + ": sha256=" + expected_hash + " chars=" + str(len(prompt)), flush=True)
     print("ARENA_STAGE5_DIAGNOSTICS: " + diagnostics, flush=True)
 except Exception as exc:
-    write_state(paste="failed", pasteVerified=False, message="مرحله Paste امن متوقف شد (Paste هرگز تکرار نشد): " + str(exc))
+    write_state(paste="failed", pasteVerified=False, submit="failed", message="مرحله Paste/Submit امن متوقف شد؛ Paste یا Enter تکرار نمی‌شود: " + str(exc))
     raise
 `;
 const SUBMIT_CODE = String.raw`${ROOT_SETUP}
-import ctypes, hashlib, subprocess
-from ctypes import wintypes
+import hashlib
 
-if read_state().get("chainStatus") != "continue":
-    write_state(submit="skipped", message="decision.action اجازه ادامه نمی‌دهد؛ Enter ارسال نمی‌شود.")
-    print("ARENA_SUBMIT_SKIPPED: decision does not allow continuation", flush=True)
-    raise SystemExit(0)
-write_state(submit="running", message="در حال بررسی متن و ارسال Enter واقعی Windows بدون modifier…")
-
-class RECT(ctypes.Structure):
-    _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG), ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
-def find_chrome_window():
-    user32 = ctypes.windll.user32
-    windows = []
-    callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
-    def callback(hwnd, _):
-        if user32.IsWindowVisible(hwnd):
-            length = user32.GetWindowTextLengthW(hwnd)
-            title = ctypes.create_unicode_buffer(length + 1)
-            user32.GetWindowTextW(hwnd, title, length + 1)
-            if "Chrome" in title.value:
-                rect = RECT()
-                if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-                    area = max(0, rect.right-rect.left) * max(0, rect.bottom-rect.top)
-                    if area > 100000:
-                        windows.append((area, hwnd, rect))
-        return True
-    user32.EnumWindows(callback_type(callback), 0)
-    return max(windows, default=None, key=lambda item: item[0])
-def key(vk, down):
-    ctypes.windll.user32.keybd_event(vk, 0, 0 if down else 2, 0)
-def chord(modifier, key_code):
-    key(modifier, True); key(key_code, True); key(key_code, False); key(modifier, False)
-def read_clipboard():
-    verify_path = os.path.join(ROOT, "clipboard-submit-verify.txt")
-    env = os.environ.copy(); env["VERIFY_PATH"] = verify_path
-    command = "$v=Get-Clipboard -Raw; [IO.File]::WriteAllText($env:VERIFY_PATH,[string]$v,[Text.UTF8Encoding]::new($false))"
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    result = subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", command], env=env, text=True, capture_output=True, timeout=15, creationflags=flags)
-    if result.returncode:
-        raise RuntimeError((result.stderr or result.stdout).strip())
-    with open(verify_path, "r", encoding="utf-8") as handle:
-        return handle.read()
-def normalized(value):
-    return value.replace("\r\n", "\n").replace("\r", "\n")
-
+state = read_state()
+prompt_path = os.path.join(ROOT, "next-prompt.txt")
 try:
-    state = read_state()
-    if state.get("paste") != "done" or state.get("pasteVerified") is not True:
-        raise RuntimeError("Paste تأیید نشده است؛ Enter ارسال نمی‌شود")
-    with open(os.path.join(ROOT, "next-prompt.txt"), "r", encoding="utf-8") as handle:
+    with open(prompt_path, "r", encoding="utf-8") as handle:
         prompt = handle.read()
-    target = find_chrome_window()
-    if not target:
-        raise RuntimeError("پنجره واقعی Chrome پیدا نشد؛ Enter ارسال نمی‌شود")
-    _, hwnd, rect = target
-    user32 = ctypes.windll.user32
-    user32.ShowWindow(hwnd, 9); user32.SetForegroundWindow(hwnd)
-    x = rect.left + (rect.right - rect.left) // 2; y = rect.bottom - 135
-    user32.SetCursorPos(x, y)
-    user32.mouse_event(0x0002, 0, 0, 0, 0); user32.mouse_event(0x0004, 0, 0, 0, 0)
-    time.sleep(0.5)
-    chord(0x11, 0x41); chord(0x11, 0x43); time.sleep(0.5)
-    if normalized(read_clipboard()) != normalized(prompt):
-        raise RuntimeError("متن کنترل فعال پیش از Enter با Prompt API تطبیق ندارد؛ ارسال لغو شد")
-    key(0x23, True); key(0x23, False)
-    if user32.GetKeyState(0x10) < 0 or user32.GetKeyState(0x11) < 0 or user32.GetKeyState(0x12) < 0:
-        raise RuntimeError("یکی از Shift/Ctrl/Alt پایین است؛ Enter ارسال نشد")
-    key(0x0D, True); key(0x0D, False)
-    time.sleep(3)
-    digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-    write_state(submit="done", lastSubmittedPromptSha256=digest, submittedAt=time.strftime("%Y-%m-%dT%H:%M:%S%z"), message="Enter واقعی Windows بدون Shift/Ctrl/Alt یک بار برای Send/Submit ارسال شد.")
-    print("ARENA_NATIVE_PROMPT_SUBMITTED_WITH_ENTER: sha256=" + digest, flush=True)
-except Exception as exc:
-    write_state(submit="failed", message="ارسال Enter واقعی متوقف شد: " + str(exc))
-    raise
+except OSError as exc:
+    raise RuntimeError("فایل Prompt برای بررسی وضعیت ارسال پیدا نشد: " + str(exc))
+digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+if state.get("submit") == "done" and state.get("lastSubmittedPromptSha256") == digest:
+    print("ARENA_STAGE6_NOOP_ALREADY_SUBMITTED_IN_STAGE5: sha256=" + digest, flush=True)
+    write_state(message="Prompt در مرحله ۵ با یک Enter ارسال شده است؛ مرحله ۶ برای جلوگیری از ارسال تکراری هیچ کلیدی نزد.")
+else:
+    raise RuntimeError("مرحله ۵ ارسال تأییدشده‌ای برای این Prompt ثبت نکرده است؛ مرحله ۶ مستقل عمداً Enter نمی‌زند")
 `;
 
 export interface ArenaApiNotebookCellTemplate {
@@ -930,7 +910,7 @@ export function arenaApiNotebookCells(): ArenaApiNotebookCellTemplate[] {
     { id: "arena-api-credentials", title: "۲. دریافت امن API Key از Python", language: "python", content: CREDENTIALS_CODE, notes: "دامنه https://salitest.ir ثابت است و فقط Key در خود دسکتاپ گرفته می‌شود. Key با Windows DPAPI رمز می‌شود و در stdout یا PostgreSQL قرار نمی‌گیرد.", transition: "manual", executionMode: "blocking", executable: true },
     { id: "arena-fetch-next-prompt", title: "۳. خواندن decision از GET /handoff", language: "python", content: FETCH_PROMPT_CODE, notes: "فقط GET https://salitest.ir/api/agent/v1/handoff با Bearer اجرا می‌شود. decision.action ملاک قطعی است؛ Prompt تنها در run_next پذیرفته و از ارسال تکراری جلوگیری می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
     { id: "arena-open-and-stabilize", title: "۴. بازکردن Chrome واقعی و انتظار برای پایداری", language: "python", content: BROWSER_CODE, notes: "Chrome واقعی کاربر با پروفایل عادی Windows باز می‌شود؛ بدون Playwright، CDP، remote-debugging یا user-data-dir. پایداری با سه تصویر ادراکیِ مشابه سنجیده می‌شود تا انیمیشن‌های کوچک باعث خطای کاذب نشوند؛ تصویربرداری بدون پنجره کنسول انجام می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
-    { id: "arena-paste-once", title: "۵. Paste یک‌باره از Clipboard واقعی", language: "python", content: PASTE_CODE, notes: "composer واقعی Arena ابتدا با UI Automation و در صورت نبود درخت accessibility فقط با placeholder تأییدشده PaddleOCR محلی پیدا می‌شود؛ Ctrl+V دقیقاً یک بار اجرا و با Copy مستقل تأیید می‌شود. این مرحله Enter نمی‌زند و در خطا Paste را تکرار نمی‌کند.", transition: "manual", executionMode: "blocking", executable: true },
-    { id: "arena-submit-enter", title: "۶. Enter واقعی برای Send / Submit", language: "python", content: SUBMIT_CODE, notes: "متن کنترل فعال دوباره با Clipboard واقعی بررسی می‌شود و Enter بدون Shift/Ctrl/Alt دقیقاً یک بار ارسال می‌شود.", transition: "manual", executionMode: "blocking", executable: true },
+    { id: "arena-paste-once", title: "۵. Paste و Send یک‌باره با pywinauto", language: "python", content: PASTE_CODE, notes: "در صورت نبود pywinauto آن را خودکار در محیط ایزوله Windows Agent نصب می‌کند. composer با UI Automation یا placeholder تأییدشده PaddleOCR پیدا می‌شود؛ سپس دقیقاً یک Ctrl+V، تطبیق مستقل متن و دقیقاً یک Enter برای Send اجرا می‌شود. محافظ ثبت ارسال مانع تکرار Enter است.", transition: "manual", executionMode: "blocking", executable: true },
+    { id: "arena-submit-enter", title: "۶. تأیید ثبت ارسال (بدون کلید مجدد)", language: "python", content: SUBMIT_CODE, notes: "ارسال اکنون در مرحله ۵ انجام می‌شود. این مرحله فقط ثبت موفقیت و هش Prompt را کنترل می‌کند و برای جلوگیری از ارسال دوباره هیچ Enter یا ورودی دیگری نمی‌زند.", transition: "manual", executionMode: "blocking", executable: true },
   ];
 }
