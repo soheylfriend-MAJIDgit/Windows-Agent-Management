@@ -660,9 +660,18 @@ Start-Sleep -Milliseconds 250
 [Stage5Native]::Click($x, $y)
 Start-Sleep -Milliseconds 450
 $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
-$focusSafe = (-not (Is-Omnibox $focused $windowRect.Top)) -and (Focus-Belongs-To $focused $composer $x $y)
+if ($env:FOCUS_SHOT_PATH) { Save-Shot $env:FOCUS_SHOT_PATH }
+$focusViaUia = Focus-Belongs-To $focused $composer $x $y
+$focusViaOcr = ($chosen.Source -eq "paddleocr-placeholder") -and ([Stage5Native]::GetForegroundWindow() -eq $hwnd)
+# در Chromeهایی که accessibility tree صفحه را منتشر نمی‌کنند، عنصر فوکوس‌شده
+# الزاماً با عنصر FromPoint قابل مقایسه نیست. در مسیر OCR فقط foreground بودن همان
+# Chrome و خارج‌بودن از omnibox پذیرفته می‌شود؛ سپس SelectAll/Copy پیش از Paste
+# و Copy دقیق پس از Paste دو محافظ مستقل و اجباری هستند.
+$focusSafe = (-not (Is-Omnibox $focused $windowRect.Top)) -and ($focusViaUia -or $focusViaOcr)
+Write-Output ("ARENA_STAGE5_FOCUS_PROOF_UIA=" + [bool]$focusViaUia)
+Write-Output ("ARENA_STAGE5_FOCUS_PROOF_OCR=" + [bool]$focusViaOcr)
 Write-Output ("ARENA_STAGE5_FOCUS_SAFE_BEFORE_PASTE=" + [bool]$focusSafe)
-if (-not $focusSafe) { throw "The focused element could not be proven to belong to the Arena composer; paste was not attempted" }
+if (-not $focusSafe) { throw "The focused element could not be safely associated with the Arena composer; paste was not attempted" }
 
 # بازیابی امن پس از خطای گزارش‌گیری: پیش از هر Paste بررسی می‌شود آیا متن همین حالا
 # کامل داخل composer است. در این حالت مرحله بدون Ctrl+V دوم موفق اعلام می‌شود.
@@ -695,7 +704,11 @@ if (-not [Stage5Native]::Chord(0x11, 0x56)) { throw "The single native Ctrl+V op
 Write-Output "ARENA_STAGE5_SINGLE_PASTE_SENT"
 Start-Sleep -Milliseconds 1200
 $focusedAfter = [System.Windows.Automation.AutomationElement]::FocusedElement
-$focusSafeAfter = (-not (Is-Omnibox $focusedAfter $windowRect.Top)) -and (Focus-Belongs-To $focusedAfter $composer $x $y)
+$focusAfterViaUia = Focus-Belongs-To $focusedAfter $composer $x $y
+$focusAfterViaOcr = ($chosen.Source -eq "paddleocr-placeholder") -and ([Stage5Native]::GetForegroundWindow() -eq $hwnd)
+$focusSafeAfter = (-not (Is-Omnibox $focusedAfter $windowRect.Top)) -and ($focusAfterViaUia -or $focusAfterViaOcr)
+Write-Output ("ARENA_STAGE5_FOCUS_AFTER_UIA=" + [bool]$focusAfterViaUia)
+Write-Output ("ARENA_STAGE5_FOCUS_AFTER_OCR=" + [bool]$focusAfterViaOcr)
 Write-Output ("ARENA_STAGE5_FOCUS_SAFE_AFTER_PASTE=" + [bool]$focusSafeAfter)
 if (-not $focusSafeAfter) { throw "Focus left the verified Arena composer after the single paste; paste was not repeated" }
 
@@ -750,6 +763,7 @@ try:
     script_path = os.path.join(ROOT, "stage5-uia-paste.ps1")
     with open(script_path, "w", encoding="utf-8-sig", newline="\n") as handle:
         handle.write(UIA_PASTE_SCRIPT)
+    focus_shot_path = os.path.join(ROOT, "stage5-after-focus.png")
     shot_path = os.path.join(ROOT, "stage5-after-paste.png")
     result_path = os.path.join(ROOT, "stage5-result.txt")
     try:
@@ -761,6 +775,7 @@ try:
         "ARENA_HWND": str(hwnd),
         "PROMPT_FILE": prompt_path,
         "SHOT_PATH": shot_path,
+        "FOCUS_SHOT_PATH": focus_shot_path,
         "RESULT_PATH": result_path,
         "ARENA_OCR_X": str(ocr_point["x"]) if ocr_point else "",
         "ARENA_OCR_Y": str(ocr_point["y"]) if ocr_point else "",
@@ -768,6 +783,14 @@ try:
     })
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File", script_path], env=env, text=True, capture_output=True, timeout=60, creationflags=flags)
+    artifact_run = str(int(time.time() * 1000))
+    for artifact_id, artifact_path, artifact_stage in (
+        ("stage5-ocr-" + artifact_run, ocr_shot_path, "stage5-before-ocr"),
+        ("stage5-focus-" + artifact_run, focus_shot_path, "stage5-after-focus"),
+        ("stage5-final-" + artifact_run, shot_path, "stage5-after-paste"),
+    ):
+        if os.path.isfile(artifact_path):
+            print("SERVICE_ARTIFACT: " + json.dumps({"artifactId": artifact_id, "kind": "screenshot", "stage": artifact_stage, "name": os.path.basename(artifact_path), "localPath": artifact_path, "mimeType": "image/png"}, ensure_ascii=False), flush=True)
     stdout = result.stdout or ""
     stderr = result.stderr or ""
     diagnostics = " | ".join(line.strip() for line in stdout.splitlines() if line.strip())[-3000:]
