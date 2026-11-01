@@ -1,4 +1,5 @@
 const ROOT_SETUP = String.raw`import json, os, tempfile, time
+from datetime import datetime
 ROOT = os.path.join(os.environ.get("LOCALAPPDATA", "."), "Windows-Agent", "stage-notebooks", "arena-api-prompt-submit-v1")
 os.makedirs(ROOT, exist_ok=True)
 STATE_PATH = os.path.join(ROOT, "state.json")
@@ -19,12 +20,18 @@ def reset_progress(stage):
         pass
 
 _PROGRESS_CURRENT = {}
+_PROGRESS_STARTED = {}
 def progress_event(stage, step_id, status, detail=""):
-    event = {"id": str(step_id), "status": str(status), "detail": str(detail), "at": time.strftime("%H:%M:%S")}
+    key = stage + ":" + str(step_id)
+    now_mono = time.monotonic()
     if status == "running":
         _PROGRESS_CURRENT[stage] = str(step_id)
-    elif _PROGRESS_CURRENT.get(stage) == str(step_id):
+        _PROGRESS_STARTED[key] = now_mono
+    duration_ms = int(max(0, now_mono - _PROGRESS_STARTED.get(key, now_mono)) * 1000) if status != "running" else 0
+    event = {"id": str(step_id), "status": str(status), "detail": str(detail), "at": datetime.now().astimezone().isoformat(timespec="milliseconds"), "durationMs": duration_ms}
+    if status != "running" and _PROGRESS_CURRENT.get(stage) == str(step_id):
         _PROGRESS_CURRENT.pop(stage, None)
+        _PROGRESS_STARTED.pop(key, None)
     with open(progress_path(stage), "a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
@@ -95,13 +102,22 @@ window.after(1800, lambda: window.attributes("-topmost", False))
 style = ttk.Style(window)
 style.theme_use("clam")
 style.configure("Stage.TFrame", background="#172033")
+style.configure("Arena.TNotebook", background="#0f172a", borderwidth=0)
+style.configure("Arena.TNotebook.Tab", background="#1e293b", foreground="#cbd5e1", padding=(22, 11), font=("Segoe UI", 10, "bold"))
+style.map("Arena.TNotebook.Tab", background=[("selected", "#0ea5e9")], foreground=[("selected", "white")])
 
 header = tk.Frame(window, bg="#0f172a")
 header.pack(fill="x", padx=24, pady=(22, 12))
 tk.Label(header, text="اجرای مرحله‌ای پرامپت Arena", bg="#0f172a", fg="#f8fafc", font=("Segoe UI", 18, "bold"), anchor="e").pack(fill="x")
 tk.Label(header, text="هر مرحله فقط پس از موفقیت مرحله قبل اجرا می‌شود. در خطا، زنجیره امن متوقف می‌شود.", bg="#0f172a", fg="#94a3b8", font=("Segoe UI", 10), anchor="e").pack(fill="x", pady=(6, 0))
-body = tk.Frame(window, bg="#0f172a")
-body.pack(fill="both", expand=True, padx=24)
+notebook = ttk.Notebook(window, style="Arena.TNotebook")
+notebook.pack(fill="both", expand=True, padx=18, pady=(0, 4))
+status_tab = tk.Frame(notebook, bg="#0f172a")
+log_tab = tk.Frame(notebook, bg="#0b1220")
+notebook.add(status_tab, text="  وضعیت اجرا  ")
+notebook.add(log_tab, text="  گزارش کامل و قابل کپی  ")
+body = tk.Frame(status_tab, bg="#0f172a")
+body.pack(fill="x", padx=6)
 rows = {}
 for key, title in STAGES:
     row = tk.Frame(body, bg="#172033", highlightthickness=1, highlightbackground="#26334a")
@@ -114,8 +130,8 @@ for key, title in STAGES:
     report = tk.Label(details, text="هنوز گزارشی ثبت نشده است.", bg="#172033", fg="#94a3b8", font=("Segoe UI", 9), anchor="e", justify="right", wraplength=600)
     report.pack(fill="x", pady=(4, 0))
     rows[key] = (badge, report)
-subframe = tk.Frame(window, bg="#111827", highlightthickness=1, highlightbackground="#334155")
-subframe.pack(fill="both", expand=True, padx=24, pady=(8, 0))
+subframe = tk.Frame(status_tab, bg="#111827", highlightthickness=1, highlightbackground="#334155")
+subframe.pack(fill="both", expand=True, padx=6, pady=(8, 0))
 tk.Label(subframe, text="ریزگزارش مرحله‌های ۵ و ۶ · وضعیت Clipboard، Paste و Enter", bg="#111827", fg="#f8fafc", font=("Segoe UI", 10, "bold"), anchor="e").pack(fill="x", padx=10, pady=(8, 4))
 subscroll = tk.Scrollbar(subframe)
 subscroll.pack(side="left", fill="y")
@@ -123,6 +139,37 @@ substeps_view = tk.Text(subframe, height=13, bg="#0b1220", fg="#cbd5e1", insertb
 substeps_view.pack(side="right", fill="both", expand=True, padx=(0, 8), pady=(0, 8))
 subscroll.configure(command=substeps_view.yview)
 substeps_view.configure(state="disabled")
+
+log_header = tk.Frame(log_tab, bg="#111827", highlightthickness=1, highlightbackground="#334155")
+log_header.pack(fill="x", padx=14, pady=(14, 8))
+log_title_box = tk.Frame(log_header, bg="#111827")
+log_title_box.pack(side="right", fill="both", expand=True, padx=14, pady=12)
+tk.Label(log_title_box, text="گزارش تشخیصی ساده و زمان‌بندی‌شده", bg="#111827", fg="#f8fafc", font=("Segoe UI", 14, "bold"), anchor="e").pack(fill="x")
+tk.Label(log_title_box, text="موفقیت‌ها، توقف‌ها، طول و هش امن Clipboard و مدت هر عملیات؛ بدون نمایش متن محرمانه Prompt", bg="#111827", fg="#94a3b8", font=("Segoe UI", 9), anchor="e").pack(fill="x", pady=(5, 0))
+copy_status = tk.StringVar(value="")
+def copy_full_log():
+    content = log_view.get("1.0", "end-1c")
+    window.clipboard_clear()
+    window.clipboard_append(content)
+    window.update()
+    copy_status.set("✓ گزارش کامل در Clipboard کپی شد")
+    window.after(3500, lambda: copy_status.set(""))
+copy_button = tk.Button(log_header, text="کپی کل گزارش", command=copy_full_log, bg="#0284c7", activebackground="#0369a1", fg="white", activeforeground="white", relief="flat", cursor="hand2", font=("Segoe UI", 10, "bold"), padx=18, pady=9)
+copy_button.pack(side="left", padx=14, pady=14)
+tk.Label(log_tab, textvariable=copy_status, bg="#0b1220", fg="#86efac", font=("Segoe UI", 9), anchor="e").pack(fill="x", padx=18)
+log_box = tk.Frame(log_tab, bg="#0b1220")
+log_box.pack(fill="both", expand=True, padx=14, pady=(4, 14))
+log_scroll = tk.Scrollbar(log_box)
+log_scroll.pack(side="left", fill="y")
+log_view = tk.Text(log_box, bg="#070d19", fg="#dbeafe", selectbackground="#075985", selectforeground="white", insertbackground="white", relief="flat", font=("Consolas", 10), wrap="word", padx=16, pady=14, spacing1=3, spacing3=7, yscrollcommand=log_scroll.set)
+log_view.pack(side="right", fill="both", expand=True)
+log_scroll.configure(command=log_view.yview)
+log_view.tag_configure("ok", foreground="#86efac")
+log_view.tag_configure("fail", foreground="#fca5a5")
+log_view.tag_configure("run", foreground="#fde68a")
+log_view.tag_configure("head", foreground="#7dd3fc", font=("Consolas", 10, "bold"))
+log_view.configure(state="disabled")
+
 footer_text = tk.StringVar(value="پنجره وضعیت فعال است…")
 tk.Label(window, textvariable=footer_text, bg="#0f172a", fg="#7dd3fc", font=("Segoe UI", 9), anchor="e").pack(fill="x", padx=24, pady=14)
 
@@ -141,6 +188,96 @@ def read_progress_events():
         except OSError:
             pass
     return latest
+
+def read_all_progress_events():
+    events = []
+    for stage in ("stage5", "stage6"):
+        try:
+            with open(progress_path(stage), "r", encoding="utf-8-sig") as handle:
+                for sequence, line in enumerate(handle, 1):
+                    try:
+                        event = json.loads(line.lstrip("\ufeff"))
+                        if isinstance(event, dict) and event.get("id"):
+                            event["stageFile"] = stage
+                            event["sequence"] = sequence
+                            events.append(event)
+                    except (ValueError, TypeError):
+                        pass
+        except OSError:
+            pass
+    return events
+
+def gregorian_to_jalali(gy, gm, gd):
+    gdm = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+    gy2 = gy + 1 if gm > 2 else gy
+    days = 355666 + 365 * gy + (gy2 + 3) // 4 - (gy2 + 99) // 100 + (gy2 + 399) // 400 + gd + gdm[gm - 1]
+    jy = -1595 + 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        jm, jd = 1 + days // 31, 1 + days % 31
+    else:
+        jm, jd = 7 + (days - 186) // 30, 1 + (days - 186) % 30
+    return jy, jm, jd
+
+def fa_digits(value):
+    return str(value).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+
+def event_clock(event):
+    raw = str(event.get("at") or "")
+    try:
+        stamp = datetime.fromisoformat(raw).astimezone()
+    except (ValueError, TypeError):
+        stamp = datetime.now().astimezone()
+        if len(raw) >= 8 and raw[2:3] == ":":
+            try:
+                parts = raw[:8].split(":")
+                stamp = stamp.replace(hour=int(parts[0]), minute=int(parts[1]), second=int(parts[2]))
+            except (ValueError, IndexError):
+                pass
+    jy, jm, jd = gregorian_to_jalali(stamp.year, stamp.month, stamp.day)
+    millis = stamp.microsecond // 1000
+    return fa_digits(f"{jy:04d}/{jm:02d}/{jd:02d} · {stamp.hour:02d}:{stamp.minute:02d}:{stamp.second:02d}.{millis:03d}")
+
+def render_full_log(state):
+    title_by_id = dict(SUBSTEPS)
+    events = read_all_progress_events()
+    lines = ["گزارش تشخیصی اجرای Arena", "=" * 72]
+    for key, title in STAGES:
+        status = str(state.get(key) or "waiting")
+        report = str(state.get(key + "Report") or "بدون گزارش")
+        lines.append(f"{title} | {LABELS.get(status, status)} | {report}")
+    failed_events = [event for event in events if str(event.get("status")) == "failed"]
+    if failed_events:
+        first = failed_events[0]
+        first_id = str(first.get("id") or "?")
+        lines.extend(["", "اولین نقطه شکست شناسایی‌شده:", f"{title_by_id.get(first_id, first_id)} — {str(first.get('detail') or 'بدون توضیح')}"])
+    else:
+        lines.extend(["", "اولین نقطه شکست شناسایی‌شده: هیچ شکست ثبت‌شده‌ای وجود ندارد."])
+    lines.extend(["", "رویدادهای مرحله ۵ و ۶ به ترتیب ثبت:", "-" * 72])
+    if not events:
+        lines.append("هنوز رویداد جزئی ثبت نشده است.")
+    symbols = {"done": "موفق", "running": "در حال اجرا", "failed": "شکست", "skipped": "رد شد"}
+    for event in events:
+        status = str(event.get("status") or "waiting")
+        duration = int(event.get("durationMs") or 0)
+        duration_text = fa_digits(f"{duration} ms") if duration else "—"
+        step_id = str(event.get("id") or "?")
+        detail = str(event.get("detail") or "بدون توضیح")
+        lines.append(f"[{event_clock(event)}] [{symbols.get(status, status)}] {title_by_id.get(step_id, step_id)}")
+        lines.append(f"    مدت: {duration_text} | جزئیات: {detail}")
+    lines.extend(["", "راهنمای ارسال برای بررسی:", "روی دکمه «کپی کل گزارش» بزنید و متن کپی‌شده را بدون تغییر ارسال کنید."])
+    content = "\n".join(lines)
+    log_view.configure(state="normal")
+    log_view.delete("1.0", "end")
+    for line in content.splitlines(True):
+        tag = "fail" if "[شکست]" in line or "متوقف شد" in line else "ok" if "[موفق]" in line or "انجام شد" in line else "run" if "[در حال اجرا]" in line else "head" if line.startswith(("گزارش", "رویداد", "راهنما")) else ""
+        log_view.insert("end", line, tag)
+    log_view.configure(state="disabled")
 
 def refresh():
     state = read_state()
@@ -165,6 +302,7 @@ def refresh():
     substeps_view.delete("1.0", "end")
     substeps_view.insert("1.0", "\n".join(lines))
     substeps_view.configure(state="disabled")
+    render_full_log(state)
     footer_text.set(str(state.get("message") or "در انتظار مرحله بعد…"))
     window.after(700, refresh)
 refresh()
@@ -627,9 +765,20 @@ public static class Stage5Native {
 }
 "@
 
+$script:ProgressStarts = @{}
 function Progress-Step([string]$id, [string]$status, [string]$detail) {
-    $script:CurrentProgressStep = $id
-    $event = @{ id=$id; status=$status; detail=$detail; at=(Get-Date -Format "HH:mm:ss") } | ConvertTo-Json -Compress
+    $now = [DateTimeOffset]::Now
+    if ($status -eq "running") {
+        $script:CurrentProgressStep = $id
+        $script:ProgressStarts[$id] = $now
+    }
+    $durationMs = 0
+    if ($status -ne "running" -and $script:ProgressStarts.ContainsKey($id)) {
+        $durationMs = [int][Math]::Max(0, ($now - $script:ProgressStarts[$id]).TotalMilliseconds)
+        $script:ProgressStarts.Remove($id)
+    }
+    if ($status -ne "running" -and $script:CurrentProgressStep -eq $id) { $script:CurrentProgressStep = $null }
+    $event = @{ id=$id; status=$status; detail=$detail; at=$now.ToString("o"); durationMs=$durationMs } | ConvertTo-Json -Compress
     Add-Content -LiteralPath $env:PROGRESS_PATH -Value $event -Encoding UTF8
 }
 trap {
@@ -885,8 +1034,18 @@ Progress-Step "s5-11" "running" "قرار دادن Prompt کامل در Clipboar
 Get-Content -Raw -LiteralPath $env:PROMPT_FILE | Set-Clipboard
 Start-Sleep -Milliseconds 250
 $clipboardPrompt = [string](Get-Clipboard -Raw)
-if ((Text-Sha256 $clipboardPrompt) -ne (Text-Sha256 $prompt) -or $clipboardPrompt.Length -ne $prompt.Length) { throw "Full Prompt Clipboard length/hash verification failed" }
-Progress-Step "s5-11" "done" ("length=" + $clipboardPrompt.Length + "; sha256=" + (Text-Sha256 $clipboardPrompt))
+$promptHash = Text-Sha256 $prompt
+$clipboardHash = Text-Sha256 $clipboardPrompt
+$promptCr = ([regex]::Matches($prompt, "\r")).Count
+$promptLf = ([regex]::Matches($prompt, "\n")).Count
+$clipboardCr = ([regex]::Matches($clipboardPrompt, "\r")).Count
+$clipboardLf = ([regex]::Matches($clipboardPrompt, "\n")).Count
+$clipboardProof = "expectedLength=" + $prompt.Length + "; actualLength=" + $clipboardPrompt.Length + "; expectedSha256=" + $promptHash + "; actualSha256=" + $clipboardHash + "; expectedCR/LF=" + $promptCr + "/" + $promptLf + "; actualCR/LF=" + $clipboardCr + "/" + $clipboardLf
+if ($clipboardHash -ne $promptHash -or $clipboardPrompt.Length -ne $prompt.Length) {
+    Progress-Step "s5-11" "failed" ("Clipboard mismatch; " + $clipboardProof)
+    throw ("Full Prompt Clipboard length/hash verification failed; " + $clipboardProof)
+}
+Progress-Step "s5-11" "done" $clipboardProof
 Progress-Step "s5-12" "running" "ارسال دقیقاً یک Ctrl+V"
 Input-Action hotkey ctrl v
 Progress-Step "s5-12" "done" "one Ctrl+V sent"
