@@ -2,6 +2,8 @@ import { AppError } from "./errors";
 import { ARENA_JOB_NAME, buildArenaJobFile } from "./arena-job";
 import { getAutomation, requestAutomationRun, saveAutomationVersion } from "./automations";
 import { findOnlineCommandAgent } from "./commands";
+import { getRepoConfig } from "./config";
+import { fetchArchive } from "./github";
 
 export type ServiceSlug = "close-folders" | "arena-batch" | "arena-next-prompt" | "stage-notebook" | "director-monitor" | "drive-control";
 
@@ -591,6 +593,51 @@ export function directorMonitorSource(url: string, durationMinutes: number, inte
   return `# generated-management-service: director-monitor\nimport time\nimport urllib.error\nimport urllib.request\nimport webbrowser\n\nURL = ${pythonString(url)}\nDURATION_SECONDS = ${durationMinutes * 60}\nINTERVAL_SECONDS = ${intervalSeconds}\nREOPEN_AFTER_RECONNECT = ${reopen ? "True" : "False"}\n\ndef reachable():\n    try:\n        request = urllib.request.Request(URL, method=\"HEAD\", headers={\"User-Agent\": \"Windows-Agent/service\"})\n        with urllib.request.urlopen(request, timeout=12) as response:\n            response.read(1)\n        return True\n    except urllib.error.HTTPError:\n        return True\n    except Exception:\n        return False\n\nprint(\"SERVICE_OPENING_URL: \" + URL)\nwebbrowser.open(URL, new=2)\ndeadline = time.monotonic() + DURATION_SECONDS\nwas_offline = False\ncheck = 0\nwhile time.monotonic() < deadline:\n    check += 1\n    online = reachable()\n    if online:\n        print(f\"SERVICE_MONITOR_OK: بررسی {check}\")\n        if was_offline and REOPEN_AFTER_RECONNECT:\n            webbrowser.open(URL, new=2)\n            print(\"SERVICE_URL_REOPENED: اتصال برگشت\")\n        was_offline = False\n    else:\n        if not was_offline:\n            print(\"SERVICE_NETWORK_PAUSED: سایت یا اینترنت در دسترس نیست\")\n        else:\n            print(\"SERVICE_NETWORK_STILL_PAUSED: پایش ادامه دارد\")\n        was_offline = True\n    time.sleep(min(INTERVAL_SECONDS, max(0, deadline - time.monotonic())))\nprint(\"SERVICE_COMPLETED: مدت پایش تمام شد\")\n`;
 }
 
+async function getOrBootstrapArenaAutomation() {
+  const slug = ARENA_JOB_NAME.replace(/^job_/, "").replace(/\.py$/, "");
+  try {
+    return await getAutomation(slug, true);
+  } catch (error) {
+    if (!(error instanceof AppError) || error.status !== 404) throw error;
+  }
+
+  // دیتابیس تازه ممکن است هنوز انتقال اولیه را اجرا نکرده باشد. فقط فایل پایه
+  // job_arena.py را از ZIP خواندنی codeload می‌خوانیم و یک نسخه immutable در
+  // PostgreSQL می‌سازیم؛ هیچ تغییری در مخزن مادر یا app.py انجام نمی‌شود.
+  const config = await getRepoConfig("collab", false);
+  const archive = await fetchArchive(config, { force: true });
+  const file = archive.files.find((item) => item.name === ARENA_JOB_NAME);
+  if (!file || file.tooLarge) {
+    throw new AppError("فایل پایه job_arena.py در مخزن ایجنت همکار پیدا نشد.", {
+      status: 409,
+      code: "service_arena_bootstrap_source_missing",
+      hint: `شاخه ${config.branch} مخزن ${config.owner}/${config.repo} را بررسی کنید.`,
+    });
+  }
+
+  try {
+    await saveAutomationVersion({
+      slug,
+      name: "ارسال پرامپت به Arena",
+      description: "فایل پایه Arena؛ انتقال خودکار و محدود از ZIP مخزن ایجنت همکار",
+      target: "windows",
+      sourceCode: file.content,
+      changeSummary: `راه‌اندازی خودکار سرویس از codeload · ${file.sha.slice(0, 12)}`,
+      actor: "manager:service-bootstrap",
+      activate: true,
+    });
+  } catch (error) {
+    // اگر دو درخواست هم‌زمان bootstrap شدند، درخواست برنده نسخه را ساخته است.
+    // فقط در صورت قابل‌خواندن‌شدن همان slug ادامه می‌دهیم؛ خطای واقعی پنهان نمی‌شود.
+    try {
+      return await getAutomation(slug, true);
+    } catch {
+      throw error;
+    }
+  }
+  return getAutomation(slug, true);
+}
+
 async function arenaBatchSource(input: Record<string, unknown>, sourceMode: "manual" | "next_file"): Promise<{
   source: string;
   total: number;
@@ -688,7 +735,7 @@ async function arenaBatchSource(input: Record<string, unknown>, sourceMode: "man
     ? withAgentOutputProtocol(prompt, true, nextPromptDriveUrl)
     : prompt.trim());
 
-  const arena = await getAutomation(ARENA_JOB_NAME.replace(/^job_/, "").replace(/\.py$/, ""), true);
+  const arena = await getOrBootstrapArenaAutomation();
   if (!arena.activeVersion?.sourceCode) throw new AppError("نسخه فعال Arena وجود ندارد.", { status: 409, code: "arena_version_missing" });
   const batchRunId = `service-batch-${Date.now().toString(36)}`;
   let source = buildArenaJobFile({
